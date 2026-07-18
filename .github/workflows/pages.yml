@@ -1,85 +1,92 @@
-name: Deploy Docs (GitHub Pages)
+name: Deploy gh-pages
 
-# Pages 只能托管静态页，不能执行系统 git。
-# 真实 git 预览请部署 GHCR 镜像 / 本地 pnpm preview（见 docs/github-deploy.md）。
+# 与常见前端项目相同：构建产物推到 gh-pages 分支，再由 GitHub Pages 托管。
+# 注意：这是静态站（可看 UI / 文档），不能在访客浏览器里执行系统 git。
 
 on:
   push:
     branches: [main, master]
-    paths:
-      - "docs/**"
-      - ".github/workflows/pages.yml"
-      - "README.md"
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: gh-pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare site
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static preview UI
+        run: pnpm --filter @git-insight/webview run build:demo
+        env:
+          # 项目站地址：https://<user>.github.io/<repo>/
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      - name: Assemble site
         run: |
           mkdir -p _site/docs
-          cp README.md _site/
+          cp -r packages/extension/dist/pages/. _site/
+          cp README.md _site/README.md
           cp -r docs/. _site/docs/
-          cat > _site/index.html <<'EOF'
+          cat > _site/docs/index.html <<'EOF'
           <!DOCTYPE html>
           <html lang="zh-CN">
           <head>
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>Git Insight — 真实 git 预览</title>
+            <title>Git Insight 文档</title>
             <style>
               body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; }
-              code, pre { font-family: ui-monospace, Consolas, monospace; }
-              pre { background: #f4f4f4; padding: 12px; overflow: auto; border-radius: 6px; }
-              .note { border-left: 4px solid #0e639c; padding: 8px 12px; background: #0e639c14; }
               a { color: #0e639c; }
             </style>
           </head>
           <body>
-            <h1>Git Insight</h1>
-            <p class="note">
-              <strong>GitHub Pages 无法执行系统 git。</strong>
-              预览页需要 Node 服务在服务端 <code>git clone</code> / <code>merge-tree</code>。
-            </p>
-            <h2>本地（真实 git）</h2>
-            <pre><code>pnpm install
-          pnpm preview
-          # 浏览器打开后输入：owner/repo 或本机路径</code></pre>
-            <h2>云端镜像（真实 git）</h2>
-            <pre><code>docker run --rm -p 8080:8080 \
-            -e GIT_INSIGHT_MODE=remote \
-            ghcr.io/&lt;owner&gt;/&lt;repo&gt;:latest
-          # 打开 http://127.0.0.1:8080/ 输入 GitHub 仓库</code></pre>
-            <p>详见 <a href="./docs/github-deploy.md">部署说明</a>。</p>
+            <p><a href="../">← 返回预览</a></p>
+            <h1>文档</h1>
+            <ul>
+              <li><a href="./github-deploy.md">部署与在线查看</a></li>
+              <li><a href="./plan-git-branch-insight.md">方案保留稿</a></li>
+              <li><a href="./graph-engine.md">图引擎选型</a></li>
+            </ul>
           </body>
           </html>
           EOF
+          # 写入部署信息，方便确认是否为最新构建
+          cat > _site/deploy.txt <<EOF
+          branch=gh-pages
+          repo=${{ github.repository }}
+          sha=${{ github.sha }}
+          time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          EOF
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Push to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com

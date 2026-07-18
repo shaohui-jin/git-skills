@@ -62,22 +62,31 @@ pnpm build
 - 远程：fetch 后本地算，不依赖平台 PR
 - Skill / 网页加载图与合并预演默认 fetch
 
-## GitHub 部署（真实 git）
+## 在线查看（gh-pages，和其他项目一样）
 
-**GitHub Pages 不能执行系统 git。** 真实预览用下面任一方式：
+推送到 GitHub 的 `main` 后，Actions **Deploy gh-pages** 会把站点打进 **`gh-pages` 分支**。
+
+1. **Settings → Pages → Source** 选 **Deploy from a branch**
+2. Branch 选 **`gh-pages`**，目录 **`/ (root)`**，保存
+3. 打开：
+
+```text
+https://<用户名>.github.io/<仓库名>/
+```
+
+（静态 UI / 文档；要真实 git 仍用下面本地或 Docker。）
+
+## 真实 git 预览
 
 | 方式 | 说明 |
 |------|------|
 | `pnpm preview` | 本机路径，或输入 `owner/repo` → 服务端 `git clone` |
-| **Docker / GHCR** | `GIT_INSIGHT_MODE=remote`，云端真实 clone / merge-tree |
-| **Codespaces** | 打开仓库即起预览（见 `.devcontainer`） |
+| **Docker / GHCR** | `GIT_INSIGHT_MODE=remote` |
+| **Codespaces** | 见 `.devcontainer` |
 
 ```bash
-# 本地
 pnpm preview
-# 网页输入：vuejs/core  或  https://github.com/vuejs/core
-
-# 容器（workflow 推送到 ghcr.io/<owner>/<repo>）
+# 或
 docker run --rm -p 8080:8080 -e GIT_INSIGHT_MODE=remote \
   ghcr.io/<owner>/<repo>:latest
 ```
