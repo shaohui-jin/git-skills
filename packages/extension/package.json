@@ -1,0 +1,58 @@
+{
+  "name": "git-insight",
+  "displayName": "Git Insight",
+  "description": "Branch graph, merge conflict preview, and conflict provenance — powered by @git-insight/core",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "git-skill",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["SCM Providers", "Other"],
+  "activationEvents": [
+    "onCommand:gitInsight.openWeb",
+    "onCommand:gitInsight.previewMerge",
+    "onCommand:gitInsight.conflictBlame"
+  ],
+  "main": "./dist/extension.js",
+  "type": "module",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitInsight.openWeb",
+        "title": "Git Insight: Open Web Visualization",
+        "category": "Git Insight"
+      },
+      {
+        "command": "gitInsight.previewMerge",
+        "title": "Git Insight: 合并预演",
+        "category": "Git Insight"
+      },
+      {
+        "command": "gitInsight.conflictBlame",
+        "title": "Git Insight: 合并预演（兼容）",
+        "category": "Git Insight"
+      }
+    ]
+  },
+  "scripts": {
+    "build:webview": "pnpm --filter @git-insight/webview run build",
+    "build:ext": "tsc -p tsconfig.json",
+    "build": "pnpm run build:webview && pnpm run build:ext",
+    "preview": "tsx scripts/preview.ts",
+    "preview:prod": "tsx scripts/preview-prod.ts",
+    "vscode:prepublish": "pnpm run build"
+  },
+  "dependencies": {
+    "@git-insight/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "ws": "^8.18.2"
+  }
+}

@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+*.md
+!packages/**/README.md
+.cursor
+docs
+agent-transcripts
+**/*.tgz
+.env
+.env.*
