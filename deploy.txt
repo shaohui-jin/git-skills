@@ -1,0 +1,5 @@
+branch=gh-pages
+repo=shaohui-jin/git-skills
+sha=8f8c4517bb9dad4222d7bc7578e3392ea81cfc53
+time=2026-07-18T10:22:57Z
+url=https://shaohui-jin.github.io/git-skills/
