@@ -54,8 +54,8 @@ importers:
         specifier: ^5.0.49
         version: 5.1.1
       marked:
-        specifier: ^15.0.12
-        version: 15.0.12
+        specifier: ^18.0.6
+        version: 18.0.6
       vue:
         specifier: ^3.5.13
         version: 3.5.40(typescript@5.9.3)
@@ -927,9 +927,9 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  marked@15.0.12:
-    resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
-    engines: {node: '>= 18'}
+  marked@18.0.6:
+    resolution: {integrity: sha512-MrV5puXBfuiy6wl6DLaq3BtIJQAJToAd5zt/ZKhRfGRAuFPALE7/4Y7jnxRQoEgK/pBgurGqLyAuRgZ2xOjr6w==}
+    engines: {node: '>= 20'}
     hasBin: true
 
   minimatch@9.0.9:
@@ -1871,7 +1871,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  marked@15.0.12: {}
+  marked@18.0.6: {}
 
   minimatch@9.0.9:
     dependencies:
