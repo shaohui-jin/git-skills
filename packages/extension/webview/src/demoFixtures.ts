@@ -164,7 +164,7 @@ export const DEMO_PREVIEW: ConflictBlameResult = {
 
 export const DEMO_GRAPH_REPORT = `# 分支图（演示）
 
-> GitHub Pages **演示模式**：数据为内置样例，未连接真实 Git。
+> **离线样例**：数据为内置样例，未连接真实 Git。
 
 - 仓库：\`(演示仓库)\`
 - tips：\`main\`、\`feature/login\` 及对应 \`origin/*\`
@@ -189,7 +189,7 @@ export const DEMO_PREVIEW_REPORT = `# 合并预演（演示）
 
 ## 说明
 
-此报告来自 GitHub Pages 静态演示数据，用于展示 UI。真实冲突预演请在本地运行 \`pnpm preview\` 或 Cursor 扩展。
+此报告为离线样例数据。真实冲突预演请本地运行 \`pnpm preview\` 或使用 Cursor 扩展。
 `;
 
 export function demoWorkspaceMessage(): HostMessage {

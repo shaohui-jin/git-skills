@@ -9,7 +9,7 @@
     "dev": "pnpm --filter @git-insight/core run build --watch",
     "preview": "pnpm --filter @git-insight/core build && pnpm --filter git-insight preview",
     "preview:repo": "pnpm --filter @git-insight/core build && pnpm --filter git-insight preview --",
-    "preview:prod": "pnpm --filter @git-insight/core build && pnpm --filter git-insight build && pnpm --filter git-insight preview:prod",
+    "package:vsix": "pnpm --filter @git-insight/core build && pnpm --filter git-insight package:vsix",
     "git-insight": "pnpm --filter @git-insight/core exec node dist/cli.js",
     "test": "pnpm --filter @git-insight/core run test"
   },

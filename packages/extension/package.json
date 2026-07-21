@@ -3,8 +3,8 @@
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, and conflict provenance — powered by @git-insight/core",
   "version": "0.1.0",
-  "private": true,
   "publisher": "git-skill",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -37,19 +37,20 @@
   },
   "scripts": {
     "build:webview": "pnpm --filter @git-insight/webview run build",
-    "build:ext": "tsc -p tsconfig.json",
+    "build:ext": "node scripts/bundle.mjs",
+    "check": "tsc -p tsconfig.json --noEmit",
     "build": "pnpm run build:webview && pnpm run build:ext",
     "preview": "tsx scripts/preview.ts",
     "preview:prod": "tsx scripts/preview-prod.ts",
-    "vscode:prepublish": "pnpm run build"
-  },
-  "dependencies": {
-    "@git-insight/core": "workspace:*"
+    "package:vsix": "pnpm run build && vsce package --no-dependencies --skip-license --allow-missing-repository --out ../../git-insight.vsix"
   },
   "devDependencies": {
+    "@git-insight/core": "workspace:*",
     "@types/node": "^22.15.21",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.18.1",
+    "@vscode/vsce": "^3.3.2",
+    "esbuild": "^0.25.5",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",

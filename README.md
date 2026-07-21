@@ -47,12 +47,14 @@ pnpm preview:repo -- --cwd D:\path\to\repo
 ### 装进 Cursor / VS Code
 
 ```bash
+# 开发：从目录安装或 F5
 pnpm build
+# Developer: Install Extension from Location… → packages/extension
+
+# 打包给人安装
+pnpm package:vsix
+# 得到仓库根目录 git-insight.vsix → Extensions: Install from VSIX…
 ```
-
-然后 F5 调试扩展，或「Install Extension from Location」选择 `packages/extension`，执行：
-
-- `Git Insight: Open Web Visualization`
 
 详见 [packages/extension/README.md](packages/extension/README.md)。
 
@@ -61,35 +63,5 @@ pnpm build
 - 冲突预演：任意两分支名（本地或 `origin/xxx`），`merge-tree`，不改工作区
 - 远程：fetch 后本地算，不依赖平台 PR
 - Skill / 网页加载图与合并预演默认 fetch
-
-## 在线查看（gh-pages，和其他项目一样）
-
-推送到 GitHub 的 `main` 后，Actions **Deploy gh-pages** 会把站点打进 **`gh-pages` 分支**。
-
-1. **Settings → Pages → Source** 选 **Deploy from a branch**
-2. Branch 选 **`gh-pages`**，目录 **`/ (root)`**，保存
-3. 打开：
-
-```text
-https://<用户名>.github.io/<仓库名>/
-```
-
-（静态 UI / 文档；要真实 git 仍用下面本地或 Docker。）
-
-## 真实 git 预览
-
-| 方式 | 说明 |
-|------|------|
-| `pnpm preview` | 本机路径，或输入 `owner/repo` → 服务端 `git clone` |
-| **Docker / GHCR** | `GIT_INSIGHT_MODE=remote` |
-| **Codespaces** | 见 `.devcontainer` |
-
-```bash
-pnpm preview
-# 或
-docker run --rm -p 8080:8080 -e GIT_INSIGHT_MODE=remote \
-  ghcr.io/<owner>/<repo>:latest
-```
-
-详见 [docs/github-deploy.md](docs/github-deploy.md)。
+- **网页预览请本地运行**（`pnpm preview`）；不部署到 GitHub Pages（远程静态站无法操作本机 git）
 

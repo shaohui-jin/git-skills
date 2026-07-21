@@ -160,9 +160,7 @@ function runPreview() {
 <template>
   <div class="app">
     <div v-if="demoMode" class="demo-banner">
-      当前为 GitHub Pages <strong>静态站</strong>（gh-pages，无真实 git）。完整能力请本地
-      <code>pnpm preview</code>。
-      <a class="demo-docs" href="./docs/">文档</a>
+      当前为<strong>离线样例</strong>（无真实 git）。请本地运行 <code>pnpm preview</code>。
     </div>
     <header class="topbar">
       <div class="topbar-path">

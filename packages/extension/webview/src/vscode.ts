@@ -57,8 +57,8 @@ function createDemoBridge(): VsCodeApi {
         reply({
           type: "error",
           message:
-            "GitHub Pages 为静态演示，无法打开本机仓库。请本地运行 pnpm preview。",
-          code: "DEMO_READONLY",
+            "离线样例无法打开本机仓库。请本地运行 pnpm preview。",
+            code: "DEMO_READONLY",
         });
         reply(demoWorkspaceMessage());
         return;

@@ -1,0 +1,19 @@
+# 只打进：package.json / README / LICENSE / dist/extension.js / dist/webview/**
+.vscode/**
+src/**
+scripts/**
+webview/**
+node_modules/**
+**/*.ts
+**/*.map
+**/*.vsix
+tsconfig.json
+.gitignore
+.DS_Store
+dist/pages/**
+dist/GitInsightPanel.js
+dist/coreBridge.js
+dist/pickFolder.js
+dist/protocol.js
+dist/remoteRepo.js
+dist/**/*.d.ts
