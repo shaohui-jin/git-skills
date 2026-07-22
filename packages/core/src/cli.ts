@@ -21,6 +21,7 @@ Usage:
 
 Notes:
   - graph: no required args; uses current repo refs (fetch by default)
+  - graph --max 0: unlimited nodes (full graph); default max is 200
   - preview-merge（合并预演）: 任意两分支；输出是否可合并、冲突文件、冲突正文、来源溯源
   - conflict-blame: 同 preview-merge（兼容旧命令名）
   - fetch runs by default; use --no-fetch to skip

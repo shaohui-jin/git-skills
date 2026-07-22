@@ -112,13 +112,13 @@ export class GitInsightPanel {
 
     const label =
       req.type === "fetch"
-        ? "Fetching…"
+        ? "正在 Fetch…"
         : req.type === "graph"
-          ? "Loading graph…"
+          ? "正在加载全量分支图…"
           : req.type === "preview" || req.type === "blame"
             ? "合并预演中…"
             : req.type === "setCwd"
-              ? "Opening repo…"
+              ? "正在打开仓库…"
               : undefined;
 
     if (label) {

@@ -15,7 +15,7 @@ export function reportGraph(graph: BranchGraph): string {
     ``,
     `- 仓库：${graph.repoRoot}`,
     `- 分支 tip 数：${graph.tips.length}`,
-    `- 提交节点：${graph.nodes.length}${graph.truncated ? `（已截断，上限 ${graph.maxNodes}）` : ""}`,
+    `- 提交节点：${graph.nodes.length}${graph.truncated ? `（已截断，上限 ${graph.maxNodes}）` : "（全量）"}`,
   ];
 
   if (graph.lineage) {
@@ -31,13 +31,13 @@ export function reportGraph(graph: BranchGraph): string {
     }
   }
 
-  const localTips = graph.tips.filter((t) => !t.remote).slice(0, 20);
-  const remoteTips = graph.tips.filter((t) => t.remote).slice(0, 20);
-  lines.push(``, `## 本地分支（最多 20）`);
+  const localTips = graph.tips.filter((t) => !t.remote);
+  const remoteTips = graph.tips.filter((t) => t.remote);
+  lines.push(``, `## 本地分支（${localTips.length}）`);
   for (const t of localTips) {
     lines.push(`- \`${t.name}\` → \`${short(t.sha)}\`${t.upstream ? ` (↑ ${t.upstream})` : ""}`);
   }
-  lines.push(``, `## 远程跟踪分支（最多 20）`);
+  lines.push(``, `## 远程跟踪分支（${remoteTips.length}）`);
   for (const t of remoteTips) {
     lines.push(`- \`${t.name}\` → \`${short(t.sha)}\``);
   }

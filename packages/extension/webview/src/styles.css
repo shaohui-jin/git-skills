@@ -35,34 +35,6 @@ body {
   font-size: 13px;
 }
 
-.demo-banner {
-  flex: 0 0 auto;
-  padding: 8px 12px;
-  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  line-height: 1.45;
-}
-
-.demo-banner code {
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.demo-banner .demo-docs {
-  margin-left: 8px;
-  color: var(--accent-fg);
-  background: var(--accent);
-  padding: 2px 8px;
-  border-radius: 4px;
-  text-decoration: none;
-  font-size: 12px;
-}
-
-.demo-banner .demo-docs:hover {
-  background: var(--accent-hover);
-}
-
 .app {
   display: flex;
   flex-direction: column;
@@ -293,21 +265,33 @@ body {
 
 .graph-g6 {
   overflow: hidden;
+  /* 给底部路径提示留空 */
+  bottom: 40px;
 }
 
-.engine-badge {
+.path-hint {
   position: absolute;
+  left: 8px;
   right: 8px;
   bottom: 8px;
   z-index: 2;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
+}
+
+.path-hint--idle {
+  color: var(--muted);
 }
 
 .card--report {
@@ -523,6 +507,40 @@ select {
   min-height: 0;
   overflow: auto;
   padding: 0 4px 8px;
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg) 40%, transparent) transparent;
+}
+
+/* WebKit：轨道 8px、滑块视觉约 4px、圆角 8px */
+.tree-select-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.tree-select-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tree-select-body::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--fg) 40%, transparent);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.tree-select-body::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--fg) 55%, transparent);
+}
+
+.tree-select-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.tree-select-body::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .tree-group-title {
@@ -598,6 +616,15 @@ select {
   color: var(--accent-fg);
 }
 
+.tree-leaf.kbd-active {
+  outline: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.tree-leaf.active.kbd-active {
+  outline: 1px solid color-mix(in srgb, var(--accent-fg) 70%, var(--accent));
+}
+
 .tree-empty {
   padding: 16px;
   text-align: center;
@@ -635,6 +662,30 @@ button.btn.secondary {
 button.btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+button.btn.loading {
+  opacity: 1;
+  cursor: wait;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--accent-fg) 35%, transparent);
+  border-top-color: var(--accent-fg);
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .check {
@@ -723,40 +774,6 @@ button.btn:disabled {
   /* 使用布局像素宽高；仅当 SVG+tips 真正超出 .graph-scroll 时才滚动 */
   max-width: none;
   background: transparent;
-}
-
-.tip-list {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-width: calc(100% - 16px);
-  max-height: 40%;
-  overflow: auto;
-  margin: 0;
-  padding: 6px 8px;
-  pointer-events: auto;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  backdrop-filter: blur(4px);
-}
-
-.tip-chip {
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
-.tip-chip.remote {
-  opacity: 0.85;
-  border-style: dashed;
 }
 
 .hunk {

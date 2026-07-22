@@ -11,7 +11,14 @@ export type WebviewRequest =
   | { type: "setCwd"; path: string }
   | { type: "pickFolder" }
   | { type: "fetch"; remote?: string }
-  | { type: "graph"; into?: string; from?: string; noFetch?: boolean }
+  | {
+      type: "graph";
+      into?: string;
+      from?: string;
+      noFetch?: boolean;
+      /** 0 = 全量；默认由宿主按全量处理 */
+      maxNodes?: number;
+    }
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
   /** @deprecated 同 preview（合并预演） */
   | { type: "blame"; into: string; from: string; noFetch?: boolean };
@@ -21,7 +28,8 @@ export type HostMessage =
   | {
       type: "workspace";
       cwd: string | null;
-      branches: string[];
+      /** 全量分支；remote 由 refs 类型决定，勿用名称是否含 / 判断 */
+      branches: Array<{ name: string; remote: boolean }>;
       error?: string;
       previewMode?: boolean;
     }

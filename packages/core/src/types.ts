@@ -103,7 +103,7 @@ export interface FetchResult {
 
 export interface GraphOptions {
   cwd?: string;
-  /** Limit DAG nodes; default 200. */
+  /** Limit DAG nodes; default 200. Pass `0` for unlimited (full graph). */
   maxNodes?: number;
   /** Optional pair for lineage focus. */
   into?: string;

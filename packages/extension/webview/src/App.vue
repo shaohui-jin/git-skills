@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
+import { normalizeBranches, type BranchOption } from "./graph/branchTree";
 import type {
   BranchGraph,
   ConflictBlameResult,
@@ -11,7 +12,7 @@ import type {
   HostMessage,
   TabId,
 } from "./types";
-import { getVsCodeApi, isDemoMode } from "./vscode";
+import { getVsCodeApi } from "./vscode";
 
 function short(sha: string): string {
   return sha.slice(0, 7);
@@ -22,16 +23,17 @@ function fileHunks(f: ConflictFile, all: ConflictHunk[]): ConflictHunk[] {
 }
 
 const vscode = getVsCodeApi();
-const demoMode = isDemoMode();
 
 const tab = ref<TabId>("graph");
 const cwd = ref<string | null>(null);
 const pathInput = ref("");
-const branches = ref<string[]>([]);
+const branches = ref<BranchOption[]>([]);
 const into = ref("");
 const from = ref("");
 const busy = ref(false);
 const busyLabel = ref("");
+/** 当前主操作，用于按钮上的 loading 文案 */
+const loadingAction = ref<"graph" | "preview" | "">("");
 const error = ref<string | null>(null);
 const status = ref("准备就绪");
 const previewMode = ref(false);
@@ -54,16 +56,20 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "busy") {
     busy.value = msg.busy;
     busyLabel.value = msg.label ?? "";
+    if (!msg.busy) {
+      loadingAction.value = "";
+    }
     return;
   }
   if (msg.type === "error") {
     error.value = msg.message;
     status.value = msg.message;
+    loadingAction.value = "";
     return;
   }
   if (msg.type === "workspace") {
     cwd.value = msg.cwd;
-    branches.value = msg.branches;
+    branches.value = normalizeBranches(msg.branches);
     previewMode.value = !!msg.previewMode;
     if (msg.cwd) {
       pathInput.value = msg.cwd;
@@ -73,18 +79,25 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       status.value = msg.error;
     } else {
       error.value = null;
-      status.value = msg.cwd ? `仓库：${msg.cwd}` : "未检测到仓库，请选择或输入目录";
-      if (into.value && !msg.branches.includes(into.value)) {
+      const localCount = msg.branches.filter((b) => !b.remote).length;
+      const remoteCount = msg.branches.length - localCount;
+      status.value = msg.cwd
+        ? `仓库：${msg.cwd}（本地 ${localCount} / 远程 ${remoteCount}）`
+        : "未检测到仓库，请选择或输入目录";
+      const names = msg.branches.map((b) => b.name);
+      if (into.value && !names.includes(into.value)) {
         into.value = "";
       }
-      if (from.value && !msg.branches.includes(from.value)) {
+      if (from.value && !names.includes(from.value)) {
         from.value = "";
       }
       if (!into.value) {
-        into.value = msg.branches.find((b) => !b.includes("/")) ?? msg.branches[0] ?? "";
+        into.value =
+          msg.branches.find((b) => !b.remote)?.name ?? msg.branches[0]?.name ?? "";
       }
       if (!from.value) {
-        from.value = msg.branches.find((b) => b !== into.value) ?? "";
+        from.value =
+          msg.branches.find((b) => b.name !== into.value)?.name ?? "";
       }
     }
     return;
@@ -99,13 +112,17 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "graphResult") {
     graph.value = msg.data;
     graphReport.value = msg.report;
-    status.value = `分支图已更新（${msg.data.nodes.length} 节点）`;
+    status.value = msg.data.truncated
+      ? `分支图已更新（${msg.data.nodes.length} 节点，已截断）`
+      : `分支图已更新（${msg.data.nodes.length} 节点，全量）`;
     error.value = null;
+    loadingAction.value = "";
     return;
   }
   if (msg.type === "previewResult") {
     preview.value = msg.data;
     previewReport.value = msg.report;
+    loadingAction.value = "";
     if (msg.data.unrelatedHistories || msg.data.outcome === "unrelated") {
       status.value = "合并预演：无关历史（无共同祖先）";
       error.value = "两条分支没有共同祖先，详见报告";
@@ -143,12 +160,17 @@ function pickFolder() {
 }
 
 function loadGraph() {
-  // 分支图与侧栏 into/from 无关：始终加载全库 tip 图；默认 fetch
-  vscode.postMessage({ type: "graph" });
+  // 全量 tip 图（maxNodes: 0）；默认 fetch
+  busy.value = true;
+  busyLabel.value = "正在加载全量分支图…";
+  loadingAction.value = "graph";
+  vscode.postMessage({ type: "graph", maxNodes: 0 });
 }
 
 function runPreview() {
-  // 默认 fetch（不传 noFetch）
+  busy.value = true;
+  busyLabel.value = "合并预演中…";
+  loadingAction.value = "preview";
   vscode.postMessage({
     type: "preview",
     into: into.value,
@@ -159,9 +181,6 @@ function runPreview() {
 
 <template>
   <div class="app">
-    <div v-if="demoMode" class="demo-banner">
-      当前为<strong>离线样例</strong>（无真实 git）。请本地运行 <code>pnpm preview</code>。
-    </div>
     <header class="topbar">
       <div class="topbar-path">
         <input
@@ -169,19 +188,14 @@ function runPreview() {
           class="path"
           type="text"
           :title="cwd ?? pathInput"
-          :placeholder="
-            demoMode
-              ? '离线样例 — 无真实 git'
-              : '本机路径，或 GitHub：owner/repo / https://github.com/owner/repo'
-          "
-          :disabled="demoMode"
+          placeholder="本机路径，或 GitHub：owner/repo / https://github.com/owner/repo"
           @keyup.enter="openByPath"
         />
-        <button class="btn secondary" :disabled="busy || demoMode" @click="openByPath">打开</button>
+        <button class="btn secondary" :disabled="busy" @click="openByPath">打开</button>
         <button
           class="btn secondary"
-          :disabled="busy || demoMode"
-          title="系统目录对话框（本地预览可用；云端请填 GitHub 地址）"
+          :disabled="busy"
+          title="系统目录对话框（不依赖浏览器 HTTPS）"
           @click="pickFolder"
         >
           浏览…
@@ -206,18 +220,22 @@ function runPreview() {
         <button
           v-if="tab === 'graph'"
           class="btn"
+          :class="{ loading: loadingAction === 'graph' }"
           :disabled="busy || !cwd"
           @click="loadGraph"
         >
-          加载分支图
+          <span v-if="loadingAction === 'graph'" class="btn-spinner" aria-hidden="true" />
+          {{ loadingAction === "graph" ? "加载中…" : "加载分支图" }}
         </button>
         <button
           v-else
           class="btn"
+          :class="{ loading: loadingAction === 'preview' }"
           :disabled="busy || !cwd || !into || !from"
           @click="runPreview"
         >
-          开始预演
+          <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
+          {{ loadingAction === "preview" ? "预演中…" : "开始预演" }}
         </button>
       </div>
     </header>

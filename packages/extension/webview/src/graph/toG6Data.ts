@@ -26,8 +26,7 @@ function short(sha: string): string {
 
 /**
  * Map core BranchGraph JSON → AntV G6 data.
- * Keep this the single adapter so future features (conflict highlight, PR badges)
- * only extend `data` fields here.
+ * 边方向：父 → 子（旧 → 新），配合 dagre LR 时左侧为源头、右侧为分支 tip。
  */
 export function branchGraphToG6(graph: BranchGraph): G6GraphData {
   if (graph.lineage) {
@@ -55,9 +54,9 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
         },
       },
     ];
+    // 左：merge-base → 右：两分支 tip
     const edges: G6GraphData["edges"] = [
-      { id: "e-into-base", source: "into", target: "base" },
-      { id: "e-from-base", source: "from", target: "base" },
+      { id: "e-base-into", source: "base", target: "into" },
     ];
     if (graph.lineage.branchedFrom) {
       const b = graph.lineage.branchedFrom;
@@ -70,38 +69,25 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
           sha: b.sha,
         },
       });
-      edges.push({ id: "e-from-first", source: "from", target: "first" });
+      edges.push(
+        { id: "e-base-first", source: "base", target: "first" },
+        { id: "e-first-from", source: "first", target: "from" },
+      );
+    } else {
+      edges.push({ id: "e-base-from", source: "base", target: "from" });
     }
     return { nodes, edges };
   }
 
-  const tips = graph.tips.slice(0, 40);
-  const tipSha = new Set(tips.map((t) => t.sha));
   const nameBySha = new Map<string, string[]>();
-  for (const t of tips) {
+  for (const t of graph.tips) {
     const list = nameBySha.get(t.sha) ?? [];
     list.push(t.name);
     nameBySha.set(t.sha, list);
   }
 
-  let pool = graph.nodes.filter((n) => tipSha.has(n.sha));
-  if (pool.length === 0) {
-    pool = [...graph.nodes].sort((a, b) => b.time - a.time).slice(0, 48);
-  } else {
-    // include some parents for context
-    const extra = new Set(pool.map((n) => n.sha));
-    for (const n of pool) {
-      for (const p of n.parents.slice(0, 2)) {
-        extra.add(p);
-      }
-    }
-    const bySha = new Map(graph.nodes.map((n) => [n.sha, n]));
-    pool = [...extra]
-      .map((sha) => bySha.get(sha))
-      .filter((n): n is NonNullable<typeof n> => !!n)
-      .slice(0, 80);
-  }
-
+  // 全量节点（与加载全量分支图一致）
+  const pool = graph.nodes;
   const idSet = new Set(pool.map((n) => n.sha));
   const nodes: G6GraphData["nodes"] = pool.map((n) => {
     const tipNames = nameBySha.get(n.sha);
@@ -117,6 +103,7 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
     };
   });
 
+  // core.edges 为 [child, parent]；G6 用 parent → child，LR 时左旧右新
   const edges: G6GraphData["edges"] = [];
   let ei = 0;
   for (const [child, parent] of graph.edges) {
@@ -124,13 +111,10 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
       continue;
     }
     edges.push({
-      id: `e-${ei++}-${child.slice(0, 7)}-${parent.slice(0, 7)}`,
-      source: child,
-      target: parent,
+      id: `e-${ei++}-${parent.slice(0, 7)}-${child.slice(0, 7)}`,
+      source: parent,
+      target: child,
     });
-    if (edges.length >= 120) {
-      break;
-    }
   }
 
   return { nodes, edges };

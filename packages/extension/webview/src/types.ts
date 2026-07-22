@@ -94,7 +94,7 @@ export type HostMessage =
   | {
       type: "workspace";
       cwd: string | null;
-      branches: string[];
+      branches: Array<{ name: string; remote: boolean }>;
       error?: string;
       previewMode?: boolean;
     }

@@ -18,14 +18,23 @@ import {
   looksLikeRemoteRepo,
 } from "./remoteRepo.js";
 
-export async function listBranchNames(cwd: string): Promise<string[]> {
+export interface BranchOption {
+  name: string;
+  remote: boolean;
+}
+
+/**
+ * 列出全部本地/远程分支，不做数量截断。
+ * 本地分支用 refs/heads 判定（名称可含 `/`，不能按 `/` 误判为远程）。
+ */
+export async function listBranchNames(cwd: string): Promise<BranchOption[]> {
   const { stdout } = await runGit(cwd, [
     "for-each-ref",
     "--format=%(refname)%00%(refname:short)",
     "refs/heads",
     "refs/remotes",
   ]);
-  const names: string[] = [];
+  const names: BranchOption[] = [];
   for (const line of stdout.split("\n")) {
     if (!line.trim()) {
       continue;
@@ -38,9 +47,12 @@ export async function listBranchNames(cwd: string): Promise<string[]> {
     if (refname.endsWith("/HEAD") || /^refs\/remotes\/[^/]+\/HEAD$/.test(refname)) {
       continue;
     }
-    // 只保留 heads / remotes/<remote>/<branch>
-    if (refname.startsWith("refs/heads/") || /^refs\/remotes\/[^/]+\/.+/.test(refname)) {
-      names.push(shortName);
+    if (refname.startsWith("refs/heads/")) {
+      names.push({ name: shortName, remote: false });
+      continue;
+    }
+    if (/^refs\/remotes\/[^/]+\/.+/.test(refname)) {
+      names.push({ name: shortName, remote: true });
     }
   }
   return names;
@@ -116,7 +128,6 @@ export async function handleWebviewRequest(
       };
     }
 
-    // 远程：真实 git clone / fetch（非写死样例）
     if (looksLikeRemoteRepo(path)) {
       try {
         const resolved = await ensureRemoteRepo(path);
@@ -212,11 +223,14 @@ export async function handleWebviewRequest(
     }
 
     if (req.type === "graph") {
+      // 网页/扩展默认全量（maxNodes: 0）；CLI 仍默认 200
+      const maxNodes = req.maxNodes === undefined ? 0 : req.maxNodes;
       const data = await buildBranchGraph({
         cwd,
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
+        maxNodes,
       });
       return {
         messages: [

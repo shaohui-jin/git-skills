@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { buildBranchTree } from "./graph/branchTree";
+import { buildBranchTree, type BranchOption } from "./graph/branchTree";
 
 const props = defineProps<{
   modelValue: string;
-  branches: string[];
+  branches: BranchOption[];
   placeholder?: string;
   disabled?: boolean;
 }>();
@@ -16,10 +16,14 @@ const emit = defineEmits<{
 const open = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
 const panelRef = ref<HTMLElement | null>(null);
+const filterRef = ref<HTMLInputElement | null>(null);
+const bodyRef = ref<HTMLElement | null>(null);
 const filter = ref("");
 const expandedLocal = ref(true);
 const expandedRemotes = ref<Record<string, boolean>>({});
 const panelStyle = ref<Record<string, string>>({});
+/** 键盘高亮在可见叶子中的下标；-1 表示仍在输入框 */
+const activeIndex = ref(-1);
 
 const tree = computed(() => buildBranchTree(props.branches));
 
@@ -45,6 +49,20 @@ const filtered = computed(() => {
   return { local, remotes };
 });
 
+/** 当前筛选结果中的全部叶子（不因折叠而跳过，上下键能扫过每一项） */
+const flatLeaves = computed(() => {
+  const list: Array<{ full: string; name: string }> = [];
+  for (const b of filtered.value.local) {
+    list.push(b);
+  }
+  for (const g of filtered.value.remotes) {
+    for (const b of g.branches) {
+      list.push(b);
+    }
+  }
+  return list;
+});
+
 watch(
   () => tree.value.remotes,
   (groups) => {
@@ -56,6 +74,16 @@ watch(
   },
   { immediate: true },
 );
+
+watch(filter, () => {
+  activeIndex.value = -1;
+});
+
+watch(flatLeaves, (leaves) => {
+  if (activeIndex.value >= leaves.length) {
+    activeIndex.value = leaves.length > 0 ? leaves.length - 1 : -1;
+  }
+});
 
 async function placePanel(): Promise<void> {
   await nextTick();
@@ -75,19 +103,124 @@ async function placePanel(): Promise<void> {
   };
 }
 
+async function focusFilter(): Promise<void> {
+  await nextTick();
+  filterRef.value?.focus();
+  filterRef.value?.select();
+}
+
 function select(full: string): void {
   emit("update:modelValue", full);
   open.value = false;
   filter.value = "";
+  activeIndex.value = -1;
+}
+
+async function openPanel(): Promise<void> {
+  open.value = true;
+  filter.value = "";
+  activeIndex.value = -1;
+  await placePanel();
+  await focusFilter();
+}
+
+function closePanel(): void {
+  open.value = false;
+  filter.value = "";
+  activeIndex.value = -1;
 }
 
 async function toggle(): Promise<void> {
   if (props.disabled) {
     return;
   }
-  open.value = !open.value;
   if (open.value) {
-    await placePanel();
+    closePanel();
+  } else {
+    await openPanel();
+  }
+}
+
+function scrollActiveIntoView(): void {
+  void nextTick(() => {
+    const el = bodyRef.value?.querySelector<HTMLElement>(".tree-leaf.kbd-active");
+    el?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function ensureExpandedForIndex(index: number): void {
+  const leaf = flatLeaves.value[index];
+  if (!leaf) {
+    return;
+  }
+  // 本地
+  if (filtered.value.local.some((b) => b.full === leaf.full)) {
+    expandedLocal.value = true;
+    return;
+  }
+  // 远程：展开对应 remote 组
+  for (const g of filtered.value.remotes) {
+    if (g.branches.some((b) => b.full === leaf.full)) {
+      expandedRemotes.value[g.remote] = true;
+      return;
+    }
+  }
+}
+
+function moveActive(delta: number): void {
+  const n = flatLeaves.value.length;
+  if (n === 0) {
+    activeIndex.value = -1;
+    return;
+  }
+  let next: number;
+  if (activeIndex.value < 0) {
+    next = delta > 0 ? 0 : n - 1;
+  } else {
+    next = activeIndex.value + delta;
+    // 到顶/到底不再循环，避免「跳到另一头」
+    if (next < 0) {
+      next = 0;
+    } else if (next >= n) {
+      next = n - 1;
+    }
+  }
+  activeIndex.value = next;
+  ensureExpandedForIndex(next);
+  scrollActiveIntoView();
+}
+
+function onFilterKeydown(ev: KeyboardEvent): void {
+  if (ev.key === "ArrowDown") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    moveActive(1);
+    return;
+  }
+  if (ev.key === "ArrowUp") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    moveActive(-1);
+    return;
+  }
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const hit =
+      activeIndex.value >= 0
+        ? flatLeaves.value[activeIndex.value]
+        : flatLeaves.value.length === 1
+          ? flatLeaves.value[0]
+          : undefined;
+    if (hit) {
+      select(hit.full);
+    }
+    return;
+  }
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    closePanel();
   }
 }
 
@@ -96,7 +229,7 @@ function onDocClick(ev: MouseEvent): void {
   if (rootRef.value?.contains(t) || panelRef.value?.contains(t)) {
     return;
   }
-  open.value = false;
+  closePanel();
 }
 
 function onScrollOrResize(): void {
@@ -140,18 +273,22 @@ onBeforeUnmount(() => {
         :style="panelStyle"
       >
         <input
+          ref="filterRef"
           v-model="filter"
           class="tree-select-filter"
           type="text"
           placeholder="筛选分支…"
+          autocomplete="off"
           @click.stop
+          @keydown="onFilterKeydown"
         />
 
-        <div class="tree-select-body">
+        <div ref="bodyRef" class="tree-select-body">
           <div v-if="filtered.local.length" class="tree-group">
             <button
               type="button"
               class="tree-group-title"
+              tabindex="-1"
               @click="expandedLocal = !expandedLocal"
             >
               <span class="tree-caret">{{ expandedLocal ? "▾" : "▸" }}</span>
@@ -163,8 +300,15 @@ onBeforeUnmount(() => {
                 v-for="b in filtered.local"
                 :key="b.full"
                 class="tree-leaf"
-                :class="{ active: b.full === modelValue }"
+                :class="{
+                  active: b.full === modelValue,
+                  'kbd-active':
+                    activeIndex >= 0 && flatLeaves[activeIndex]?.full === b.full,
+                }"
                 @click="select(b.full)"
+                @mouseenter="
+                  activeIndex = flatLeaves.findIndex((x) => x.full === b.full)
+                "
               >
                 {{ b.name }}
               </li>
@@ -181,6 +325,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="tree-group-title nested"
+                tabindex="-1"
                 @click="expandedRemotes[g.remote] = !expandedRemotes[g.remote]"
               >
                 <span class="tree-caret">{{
@@ -194,9 +339,16 @@ onBeforeUnmount(() => {
                   v-for="b in g.branches"
                   :key="b.full"
                   class="tree-leaf"
-                  :class="{ active: b.full === modelValue }"
+                  :class="{
+                    active: b.full === modelValue,
+                    'kbd-active':
+                      activeIndex >= 0 && flatLeaves[activeIndex]?.full === b.full,
+                  }"
                   :title="b.full"
                   @click="select(b.full)"
+                  @mouseenter="
+                    activeIndex = flatLeaves.findIndex((x) => x.full === b.full)
+                  "
                 >
                   {{ b.name }}
                 </li>

@@ -8,6 +8,8 @@ import {
 import type { BranchGraph, BranchTip, CommitNode, GraphOptions } from "../types.js";
 
 const DEFAULT_MAX_NODES = 200;
+/** Avoid Windows/ARG_MAX failures when loading commit meta. */
+const META_CHUNK = 200;
 
 async function listTips(repoRoot: string): Promise<BranchTip[]> {
   const { stdout } = await runGit(repoRoot, [
@@ -39,7 +41,7 @@ async function listTips(repoRoot: string): Promise<BranchTip[]> {
   return tips;
 }
 
-async function loadCommitMeta(
+async function loadCommitMetaChunk(
   repoRoot: string,
   shas: string[],
 ): Promise<Map<string, CommitNode>> {
@@ -68,6 +70,21 @@ async function loadCommitMeta(
       time: Number(timeRaw ?? 0),
       message: message ?? "",
     });
+  }
+  return map;
+}
+
+async function loadCommitMeta(
+  repoRoot: string,
+  shas: string[],
+): Promise<Map<string, CommitNode>> {
+  const map = new Map<string, CommitNode>();
+  for (let i = 0; i < shas.length; i += META_CHUNK) {
+    const chunk = shas.slice(i, i + META_CHUNK);
+    const part = await loadCommitMetaChunk(repoRoot, chunk);
+    for (const [sha, node] of part) {
+      map.set(sha, node);
+    }
   }
   return map;
 }
@@ -121,12 +138,13 @@ async function buildLineage(
 }
 
 /**
- * Build a commit DAG. With no into/from, uses all branch tips (capped).
- * With into/from, focuses on the symmetric difference around merge-base.
+ * Build a commit DAG. With no into/from, uses all branch tips.
+ * `maxNodes: 0` = unlimited (full graph); default cap 200 for CLI.
  */
 export async function buildBranchGraph(options: GraphOptions = {}): Promise<BranchGraph> {
   const repoRoot = await resolveRepoRoot(options.cwd);
-  const maxNodes = options.maxNodes ?? DEFAULT_MAX_NODES;
+  const unlimited = options.maxNodes === 0;
+  const maxNodes = unlimited ? 0 : (options.maxNodes ?? DEFAULT_MAX_NODES);
   const shouldFetch = options.fetch !== false;
   await maybeFetch(repoRoot, shouldFetch, options.remote ?? "origin");
 
@@ -137,14 +155,11 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
     const intoSha = await ensureRev(repoRoot, options.into);
     const fromSha = await ensureRev(repoRoot, options.from);
     const base = await mergeBase(repoRoot, intoSha, fromSha);
-    revListArgs = [
-      "rev-list",
-      "--parents",
-      `--max-count=${maxNodes}`,
-      intoSha,
-      fromSha,
-      "^" + base + "^@",
-    ];
+    revListArgs = ["rev-list", "--parents"];
+    if (!unlimited) {
+      revListArgs.push(`--max-count=${maxNodes}`);
+    }
+    revListArgs.push(intoSha, fromSha, "^" + base + "^@");
   } else {
     const tipShas = tips.map((t) => t.sha);
     if (tipShas.length === 0) {
@@ -154,10 +169,14 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
         tips,
         edges: [],
         truncated: false,
-        maxNodes,
+        maxNodes: 0,
       };
     }
-    revListArgs = ["rev-list", "--parents", `--max-count=${maxNodes}`, ...tipShas];
+    revListArgs = ["rev-list", "--parents"];
+    if (!unlimited) {
+      revListArgs.push(`--max-count=${maxNodes}`);
+    }
+    revListArgs.push(...tipShas);
   }
 
   const { stdout } = await runGit(repoRoot, revListArgs);
@@ -175,7 +194,7 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
   }
 
   const shas = [...parentMap.keys()];
-  const truncated = shas.length >= maxNodes;
+  const truncated = !unlimited && shas.length >= maxNodes;
   const meta = await loadCommitMeta(repoRoot, shas);
   const nodes: CommitNode[] = [];
   const edges: Array<[string, string]> = [];
@@ -207,6 +226,6 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
     edges,
     lineage,
     truncated,
-    maxNodes,
+    maxNodes: unlimited ? nodes.length : maxNodes,
   };
 }

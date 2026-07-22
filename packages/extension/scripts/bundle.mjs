@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(__dirname, "..");
 const distDir = resolve(extensionRoot, "dist");
 
-/** 清掉宿主侧旧产物 / demo pages，保留 webview 构建结果 */
+/** 清掉宿主侧旧产物，保留 webview 构建结果 */
 async function cleanHostArtifacts() {
   let entries = [];
   try {
