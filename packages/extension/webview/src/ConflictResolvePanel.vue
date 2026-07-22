@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import {
   applyChoices,
   countConflicts,
@@ -26,6 +26,13 @@ const props = defineProps<{
 const activePath = ref("");
 const segmentsByPath = ref<Record<string, MergeSegment[]>>({});
 const stashNote = ref("");
+/** 当前聚焦的冲突块，用于导航与高亮 */
+const activeConflictId = ref<string | null>(null);
+
+const leftPaneRef = ref<HTMLElement | null>(null);
+const midPaneRef = ref<HTMLElement | null>(null);
+const rightPaneRef = ref<HTMLElement | null>(null);
+let syncingScroll = false;
 
 const filePaths = computed(() => props.files.map((f) => f.path));
 
@@ -41,6 +48,10 @@ const segments = computed(() => {
   return segmentsByPath.value[path] ?? [];
 });
 
+const conflictSegments = computed(() =>
+  segments.value.filter((s): s is ConflictSegment => s.type === "conflict"),
+);
+
 const stats = computed(() => countConflicts(segments.value));
 
 const allStats = computed(() => {
@@ -54,7 +65,41 @@ const allStats = computed(() => {
   return { total, resolved };
 });
 
-const resolvedPreview = computed(() => applyChoices(segments.value));
+/** 当前文件：冲突处数 + 两侧差异行数（粗略） */
+const fileDiffStats = computed(() => {
+  let oursLines = 0;
+  let theirsLines = 0;
+  for (const c of conflictSegments.value) {
+    oursLines += c.ours ? c.ours.split("\n").length : 0;
+    theirsLines += c.theirs ? c.theirs.split("\n").length : 0;
+  }
+  return {
+    conflicts: stats.value.total,
+    resolved: stats.value.resolved,
+    pending: Math.max(0, stats.value.total - stats.value.resolved),
+    oursLines,
+    theirsLines,
+  };
+});
+
+const hasBaseOption = computed(() =>
+  conflictSegments.value.some((c) => c.base.trim().length > 0),
+);
+
+const activeConflict = computed(() => {
+  const id = activeConflictId.value;
+  if (!id) {
+    return null;
+  }
+  return conflictSegments.value.find((c) => c.id === id) ?? null;
+});
+
+const activeConflictIndex = computed(() => {
+  if (!activeConflictId.value) {
+    return -1;
+  }
+  return conflictSegments.value.findIndex((c) => c.id === activeConflictId.value);
+});
 
 function initFromFiles(): void {
   const next: Record<string, MergeSegment[]> = {};
@@ -93,6 +138,8 @@ function initFromFiles(): void {
   }
   segmentsByPath.value = next;
   activePath.value = props.files[0]?.path ?? "";
+  const first = next[activePath.value]?.find((s) => s.type === "conflict");
+  activeConflictId.value = first?.id ?? null;
 }
 
 watch(
@@ -103,6 +150,11 @@ watch(
   () => initFromFiles(),
   { immediate: true },
 );
+
+watch(activePath, () => {
+  const first = conflictSegments.value[0];
+  activeConflictId.value = first?.id ?? null;
+});
 
 function setChoice(seg: ConflictSegment, choice: ConflictChoice): void {
   const path = activePath.value;
@@ -121,6 +173,7 @@ function setChoice(seg: ConflictSegment, choice: ConflictChoice): void {
   const updated = [...list];
   updated[idx] = { ...cur, choice };
   segmentsByPath.value = { ...segmentsByPath.value, [path]: updated };
+  activeConflictId.value = seg.id;
 }
 
 function clearChoice(seg: ConflictSegment): void {
@@ -134,7 +187,7 @@ function clearChoice(seg: ConflictSegment): void {
     return;
   }
   const cur = list[idx];
-  if (!cur || cur.type !== "conflict") {
+  if (!cur || cur.type === "text") {
     return;
   }
   const updated = [...list];
@@ -150,8 +203,91 @@ function acceptAll(choice: ConflictChoice): void {
   }
   segmentsByPath.value = {
     ...segmentsByPath.value,
-    [path]: list.map((s) => (s.type === "conflict" ? { ...s, choice } : s)),
+    [path]: list.map((s) =>
+      s.type === "conflict"
+        ? {
+            ...s,
+            choice:
+              choice === "base" && s.base.trim().length === 0 ? s.choice : choice,
+          }
+        : s,
+    ),
   };
+}
+
+function acceptCurrent(choice: ConflictChoice): void {
+  const seg = activeConflict.value;
+  if (!seg) {
+    return;
+  }
+  if (choice === "base" && seg.base.trim().length === 0) {
+    return;
+  }
+  setChoice(seg, choice);
+}
+
+function resetCurrentFile(): void {
+  const path = activePath.value;
+  const list = segmentsByPath.value[path];
+  if (!list) {
+    return;
+  }
+  segmentsByPath.value = {
+    ...segmentsByPath.value,
+    [path]: list.map((s) => (s.type === "conflict" ? { ...s, choice: null } : s)),
+  };
+}
+
+function goConflict(delta: number): void {
+  const list = conflictSegments.value;
+  if (list.length === 0) {
+    return;
+  }
+  let idx = activeConflictIndex.value;
+  if (idx < 0) {
+    idx = delta > 0 ? -1 : 0;
+  }
+  const next = Math.max(0, Math.min(list.length - 1, idx + delta));
+  activeConflictId.value = list[next]!.id;
+  void nextTick(() => scrollToActiveConflict());
+}
+
+function scrollToActiveConflict(): void {
+  const id = activeConflictId.value;
+  if (!id) {
+    return;
+  }
+  for (const root of [leftPaneRef.value, midPaneRef.value, rightPaneRef.value]) {
+    const el = root?.querySelector(`[data-conflict-id="${id}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function onPaneScroll(source: "left" | "mid" | "right", ev: Event): void {
+  if (syncingScroll) {
+    return;
+  }
+  const target = ev.target as HTMLElement;
+  const ratio =
+    target.scrollHeight <= target.clientHeight
+      ? 0
+      : target.scrollTop / (target.scrollHeight - target.clientHeight);
+  const others: Array<HTMLElement | null> = [
+    source === "left" ? null : leftPaneRef.value,
+    source === "mid" ? null : midPaneRef.value,
+    source === "right" ? null : rightPaneRef.value,
+  ];
+  syncingScroll = true;
+  for (const pane of others) {
+    if (!pane) {
+      continue;
+    }
+    const max = pane.scrollHeight - pane.clientHeight;
+    pane.scrollTop = max > 0 ? ratio * max : 0;
+  }
+  requestAnimationFrame(() => {
+    syncingScroll = false;
+  });
 }
 
 function buildStash(): StashedMergeResolve {
@@ -182,7 +318,7 @@ function buildStash(): StashedMergeResolve {
 function stashNow(): void {
   const stash = buildStash();
   saveStash(stash);
-  stashNote.value = `已暂存 ${allStats.value.resolved}/${allStats.value.total} 处选择 · ${new Date(stash.updatedAt).toLocaleString()}`;
+  stashNote.value = `已暂存 ${allStats.value.resolved}/${allStats.value.total} 处 · ${new Date(stash.updatedAt).toLocaleString()}`;
 }
 
 function resetStash(): void {
@@ -194,9 +330,26 @@ function resetStash(): void {
 function fileResolvedCount(path: string): string {
   const c = countConflicts(segmentsByPath.value[path] ?? []);
   if (c.total === 0) {
-    return "无标记";
+    return "—";
   }
   return `${c.resolved}/${c.total}`;
+}
+
+function choiceLabel(choice: ConflictChoice | null): string {
+  if (choice === "ours") {
+    return "左侧";
+  }
+  if (choice === "theirs") {
+    return "右侧";
+  }
+  if (choice === "base") {
+    return "Base";
+  }
+  return "未解决";
+}
+
+function selectConflict(id: string): void {
+  activeConflictId.value = id;
 }
 </script>
 
@@ -213,12 +366,10 @@ function fileResolvedCount(path: string): string {
             class="badge"
             :class="allStats.resolved >= allStats.total && allStats.total ? 'ok' : 'danger'"
           >
-            已选 {{ allStats.resolved }} / {{ allStats.total }}
+            全部 {{ allStats.resolved }} / {{ allStats.total }}
           </span>
         </div>
-        <p class="muted resolve-tip">
-          选择「目标侧 / 待合并侧 / Base」后可暂存，不写回仓库。
-        </p>
+        <p class="muted resolve-tip">三栏对照选择，结果仅暂存，不写回仓库。</p>
         <div class="resolve-actions">
           <button type="button" class="btn" :disabled="allStats.total === 0" @click="stashNow">
             暂存结果
@@ -231,16 +382,17 @@ function fileResolvedCount(path: string): string {
 
     <div class="resolve-layout">
       <aside class="resolve-files card">
-        <h4>冲突文件</h4>
+        <h4>文件</h4>
         <ul>
           <li
             v-for="path in filePaths"
             :key="path"
             class="resolve-file"
             :class="{ active: path === activePath }"
+            :title="path"
             @click="activePath = path"
           >
-            <span class="mono path">{{ path }}</span>
+            <span class="mono path">{{ path.split("/").pop() }}</span>
             <span class="count">{{ fileResolvedCount(path) }}</span>
           </li>
         </ul>
@@ -249,102 +401,244 @@ function fileResolvedCount(path: string): string {
       <div class="resolve-main">
         <div v-if="!activeFile" class="card empty">无冲突文件</div>
         <template v-else>
-          <div class="card resolve-file-bar">
-            <span class="mono">{{ activeFile.path }}</span>
-            <span class="muted">本文件 {{ stats.resolved }}/{{ stats.total }}</span>
-            <div class="resolve-file-actions">
-              <button type="button" class="btn secondary tiny" @click="acceptAll('ours')">
-                全部用目标
+          <!-- 第一行：统计 + 快捷操作（对齐 WebStorm Merge 工具栏） -->
+          <div class="resolve-main-bar card">
+            <div class="resolve-main-bar-left">
+              <span class="mono file-name" :title="activeFile.path">{{ activeFile.path }}</span>
+              <span class="stat-pill">
+                冲突 <strong>{{ fileDiffStats.conflicts }}</strong>
+              </span>
+              <span class="stat-pill" :class="fileDiffStats.pending === 0 ? 'ok' : 'warn'">
+                已解决 <strong>{{ fileDiffStats.resolved }}</strong> /
+                {{ fileDiffStats.conflicts }}
+              </span>
+              <span class="stat-pill muted-pill">
+                两侧行 {{ fileDiffStats.oursLines }} / {{ fileDiffStats.theirsLines }}
+              </span>
+              <span v-if="activeConflictIndex >= 0" class="stat-pill muted-pill">
+                当前 #{{ activeConflictIndex + 1 }}
+              </span>
+            </div>
+            <div class="resolve-main-bar-right">
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="conflictSegments.length === 0"
+                title="上一处冲突"
+                @click="goConflict(-1)"
+              >
+                ↑ 上一处
               </button>
-              <button type="button" class="btn secondary tiny" @click="acceptAll('theirs')">
-                全部用待合并
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="conflictSegments.length === 0"
+                title="下一处冲突"
+                @click="goConflict(1)"
+              >
+                ↓ 下一处
+              </button>
+              <span class="bar-sep" />
+              <button
+                type="button"
+                class="btn tiny"
+                :disabled="!activeConflict"
+                title="Resolve using Left（采用目标侧）"
+                @click="acceptCurrent('ours')"
+              >
+                采用左侧
+              </button>
+              <button
+                type="button"
+                class="btn tiny"
+                :disabled="!activeConflict"
+                title="Resolve using Right（采用待合并侧）"
+                @click="acceptCurrent('theirs')"
+              >
+                采用右侧
+              </button>
+              <button
+                v-if="hasBaseOption"
+                type="button"
+                class="btn secondary tiny"
+                :disabled="!activeConflict || !activeConflict.base.trim()"
+                title="使用 merge-base 版本"
+                @click="acceptCurrent('base')"
+              >
+                采用 Base
+              </button>
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="!activeConflict?.choice"
+                title="取消当前冲突的选择"
+                @click="activeConflict && clearChoice(activeConflict)"
+              >
+                撤销当前
+              </button>
+              <span class="bar-sep" />
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="stats.total === 0"
+                title="Accept Yours：本文件全部用目标侧"
+                @click="acceptAll('ours')"
+              >
+                全部左侧
+              </button>
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="stats.total === 0"
+                title="Accept Theirs：本文件全部用待合并侧"
+                @click="acceptAll('theirs')"
+              >
+                全部右侧
+              </button>
+              <button
+                type="button"
+                class="btn secondary tiny"
+                :disabled="stats.resolved === 0"
+                title="清空本文件全部选择"
+                @click="resetCurrentFile"
+              >
+                重置本文件
               </button>
             </div>
           </div>
 
-          <div
-            v-for="seg in segments"
-            :key="seg.id"
-            class="card"
-            :class="seg.type === 'conflict' ? 'conflict-block' : 'text-block'"
-          >
-            <template v-if="seg.type === 'text'">
-              <div class="muted block-label">共同内容</div>
-              <pre class="code-pane">{{ seg.content }}</pre>
-            </template>
-            <template v-else>
-              <div class="conflict-head">
-                <span class="badge danger">冲突 {{ seg.id.replace("c-", "#") }}</span>
-                <span v-if="seg.choice" class="badge ok">
-                  已选：{{
-                    seg.choice === "ours"
-                      ? "目标侧"
-                      : seg.choice === "theirs"
-                        ? "待合并侧"
-                        : "Base"
-                  }}
-                </span>
-                <span v-else class="badge warn">未解决</span>
-                <div class="conflict-btns">
-                  <button
-                    type="button"
-                    class="btn tiny"
-                    :class="{ secondary: seg.choice !== 'ours' }"
-                    @click="setChoice(seg, 'ours')"
+          <!-- 第二行：左 | 结果 | 右 -->
+          <div class="merge-triptych">
+            <section class="merge-pane merge-pane--ours">
+              <header class="merge-pane-head">
+                <span class="pane-role">左侧 · 目标</span>
+                <span class="mono pane-branch">{{ into }}</span>
+              </header>
+              <div
+                ref="leftPaneRef"
+                class="merge-pane-body"
+                @scroll="onPaneScroll('left', $event)"
+              >
+                <template v-for="seg in segments" :key="'L-' + seg.id">
+                  <pre v-if="seg.type === 'text'" class="merge-text">{{ seg.content }}</pre>
+                  <div
+                    v-else
+                    class="merge-hunk"
+                    :class="{
+                      active: seg.id === activeConflictId,
+                      picked: seg.choice === 'ours',
+                    }"
+                    :data-conflict-id="seg.id"
+                    @click="selectConflict(seg.id)"
                   >
-                    使用目标侧
-                  </button>
-                  <button
-                    type="button"
-                    class="btn tiny"
-                    :class="{ secondary: seg.choice !== 'theirs' }"
-                    @click="setChoice(seg, 'theirs')"
-                  >
-                    使用待合并侧
-                  </button>
-                  <button
-                    v-if="seg.base.length > 0"
-                    type="button"
-                    class="btn tiny"
-                    :class="{ secondary: seg.choice !== 'base' }"
-                    @click="setChoice(seg, 'base')"
-                  >
-                    使用 Base
-                  </button>
-                  <button
-                    v-if="seg.choice"
-                    type="button"
-                    class="btn secondary tiny"
-                    @click="clearChoice(seg)"
-                  >
-                    取消选择
-                  </button>
-                </div>
+                    <div class="merge-hunk-gutter">
+                      <button
+                        type="button"
+                        class="chevron-accept"
+                        title="采用左侧到结果"
+                        @click.stop="setChoice(seg, 'ours')"
+                      >
+                        ≫
+                      </button>
+                      <span class="hunk-tag">{{ choiceLabel(seg.choice) }}</span>
+                    </div>
+                    <pre class="merge-hunk-code">{{ seg.ours || "（空）" }}</pre>
+                  </div>
+                </template>
               </div>
-              <div class="conflict-cols" :class="{ 'has-base': seg.base.length > 0 }">
-                <div class="side ours" :class="{ picked: seg.choice === 'ours' }">
-                  <div class="side-title">目标 （{{ into }}）</div>
-                  <pre class="code-pane">{{ seg.ours || "（空）" }}</pre>
-                </div>
-                <div
-                  v-if="seg.base.length > 0"
-                  class="side base"
-                  :class="{ picked: seg.choice === 'base' }"
-                >
-                  <div class="side-title">Base</div>
-                  <pre class="code-pane">{{ seg.base || "（空）" }}</pre>
-                </div>
-                <div class="side theirs" :class="{ picked: seg.choice === 'theirs' }">
-                  <div class="side-title">待合并 （{{ from }}）</div>
-                  <pre class="code-pane">{{ seg.theirs || "（空）" }}</pre>
-                </div>
-              </div>
-            </template>
-          </div>
+            </section>
 
-          <div class="card">
-            <h4>合并结果预览（本文件）</h4>
-            <pre class="code-pane result-pane">{{ resolvedPreview }}</pre>
+            <section class="merge-pane merge-pane--result">
+              <header class="merge-pane-head">
+                <span class="pane-role">中间 · 结果</span>
+                <span class="muted pane-branch">合并预览</span>
+              </header>
+              <div
+                ref="midPaneRef"
+                class="merge-pane-body"
+                @scroll="onPaneScroll('mid', $event)"
+              >
+                <template v-for="seg in segments" :key="'M-' + seg.id">
+                  <pre v-if="seg.type === 'text'" class="merge-text">{{ seg.content }}</pre>
+                  <div
+                    v-else
+                    class="merge-hunk merge-hunk--result"
+                    :class="{
+                      active: seg.id === activeConflictId,
+                      resolved: !!seg.choice,
+                      unresolved: !seg.choice,
+                    }"
+                    :data-conflict-id="seg.id"
+                    @click="selectConflict(seg.id)"
+                  >
+                    <div class="merge-hunk-gutter">
+                      <span class="hunk-tag">{{ choiceLabel(seg.choice) }}</span>
+                    </div>
+                    <pre v-if="seg.choice === 'ours'" class="merge-hunk-code side-tint-ours">{{
+                      seg.ours || "（空）"
+                    }}</pre>
+                    <pre
+                      v-else-if="seg.choice === 'theirs'"
+                      class="merge-hunk-code side-tint-theirs"
+                      >{{ seg.theirs || "（空）" }}</pre
+                    >
+                    <pre
+                      v-else-if="seg.choice === 'base'"
+                      class="merge-hunk-code side-tint-base"
+                      >{{ seg.base || "（空）" }}</pre
+                    >
+                    <pre v-else class="merge-hunk-code unresolved-code">{{
+                      [
+                        "<<<<<<< 未解决",
+                        seg.ours,
+                        "=======",
+                        seg.theirs,
+                        ">>>>>>>",
+                      ].join("\n")
+                    }}</pre>
+                  </div>
+                </template>
+              </div>
+            </section>
+
+            <section class="merge-pane merge-pane--theirs">
+              <header class="merge-pane-head">
+                <span class="pane-role">右侧 · 待合并</span>
+                <span class="mono pane-branch">{{ from }}</span>
+              </header>
+              <div
+                ref="rightPaneRef"
+                class="merge-pane-body"
+                @scroll="onPaneScroll('right', $event)"
+              >
+                <template v-for="seg in segments" :key="'R-' + seg.id">
+                  <pre v-if="seg.type === 'text'" class="merge-text">{{ seg.content }}</pre>
+                  <div
+                    v-else
+                    class="merge-hunk"
+                    :class="{
+                      active: seg.id === activeConflictId,
+                      picked: seg.choice === 'theirs',
+                    }"
+                    :data-conflict-id="seg.id"
+                    @click="selectConflict(seg.id)"
+                  >
+                    <div class="merge-hunk-gutter">
+                      <button
+                        type="button"
+                        class="chevron-accept chevron-accept--left"
+                        title="采用右侧到结果"
+                        @click.stop="setChoice(seg, 'theirs')"
+                      >
+                        ≪
+                      </button>
+                      <span class="hunk-tag">{{ choiceLabel(seg.choice) }}</span>
+                    </div>
+                    <pre class="merge-hunk-code">{{ seg.theirs || "（空）" }}</pre>
+                  </div>
+                </template>
+              </div>
+            </section>
           </div>
         </template>
       </div>
