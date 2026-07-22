@@ -11,6 +11,7 @@ import type {
   ConflictHunk,
   MergeOptions,
 } from "../types.js";
+import { mapProgress, reportProgress } from "../progress.js";
 import { previewMerge } from "./preview.js";
 
 async function fileExistsAt(repoRoot: string, rev: string, path: string): Promise<boolean> {
@@ -208,8 +209,16 @@ async function blameFile(
  * Preview merge then attach blame provenance for conflicting paths.
  */
 export async function conflictBlame(options: MergeOptions): Promise<ConflictBlameResult> {
-  const preview = await previewMerge(options);
+  const onProgress = options.onProgress;
+  // previewMerge 占 0–45；内部会把进度报到 100，这里包一层映射
+  const preview = await previewMerge({
+    ...options,
+    onProgress: onProgress
+      ? (u) => mapProgress(onProgress, 0, 45, u.percent / 100, u.label)
+      : undefined,
+  });
   if (preview.clean || preview.conflictFiles.length === 0) {
+    await reportProgress(onProgress, 100, "完成");
     return {
       ...preview,
       blamed: [],
@@ -222,7 +231,7 @@ export async function conflictBlame(options: MergeOptions): Promise<ConflictBlam
   const base =
     preview.mergeBase ||
     (await tryMergeBase(repoRoot, intoSha, fromSha)) ||
-    "4b825dc642cb6eb9a060e54bf8d6927f6fb5fb496";
+    "4b825dc642cb6eb9a060e54bf8d0927f6fb5fb496";
 
   const maxFiles = options.maxBlameFiles ?? 20;
   const paths = preview.conflictFiles
@@ -230,12 +239,22 @@ export async function conflictBlame(options: MergeOptions): Promise<ConflictBlam
     .filter((p) => p && p !== "(unknown)")
     .slice(0, maxFiles);
 
+  await reportProgress(onProgress, 48, `溯源冲突文件（0/${paths.length}）…`);
   const blamed: ConflictHunk[] = [];
-  for (const path of paths) {
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i]!;
     const hunks = await blameFile(repoRoot, intoSha, fromSha, base, path);
     blamed.push(...hunks);
+    await mapProgress(
+      onProgress,
+      48,
+      100,
+      paths.length === 0 ? 1 : (i + 1) / paths.length,
+      `溯源冲突文件（${i + 1}/${paths.length}）：${path}`,
+    );
   }
 
+  await reportProgress(onProgress, 100, "溯源完成");
   return {
     ...preview,
     blamed,

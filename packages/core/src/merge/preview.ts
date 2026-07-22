@@ -7,6 +7,7 @@ import {
   tryMergeBase,
 } from "../git/runner.js";
 import type { ConflictFile, MergeOptions, MergePreviewResult } from "../types.js";
+import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
 
 interface ParsedMergeTree {
   clean: boolean;
@@ -136,19 +137,37 @@ async function runMergeTree(
  * merge-base 失败时不抛错，返回结构化结果（unrelatedHistories）。
  */
 export async function previewMerge(options: MergeOptions): Promise<MergePreviewResult> {
+  const onProgress = options.onProgress;
   const repoRoot = await resolveRepoRoot(options.cwd);
+  await reportProgress(onProgress, 2, "准备合并预演…");
   const shouldFetch = options.fetch !== false;
-  const fetched = await maybeFetch(repoRoot, shouldFetch, options.remote ?? "origin");
+  let fetched = false;
+  if (shouldFetch) {
+    fetched = await maybeFetch(repoRoot, true, options.remote ?? "origin", (u) =>
+      mapProgress(onProgress, 2, 28, u.percent / 100, u.label),
+    );
+  }
+  await reportProgress(onProgress, 30, "解析分支…");
 
   const intoSha = await ensureRev(repoRoot, options.into);
   const fromSha = await ensureRev(repoRoot, options.from);
+  await reportProgress(onProgress, 38, "计算 merge-base…");
   const base = await tryMergeBase(repoRoot, intoSha, fromSha);
   const unrelated = base === null;
 
-  const parsed = await runMergeTree(repoRoot, intoSha, fromSha, {
-    allowUnrelated: unrelated,
-    mergeBaseSha: base,
-  });
+  await reportProgress(onProgress, 45, "执行 merge-tree（不改工作区）…");
+  const parsed = await withSoftProgress(
+    onProgress,
+    45,
+    92,
+    "merge-tree 分析冲突中…",
+    () =>
+      runMergeTree(repoRoot, intoSha, fromSha, {
+        allowUnrelated: unrelated,
+        mergeBaseSha: base,
+      }),
+  );
+  await reportProgress(onProgress, 100, "冲突检测完成");
 
   const messages = [...parsed.messages];
   if (unrelated) {

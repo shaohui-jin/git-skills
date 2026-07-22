@@ -101,6 +101,14 @@ export interface FetchResult {
   stderr: string;
 }
 
+export interface ProgressUpdate {
+  /** 0–100 */
+  percent: number;
+  label: string;
+}
+
+export type ProgressReporter = (update: ProgressUpdate) => void | Promise<void>;
+
 export interface GraphOptions {
   cwd?: string;
   /** Limit DAG nodes; default 200. Pass `0` for unlimited (full graph). */
@@ -111,6 +119,7 @@ export interface GraphOptions {
   /** Default true for skill usage. */
   fetch?: boolean;
   remote?: string;
+  onProgress?: ProgressReporter;
 }
 
 export interface MergeOptions {
@@ -122,6 +131,7 @@ export interface MergeOptions {
   remote?: string;
   /** Max files to run blame on; default 20. */
   maxBlameFiles?: number;
+  onProgress?: ProgressReporter;
 }
 
 export interface CliJsonResult<T> {

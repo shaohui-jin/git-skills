@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
+import ConflictResolvePanel from "./ConflictResolvePanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
 import { normalizeBranches, type BranchOption } from "./graph/branchTree";
 import type {
   BranchGraph,
   ConflictBlameResult,
-  ConflictFile,
-  ConflictHunk,
   HostMessage,
   TabId,
 } from "./types";
@@ -16,10 +15,6 @@ import { getVsCodeApi } from "./vscode";
 
 function short(sha: string): string {
   return sha.slice(0, 7);
-}
-
-function fileHunks(f: ConflictFile, all: ConflictHunk[]): ConflictHunk[] {
-  return f.hunks.length > 0 ? f.hunks : all.filter((h) => h.path === f.path);
 }
 
 const vscode = getVsCodeApi();
@@ -32,6 +27,7 @@ const into = ref("");
 const from = ref("");
 const busy = ref(false);
 const busyLabel = ref("");
+const busyPercent = ref<number | null>(null);
 /** 当前主操作，用于按钮上的 loading 文案 */
 const loadingAction = ref<"graph" | "preview" | "">("");
 const error = ref<string | null>(null);
@@ -41,7 +37,6 @@ const previewMode = ref(false);
 const graph = ref<BranchGraph | null>(null);
 const graphReport = ref("");
 const preview = ref<ConflictBlameResult | null>(null);
-const previewReport = ref("");
 
 function onHostMessage(event: MessageEvent<HostMessage>) {
   const msg = event.data;
@@ -56,9 +51,19 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "busy") {
     busy.value = msg.busy;
     busyLabel.value = msg.label ?? "";
+    if (typeof msg.percent === "number") {
+      busyPercent.value = msg.percent;
+    }
     if (!msg.busy) {
       loadingAction.value = "";
+      busyPercent.value = null;
     }
+    return;
+  }
+  if (msg.type === "progress") {
+    busy.value = true;
+    busyLabel.value = msg.label;
+    busyPercent.value = msg.percent;
     return;
   }
   if (msg.type === "error") {
@@ -117,15 +122,16 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       : `分支图已更新（${msg.data.nodes.length} 节点，全量）`;
     error.value = null;
     loadingAction.value = "";
+    busyPercent.value = null;
     return;
   }
   if (msg.type === "previewResult") {
     preview.value = msg.data;
-    previewReport.value = msg.report;
     loadingAction.value = "";
+    busyPercent.value = null;
     if (msg.data.unrelatedHistories || msg.data.outcome === "unrelated") {
       status.value = "合并预演：无关历史（无共同祖先）";
-      error.value = "两条分支没有共同祖先，详见报告";
+      error.value = "两条分支没有共同祖先";
     } else if (msg.data.clean) {
       status.value = "可干净合并";
       error.value = null;
@@ -160,9 +166,9 @@ function pickFolder() {
 }
 
 function loadGraph() {
-  // 全量 tip 图（maxNodes: 0）；默认 fetch
   busy.value = true;
   busyLabel.value = "正在加载全量分支图…";
+  busyPercent.value = 0;
   loadingAction.value = "graph";
   vscode.postMessage({ type: "graph", maxNodes: 0 });
 }
@@ -170,12 +176,35 @@ function loadGraph() {
 function runPreview() {
   busy.value = true;
   busyLabel.value = "合并预演中…";
+  busyPercent.value = 0;
   loadingAction.value = "preview";
   vscode.postMessage({
     type: "preview",
     into: into.value,
     from: from.value,
   });
+}
+
+function actionButtonText(kind: "graph" | "preview"): string {
+  if (loadingAction.value !== kind) {
+    return kind === "graph" ? "加载分支图" : "开始预演";
+  }
+  const pct =
+    busyPercent.value != null && busyPercent.value >= 0
+      ? `${busyPercent.value}%`
+      : "";
+  if (kind === "graph") {
+    return pct ? `加载中 ${pct}` : "加载中…";
+  }
+  return pct ? `预演中 ${pct}` : "预演中…";
+}
+
+function statusBusyText(): string {
+  const pct =
+    busyPercent.value != null && busyPercent.value >= 0
+      ? ` ${busyPercent.value}%`
+      : "";
+  return `${busyLabel.value || "处理中…"}${pct}`;
 }
 </script>
 
@@ -222,26 +251,37 @@ function runPreview() {
           class="btn"
           :class="{ loading: loadingAction === 'graph' }"
           :disabled="busy || !cwd"
+          :title="loadingAction === 'graph' ? busyLabel : undefined"
           @click="loadGraph"
         >
           <span v-if="loadingAction === 'graph'" class="btn-spinner" aria-hidden="true" />
-          {{ loadingAction === "graph" ? "加载中…" : "加载分支图" }}
+          {{ actionButtonText("graph") }}
         </button>
         <button
           v-else
           class="btn"
           :class="{ loading: loadingAction === 'preview' }"
           :disabled="busy || !cwd || !into || !from"
+          :title="loadingAction === 'preview' ? busyLabel : undefined"
           @click="runPreview"
         >
           <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
-          {{ loadingAction === "preview" ? "预演中…" : "开始预演" }}
+          {{ actionButtonText("preview") }}
         </button>
       </div>
     </header>
 
     <div class="status" :class="{ error: !!error }">
-      {{ busy ? busyLabel || "处理中…" : status }}
+      <template v-if="busy">
+        <span>{{ statusBusyText() }}</span>
+        <span
+          v-if="busyPercent != null"
+          class="status-bar"
+          :style="{ '--pct': `${busyPercent}%` }"
+          aria-hidden="true"
+        />
+      </template>
+      <template v-else>{{ status }}</template>
     </div>
 
     <div class="tabs">
@@ -292,9 +332,13 @@ function runPreview() {
         </template>
 
         <template v-if="tab === 'preview'">
-          <div v-if="preview" class="panel-stack panel-stack--split">
-            <div class="preview-main">
-              <div class="card">
+          <div v-if="preview" class="preview-host">
+            <!-- 正常：纵向全宽 -->
+            <div
+              v-if="preview.clean || preview.conflictFiles.length === 0"
+              class="preview-pane preview-pane--clean"
+            >
+              <div class="card preview-summary">
                 <h3>
                   合并预演结果
                   <span
@@ -326,86 +370,44 @@ function runPreview() {
                   {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
                 </p>
               </div>
-
-              <div
-                v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'"
-                class="card"
-              >
-                <p>
-                  两条分支没有共同祖先（<code>git merge-base</code> 失败）。完整说明见右侧报告。
+              <div class="card preview-desc">
+                <p v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'">
+                  两条分支没有共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
                 </p>
-              </div>
-
-              <div v-else-if="preview.clean" class="card">
-                <p>
+                <p v-else-if="preview.clean">
                   无冲突，可以将 <code>{{ preview.from }}</code> 合入
                   <code>{{ preview.into }}</code>。
                 </p>
+                <p v-else>未检测到可解析的冲突文件内容。</p>
               </div>
+            </div>
 
-              <template v-if="!preview.clean && preview.conflictFiles.length > 0">
-                <div class="card">
-                  <h3>冲突文件</h3>
-                  <ul>
-                    <li v-for="f in preview.conflictFiles" :key="f.path" class="mono">
-                      {{ f.path }}
-                    </li>
-                  </ul>
-                </div>
-
-                <div
-                  v-for="f in preview.conflictFiles"
-                  :key="`detail-${f.path}`"
-                  class="card conflict-card"
-                >
-                  <h3 class="mono">{{ f.path }}</h3>
-
-                  <div
-                    v-for="(h, idx) in fileHunks(f, preview.blamed ?? [])"
-                    :key="`${f.path}-h-${idx}`"
-                    class="hunk"
-                  >
-                    <div class="mono">
-                      目标行 {{ h.oursRange[0] }}-{{ h.oursRange[1] }} · 待合并行
-                      {{ h.theirsRange[0] }}-{{ h.theirsRange[1] }}
-                    </div>
-                    <div class="hunk-cols">
-                      <div>
-                        <div class="muted">目标侧写入</div>
-                        <ul>
-                          <li v-for="c in h.oursCommits" :key="c.sha" class="mono">
-                            {{ short(c.sha) }} {{ c.author }}{{ c.pr ? ` ${c.pr}` : "" }}
-                            {{ c.message ?? "" }}
-                          </li>
-                        </ul>
-                      </div>
-                      <div>
-                        <div class="muted">待合并侧写入</div>
-                        <ul>
-                          <li v-for="c in h.theirsCommits" :key="c.sha" class="mono">
-                            {{ short(c.sha) }} {{ c.author }}{{ c.pr ? ` ${c.pr}` : "" }}
-                            {{ c.message ?? "" }}
-                          </li>
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="conflict-body">
-                    <div class="muted">冲突内容</div>
-                    <pre v-if="f.conflictContent" class="conflict-pre">{{ f.conflictContent }}</pre>
-                    <p v-else class="muted">未能生成冲突标记文本</p>
-                  </div>
+            <!-- 有冲突：上 7:3 摘要+解决头，下 文件列表+解决区 -->
+            <ConflictResolvePanel
+              v-else-if="cwd"
+              :files="preview.conflictFiles"
+              :cwd="cwd"
+              :into="preview.into"
+              :from="preview.from"
+            >
+              <template #summary>
+                <div class="card preview-summary">
+                  <h3>
+                    合并预演结果
+                    <span class="badge danger">{{ preview.conflictFiles.length }} 个冲突</span>
+                  </h3>
+                  <p class="mono">
+                    {{ preview.into }} ({{ short(preview.intoSha) }}) ← {{ preview.from }} ({{
+                      short(preview.fromSha)
+                    }})
+                  </p>
+                  <p class="mono">
+                    merge-base:
+                    {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
+                  </p>
                 </div>
               </template>
-            </div>
-
-            <div class="card card--report card--report-fill">
-              <h3>完整报告</h3>
-              <div class="report-scroll">
-                <MarkdownView :source="previewReport" />
-              </div>
-            </div>
+            </ConflictResolvePanel>
           </div>
           <div v-else class="empty empty--fill">选择目标 / 待合并分支后点击「开始预演」</div>
         </template>

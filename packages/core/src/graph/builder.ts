@@ -6,6 +6,7 @@ import {
   runGit,
 } from "../git/runner.js";
 import type { BranchGraph, BranchTip, CommitNode, GraphOptions } from "../types.js";
+import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
 
 const DEFAULT_MAX_NODES = 200;
 /** Avoid Windows/ARG_MAX failures when loading commit meta. */
@@ -44,17 +45,28 @@ async function listTips(repoRoot: string): Promise<BranchTip[]> {
 async function loadCommitMetaChunk(
   repoRoot: string,
   shas: string[],
+  onProgress?: GraphOptions["onProgress"],
+  softFrom = 0,
+  softTo = 0,
+  softLabel = "加载提交信息…",
 ): Promise<Map<string, CommitNode>> {
   const map = new Map<string, CommitNode>();
   if (shas.length === 0) {
     return map;
   }
-  const { stdout } = await runGit(repoRoot, [
-    "show",
-    "-s",
-    "--format=%H%00%P%00%an%00%at%00%s",
-    ...shas,
-  ]);
+  const { stdout } = await withSoftProgress(
+    onProgress && softTo > softFrom ? onProgress : undefined,
+    softFrom,
+    softTo,
+    softLabel,
+    () =>
+      runGit(repoRoot, [
+        "show",
+        "-s",
+        "--format=%H%00%P%00%an%00%at%00%s",
+        ...shas,
+      ]),
+  );
   for (const line of stdout.split("\n")) {
     if (!line.trim()) {
       continue;
@@ -77,14 +89,33 @@ async function loadCommitMetaChunk(
 async function loadCommitMeta(
   repoRoot: string,
   shas: string[],
+  onChunk?: (done: number, total: number) => void | Promise<void>,
+  onProgress?: GraphOptions["onProgress"],
+  rangeFrom = 45,
+  rangeTo = 92,
 ): Promise<Map<string, CommitNode>> {
   const map = new Map<string, CommitNode>();
+  const total = shas.length;
+  let done = 0;
+  const chunks = Math.max(1, Math.ceil(shas.length / META_CHUNK));
   for (let i = 0; i < shas.length; i += META_CHUNK) {
     const chunk = shas.slice(i, i + META_CHUNK);
-    const part = await loadCommitMetaChunk(repoRoot, chunk);
+    const chunkIndex = Math.floor(i / META_CHUNK);
+    const softFrom = rangeFrom + ((rangeTo - rangeFrom) * chunkIndex) / chunks;
+    const softTo = rangeFrom + ((rangeTo - rangeFrom) * (chunkIndex + 1)) / chunks;
+    const part = await loadCommitMetaChunk(
+      repoRoot,
+      chunk,
+      onProgress,
+      softFrom,
+      softTo,
+      `加载提交信息（${Math.min(total, i + chunk.length)}/${total}）…`,
+    );
     for (const [sha, node] of part) {
       map.set(sha, node);
     }
+    done = Math.min(total, i + chunk.length);
+    await onChunk?.(done, total);
   }
   return map;
 }
@@ -142,13 +173,23 @@ async function buildLineage(
  * `maxNodes: 0` = unlimited (full graph); default cap 200 for CLI.
  */
 export async function buildBranchGraph(options: GraphOptions = {}): Promise<BranchGraph> {
+  const onProgress = options.onProgress;
   const repoRoot = await resolveRepoRoot(options.cwd);
   const unlimited = options.maxNodes === 0;
   const maxNodes = unlimited ? 0 : (options.maxNodes ?? DEFAULT_MAX_NODES);
   const shouldFetch = options.fetch !== false;
-  await maybeFetch(repoRoot, shouldFetch, options.remote ?? "origin");
+
+  await reportProgress(onProgress, 2, "准备仓库…");
+  if (shouldFetch) {
+    await maybeFetch(repoRoot, true, options.remote ?? "origin", (u) =>
+      mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
+    );
+  }
+  await reportProgress(onProgress, 20, "列举分支 tip…");
 
   const tips = await listTips(repoRoot);
+  await reportProgress(onProgress, 26, `已找到 ${tips.length} 个 tip，枚举提交…`);
+
   let revListArgs: string[];
 
   if (options.into && options.from) {
@@ -163,6 +204,7 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
   } else {
     const tipShas = tips.map((t) => t.sha);
     if (tipShas.length === 0) {
+      await reportProgress(onProgress, 100, "完成");
       return {
         repoRoot,
         nodes: [],
@@ -179,7 +221,15 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
     revListArgs.push(...tipShas);
   }
 
-  const { stdout } = await runGit(repoRoot, revListArgs);
+  const { stdout } = await withSoftProgress(
+    onProgress,
+    28,
+    42,
+    "枚举提交（rev-list，仓库大时较久）…",
+    () => runGit(repoRoot, revListArgs),
+  );
+  await reportProgress(onProgress, 44, "解析提交图…");
+
   const parentMap = new Map<string, string[]>();
   for (const line of stdout.split("\n")) {
     if (!line.trim()) {
@@ -195,7 +245,25 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
 
   const shas = [...parentMap.keys()];
   const truncated = !unlimited && shas.length >= maxNodes;
-  const meta = await loadCommitMeta(repoRoot, shas);
+  await reportProgress(onProgress, 45, `加载提交信息（0/${shas.length}）…`);
+
+  const meta = await loadCommitMeta(
+    repoRoot,
+    shas,
+    (done, total) =>
+      mapProgress(
+        onProgress,
+        45,
+        92,
+        total === 0 ? 1 : done / total,
+        `加载提交信息（${done}/${total}）…`,
+      ),
+    onProgress,
+    45,
+    92,
+  );
+
+  await reportProgress(onProgress, 94, "组装节点与边…");
   const nodes: CommitNode[] = [];
   const edges: Array<[string, string]> = [];
 
@@ -216,9 +284,11 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
 
   let lineage: BranchGraph["lineage"];
   if (options.into && options.from) {
+    await reportProgress(onProgress, 96, "计算分支溯源…");
     lineage = await buildLineage(repoRoot, options.into, options.from);
   }
 
+  await reportProgress(onProgress, 100, "完成");
   return {
     repoRoot,
     nodes,

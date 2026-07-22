@@ -30,7 +30,11 @@ export interface GitRunResult {
 export async function runGit(
   cwd: string,
   args: string[],
-  options?: { allowFail?: boolean },
+  options?: {
+    allowFail?: boolean;
+    /** stderr 按行回调（git --progress 常用 \\r 刷新） */
+    onStderrLine?: (line: string) => void;
+  },
 ): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn("git", args, {
@@ -45,11 +49,32 @@ export async function runGit(
 
     let stdout = "";
     let stderr = "";
+    let stderrBuf = "";
+
+    const flushStderrLines = (chunk: string, final = false) => {
+      stderrBuf += chunk;
+      const parts = stderrBuf.split(/\r|\n/);
+      stderrBuf = final ? "" : (parts.pop() ?? "");
+      if (final && parts.length === 0 && stderrBuf) {
+        parts.push(stderrBuf);
+        stderrBuf = "";
+      }
+      for (const line of parts) {
+        if (line.trim()) {
+          options?.onStderrLine?.(line);
+        }
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stderr += text;
+      if (options?.onStderrLine) {
+        flushStderrLines(text);
+      }
     });
     child.on("error", (err) => {
       reject(
@@ -60,6 +85,9 @@ export async function runGit(
       );
     });
     child.on("close", (code) => {
+      if (options?.onStderrLine && stderrBuf.trim()) {
+        flushStderrLines("", true);
+      }
       const exit = code ?? 1;
       if (exit !== 0 && !options?.allowFail) {
         reject(

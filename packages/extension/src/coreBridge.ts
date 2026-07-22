@@ -104,9 +104,13 @@ async function workspacePayload(
 export async function handleWebviewRequest(
   req: WebviewRequest,
   cwd: string | null,
-  options?: { previewMode?: boolean },
+  options?: {
+    previewMode?: boolean;
+    onProgress?: (update: { percent: number; label: string }) => void;
+  },
 ): Promise<{ messages: HostMessage[]; cwd?: string | null }> {
   const previewMode = options?.previewMode;
+  const onProgress = options?.onProgress;
 
   if (req.type === "ready" || req.type === "refreshWorkspace") {
     return { messages: [await workspacePayload(cwd, previewMode)] };
@@ -231,6 +235,7 @@ export async function handleWebviewRequest(
         from: req.from,
         fetch: !req.noFetch,
         maxNodes,
+        onProgress,
       });
       return {
         messages: [
@@ -262,6 +267,7 @@ export async function handleWebviewRequest(
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
+        onProgress,
       });
       return {
         messages: [

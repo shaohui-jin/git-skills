@@ -1,5 +1,6 @@
 import { ensureRev, resolveRepoRoot } from "../git/runner.js";
 import type { ConflictBlameResult, ConflictHunk, MergeOptions } from "../types.js";
+import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
 import { conflictBlame } from "./blame.js";
 import { buildConflictContent } from "./conflictContent.js";
 import { previewMerge } from "./preview.js";
@@ -9,32 +10,43 @@ import { previewMerge } from "./preview.js";
  * merge-base 失败（无关历史）时仍返回结构化报告，不抛裸 git 错误。
  */
 export async function rehearseMerge(options: MergeOptions): Promise<ConflictBlameResult> {
-  const withBlame = await conflictBlame(options);
+  const onProgress = options.onProgress;
+  const withBlame = await conflictBlame({
+    ...options,
+    onProgress: onProgress
+      ? (u) => mapProgress(onProgress, 0, 55, u.percent / 100, u.label)
+      : undefined,
+  });
   if (withBlame.clean) {
+    await reportProgress(onProgress, 100, "可干净合并");
     return withBlame;
   }
 
-  // 无关历史且没有任何冲突文件：仍返回可读结论
   if (withBlame.unrelatedHistories && withBlame.conflictFiles.length === 0) {
+    await reportProgress(onProgress, 100, "无关历史");
     return withBlame;
   }
 
   const repoRoot = await resolveRepoRoot(options.cwd);
   const intoSha = withBlame.intoSha || (await ensureRev(repoRoot, options.into));
   const fromSha = withBlame.fromSha || (await ensureRev(repoRoot, options.from));
-  // 无 merge-base 时用 empty tree 作为三方合并的 base 近似
-  // 无共同祖先时用 Git 空 tree OID 作为三方合并 base
   const base = withBlame.mergeBase || EMPTY_TREE_SHA;
 
   const maxFiles = options.maxBlameFiles ?? 20;
+  const toLoad = withBlame.conflictFiles.slice(0, maxFiles);
   const conflictFiles = [];
-  for (const file of withBlame.conflictFiles.slice(0, maxFiles)) {
-    const content = await buildConflictContent(
-      repoRoot,
-      base,
-      intoSha,
-      fromSha,
-      file.path,
+  await reportProgress(onProgress, 58, `生成冲突正文（0/${toLoad.length}）…`);
+
+  for (let i = 0; i < toLoad.length; i++) {
+    const file = toLoad[i]!;
+    const fromPct = 58 + (40 * i) / Math.max(1, toLoad.length);
+    const toPct = 58 + (40 * (i + 1)) / Math.max(1, toLoad.length);
+    const content = await withSoftProgress(
+      onProgress,
+      fromPct,
+      toPct,
+      `生成冲突正文（${i + 1}/${toLoad.length}）：${file.path}`,
+      () => buildConflictContent(repoRoot, base, intoSha, fromSha, file.path),
     );
     const hunks: ConflictHunk[] = withBlame.blamed.filter((h) => h.path === file.path);
     conflictFiles.push({
@@ -55,6 +67,7 @@ export async function rehearseMerge(options: MergeOptions): Promise<ConflictBlam
     });
   }
 
+  await reportProgress(onProgress, 100, "合并预演完成");
   return {
     ...withBlame,
     conflictFiles,

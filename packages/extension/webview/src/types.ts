@@ -102,7 +102,8 @@ export type HostMessage =
   | { type: "graphResult"; data: BranchGraph; report: string; mermaid: string }
   | { type: "previewResult"; data: ConflictBlameResult; report: string; mermaid: string }
   | { type: "error"; message: string; code?: string }
-  | { type: "busy"; busy: boolean; label?: string }
+  | { type: "busy"; busy: boolean; label?: string; percent?: number }
+  | { type: "progress"; percent: number; label: string }
   | { type: "focusTab"; tab: "graph" | "preview" };
 
 export type TabId = "graph" | "preview";

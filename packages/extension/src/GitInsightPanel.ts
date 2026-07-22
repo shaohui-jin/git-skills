@@ -122,12 +122,26 @@ export class GitInsightPanel {
               : undefined;
 
     if (label) {
-      await this.post({ type: "busy", busy: true, label });
+      await this.post({ type: "busy", busy: true, label, percent: 0 });
     }
 
     try {
       const cwd = await this.getCwd();
-      const result = await handleWebviewRequest(req, cwd, { previewMode: false });
+      const result = await handleWebviewRequest(req, cwd, {
+        previewMode: false,
+        onProgress:
+          req.type === "graph" || req.type === "preview" || req.type === "blame"
+            ? async (u) => {
+                await this.post({
+                  type: "progress",
+                  percent: u.percent,
+                  label: u.label,
+                });
+                // 让出事件循环，确保 webview 能刷新百分比（否则易一直停在 0）
+                await new Promise<void>((r) => setImmediate(r));
+              }
+            : undefined,
+      });
       if (result.cwd !== undefined) {
         this.overrideCwd = result.cwd;
       }
@@ -136,7 +150,7 @@ export class GitInsightPanel {
       }
     } finally {
       if (label) {
-        await this.post({ type: "busy", busy: false });
+        await this.post({ type: "busy", busy: false, percent: 100 });
       }
     }
   }

@@ -47,5 +47,6 @@ export type HostMessage =
       mermaid: string;
     }
   | { type: "error"; message: string; code?: string }
-  | { type: "busy"; busy: boolean; label?: string }
+  | { type: "busy"; busy: boolean; label?: string; percent?: number }
+  | { type: "progress"; percent: number; label: string }
   | { type: "focusTab"; tab: "graph" | "preview" };

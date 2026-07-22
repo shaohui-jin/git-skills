@@ -130,11 +130,22 @@ async function main(): Promise<void> {
                     : undefined;
 
         if (label) {
-          send({ type: "busy", busy: true, label });
+          send({ type: "busy", busy: true, label, percent: 0 });
         }
         try {
           const result = await handleWebviewRequest(req, repoCwd, {
             previewMode: true,
+            onProgress:
+              req.type === "graph" || req.type === "preview" || req.type === "blame"
+                ? async (u) => {
+                    send({
+                      type: "progress",
+                      percent: u.percent,
+                      label: u.label,
+                    });
+                    await new Promise<void>((r) => setImmediate(r));
+                  }
+                : undefined,
           });
           if (result.cwd !== undefined) {
             repoCwd = result.cwd;
@@ -152,7 +163,7 @@ async function main(): Promise<void> {
           });
         } finally {
           if (label) {
-            send({ type: "busy", busy: false });
+            send({ type: "busy", busy: false, percent: 100 });
           }
         }
       })();

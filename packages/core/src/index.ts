@@ -15,6 +15,8 @@ export type {
   MergeOutcome,
   MergePreviewResult,
   MergeRehearsalResult,
+  ProgressReporter,
+  ProgressUpdate,
 } from "./types.js";
 
 export { GitError, resolveRepoRoot, runGit, tryMergeBase } from "./git/runner.js";
