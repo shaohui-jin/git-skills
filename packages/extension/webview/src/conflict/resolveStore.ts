@@ -1,9 +1,9 @@
-import type { ConflictChoice } from "./parseConflict";
+export type StashChoice = "ours" | "theirs" | "base";
 
 export interface StashedFileResolve {
   path: string;
-  /** conflict 块 id → 选择 */
-  choices: Record<string, ConflictChoice>;
+  /** hunk / conflict 块 id → 选择 */
+  choices: Record<string, StashChoice>;
   /** 应用选择后的完整文件内容 */
   resolvedContent: string;
   updatedAt: number;

@@ -1137,193 +1137,384 @@ button.btn.tiny {
   background: var(--border);
 }
 
-/* WebStorm 式三栏：左目标 | 中结果 | 右待合并 */
-.merge-triptych {
+/* ========== WebStorm Merge Revisions 布局 ========== */
+.merge-ws {
+  --merge-add: color-mix(in srgb, #3d8b40 28%, transparent);
+  --merge-add-edge: color-mix(in srgb, #3d8b40 55%, var(--border));
+  --merge-mod: color-mix(in srgb, #2a6db0 32%, transparent);
+  --merge-mod-edge: color-mix(in srgb, #2a6db0 55%, var(--border));
+  --merge-conflict: color-mix(in srgb, #c74e39 30%, transparent);
+  --merge-conflict-edge: color-mix(in srgb, #c74e39 60%, var(--border));
+
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
-  overflow: hidden;
-}
-
-@media (max-width: 1100px) {
-  .merge-triptych {
-    grid-template-columns: 1fr;
-    overflow: auto;
-  }
-
-  .merge-pane {
-    min-height: 220px;
-  }
-}
-
-.merge-pane {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--panel);
   overflow: hidden;
+  background: var(--panel);
 }
 
-.merge-pane--ours {
-  border-color: color-mix(in srgb, #0e639c 45%, var(--border));
-}
-
-.merge-pane--theirs {
-  border-color: color-mix(in srgb, #3d8b40 45%, var(--border));
-}
-
-.merge-pane--result {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.merge-pane-head {
+.merge-ws-heads {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr) 40px minmax(0, 1fr);
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+  background: color-mix(in srgb, var(--bg) 60%, var(--panel));
 }
 
-.merge-pane--ours .merge-pane-head {
-  background: color-mix(in srgb, #0e639c 22%, var(--panel));
-}
-
-.merge-pane--theirs .merge-pane-head {
-  background: color-mix(in srgb, #3d8b40 22%, var(--panel));
-}
-
-.pane-role {
+.merge-ws-head {
+  padding: 6px 10px;
   font-size: 11px;
   font-weight: 600;
-}
-
-.pane-branch {
-  font-size: 10px;
-  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 55%;
+  border-right: 1px solid var(--border);
 }
 
-.merge-pane-body {
+.merge-ws-head--ours {
+  background: color-mix(in srgb, #0e639c 18%, transparent);
+}
+
+.merge-ws-head--theirs {
+  background: color-mix(in srgb, #3d8b40 18%, transparent);
+  border-right: none;
+}
+
+.merge-ws-head--result {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.merge-ws-gutter-head {
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+
+.merge-ws-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+.merge-ws-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr) 40px minmax(0, 1fr);
+  min-height: 1.45em;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.merge-ws-row.active {
+  outline: 2px solid color-mix(in srgb, var(--accent) 85%, transparent);
+  outline-offset: -2px;
+  z-index: 2;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* 上一处/下一处跳转时的闪烁，强化定位反馈 */
+.merge-ws-row.hunk-flash {
+  animation: hunk-nav-flash 0.85s ease-out 1;
+  z-index: 3;
+}
+
+@keyframes hunk-nav-flash {
+  0% {
+    outline: 3px solid var(--accent);
+    outline-offset: -2px;
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent),
+      inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  55% {
+    outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
+    box-shadow:
+      0 0 12px 2px color-mix(in srgb, var(--accent) 35%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  100% {
+    outline: 2px solid color-mix(in srgb, var(--accent) 85%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+}
+
+.nav-conflict-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+}
+
+.nav-conflict-btn {
+  border-radius: 0 !important;
+  border: none !important;
+  background: color-mix(in srgb, var(--accent) 78%, var(--panel)) !important;
+  color: var(--accent-fg) !important;
+  padding: 5px 10px !important;
+  font-size: 12px !important;
+  font-weight: 600;
+}
+
+.nav-conflict-btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.nav-conflict-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  filter: brightness(0.95);
+}
+
+.nav-conflict-btn:disabled {
+  opacity: 0.45;
+}
+
+.nav-conflict-pos {
+  min-width: 52px;
+  padding: 0 8px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  line-height: 28px;
+  background: var(--panel);
+}
+
+.nav-conflict-pos--flash {
+  animation: nav-pos-pulse 0.45s ease-out 1;
+  color: var(--accent);
+}
+
+@keyframes nav-pos-pulse {
+  0% {
+    background: color-mix(in srgb, var(--accent) 35%, var(--panel));
+  }
+  100% {
+    background: var(--panel);
+  }
+}
+
+/* 绿=新增 蓝=修改 红=冲突（按侧着色，贴近 WebStorm） */
+.merge-ws-row.hunk-add {
+  border-bottom-color: var(--merge-add-edge);
+}
+
+.merge-ws-row.hunk-add-left .merge-ws-pane--ours .merge-code,
+.merge-ws-row.hunk-add-left .merge-ws-pane--result .merge-code {
+  background: var(--merge-add);
+}
+
+.merge-ws-row.hunk-add-right .merge-ws-pane--theirs .merge-code,
+.merge-ws-row.hunk-add-right .merge-ws-pane--result .merge-code {
+  background: var(--merge-add);
+}
+
+.merge-ws-row.hunk-modify {
+  border-bottom-color: var(--merge-mod-edge);
+}
+
+.merge-ws-row.hunk-modify-left .merge-ws-pane--ours .merge-code,
+.merge-ws-row.hunk-modify-left .merge-ws-pane--result .merge-code {
+  background: var(--merge-mod);
+}
+
+.merge-ws-row.hunk-modify-right .merge-ws-pane--theirs .merge-code,
+.merge-ws-row.hunk-modify-right .merge-ws-pane--result .merge-code {
+  background: var(--merge-mod);
+}
+
+/* 未解决冲突：三栏红底 */
+.merge-ws-row.hunk-conflict:not(.hunk-resolved) .merge-ws-pane .merge-code {
+  background: var(--merge-conflict);
+}
+
+.merge-ws-row.hunk-conflict:not(.hunk-resolved) {
+  border-bottom-color: var(--merge-conflict-edge);
+}
+
+/* 已用 ≫ / ≪ / × 解决：去掉冲突红，恢复正常底 */
+.merge-ws-row.hunk-conflict.hunk-resolved {
+  border-bottom-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.merge-ws-row.hunk-conflict.hunk-resolved .merge-ws-pane .merge-code {
+  background: transparent;
+}
+
+/* 采纳侧轻微绿色，未采纳侧变淡，直观表示「已解决」 */
+.merge-ws-row.hunk-chose-left .merge-ws-pane--ours .merge-code,
+.merge-ws-row.hunk-chose-left .merge-ws-pane--result .merge-code {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.merge-ws-row.hunk-chose-left .merge-ws-pane--theirs {
+  opacity: 0.4;
+}
+
+.merge-ws-row.hunk-chose-right .merge-ws-pane--theirs .merge-code,
+.merge-ws-row.hunk-chose-right .merge-ws-pane--result .merge-code {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.merge-ws-row.hunk-chose-right .merge-ws-pane--ours {
+  opacity: 0.4;
+}
+
+.gutter-btn--done {
+  background: color-mix(in srgb, var(--ok) 55%, var(--panel)) !important;
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.merge-ws-pane {
+  display: flex;
+  min-width: 0;
+  border-right: 1px solid var(--border);
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.45;
 }
 
-.merge-text {
-  margin: 0;
-  padding: 6px 10px;
+.merge-ws-pane--theirs {
+  border-right: none;
+}
+
+.merge-line-nos {
+  flex: 0 0 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 0 6px 0 4px;
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: var(--muted);
+  user-select: none;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.merge-line-nos span {
+  min-height: 1.45em;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+
+.merge-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+.merge-code-line {
+  min-height: 1.45em;
   white-space: pre-wrap;
   word-break: break-word;
-  color: color-mix(in srgb, var(--fg) 78%, transparent);
 }
 
-.merge-hunk {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  border-top: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-bottom: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--danger) 7%, transparent);
-  cursor: pointer;
+.merge-placeholder {
+  opacity: 0.35;
 }
 
-.merge-hunk.active {
-  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: -1px;
-  background: color-mix(in srgb, var(--accent) 12%, color-mix(in srgb, var(--danger) 6%, transparent));
-}
-
-.merge-hunk.picked {
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
-}
-
-.merge-hunk--result.unresolved {
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-
-.merge-hunk--result.resolved {
-  background: color-mix(in srgb, var(--ok) 8%, transparent);
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
-}
-
-.merge-hunk-gutter {
+.merge-ws-gutter {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 3px;
   padding: 4px 2px;
   border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  background: color-mix(in srgb, var(--bg) 55%, var(--panel));
 }
 
-.chevron-accept {
-  width: 26px;
-  height: 22px;
+.gutter-btn {
+  width: 22px;
+  height: 20px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 3px;
-  background: color-mix(in srgb, #0e639c 40%, var(--panel));
-  color: var(--fg);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--panel) 80%, #000);
 }
 
-.chevron-accept:hover {
-  filter: brightness(1.15);
+.gutter-btn:hover {
+  filter: brightness(1.2);
 }
 
-.chevron-accept--left {
-  background: color-mix(in srgb, #3d8b40 40%, var(--panel));
+.gutter-btn--accept {
+  background: color-mix(in srgb, #0e639c 45%, var(--panel));
 }
 
-.hunk-tag {
-  writing-mode: horizontal-tb;
-  font-size: 9px;
-  color: var(--muted);
-  text-align: center;
-  line-height: 1.2;
-  max-width: 32px;
-  word-break: break-all;
+.gutter-btn--from-right {
+  background: color-mix(in srgb, #3d8b40 45%, var(--panel));
 }
 
-.merge-hunk-code {
-  margin: 0;
-  padding: 6px 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-width: 0;
+.gutter-btn--ignore {
+  background: color-mix(in srgb, #666 35%, var(--panel));
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.side-tint-ours {
-  background: color-mix(in srgb, #0e639c 10%, transparent);
+/* highlight.js 暗色适配（webview） */
+.hljs-comment,
+.hljs-quote {
+  color: #6a9955;
+  font-style: italic;
 }
 
-.side-tint-theirs {
-  background: color-mix(in srgb, #3d8b40 10%, transparent);
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #569cd6;
 }
 
-.side-tint-base {
-  background: color-mix(in srgb, #888 8%, transparent);
+.hljs-string,
+.hljs-doctag,
+.hljs-attr,
+.hljs-symbol,
+.hljs-bullet {
+  color: #ce9178;
 }
 
-.unresolved-code {
-  color: color-mix(in srgb, var(--danger) 80%, var(--fg));
+.hljs-number,
+.hljs-regexp {
+  color: #b5cea8;
+}
+
+.hljs-title,
+.hljs-name,
+.hljs-type,
+.hljs-attribute,
+.hljs-built_in {
+  color: #4ec9b0;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: #9b9b9b;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #9cdcfe;
+}
+
+.hljs-deletion {
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.hljs-addition {
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
 }
 
 .code-pane {
@@ -1337,4 +1528,16 @@ button.btn.tiny {
   font-size: 11px;
   line-height: 1.45;
   color: var(--fg);
+}
+
+@media (max-width: 1100px) {
+  .merge-ws-heads,
+  .merge-ws-row {
+    grid-template-columns: 1fr;
+  }
+
+  .merge-ws-gutter,
+  .merge-ws-gutter-head {
+    display: none;
+  }
 }
