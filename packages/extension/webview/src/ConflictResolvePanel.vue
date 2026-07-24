@@ -24,6 +24,19 @@ const props = defineProps<{
   cwd: string;
   into: string;
   from: string;
+  /** 浏览器预览模式不可写仓库 */
+  previewMode?: boolean;
+}>();
+
+const emit = defineEmits<{
+  applyResolve: [
+    payload: {
+      into: string;
+      from: string;
+      files: Array<{ path: string; resolvedContent: string }>;
+      push: boolean;
+    },
+  ];
 }>();
 
 const activePath = ref("");
@@ -336,6 +349,42 @@ function resetStash(): void {
   stashNote.value = "已清除暂存";
 }
 
+function canApplyResolve(): boolean {
+  if (props.previewMode) {
+    return false;
+  }
+  if (allStats.value.conflicts === 0) {
+    return false;
+  }
+  return allStats.value.pending === 0;
+}
+
+/** 先写入暂存，再请求宿主执行方案 A：建分支 / merge / commit / push */
+function applyResolveNow(): void {
+  if (!canApplyResolve()) {
+    stashNote.value =
+      allStats.value.pending > 0
+        ? "请先解决全部冲突后再一键应用"
+        : props.previewMode
+          ? "预览模式不支持写仓库"
+          : "没有可应用的冲突解决结果";
+    return;
+  }
+  const stash = buildStash();
+  saveStash(stash);
+  const files = Object.values(stash.files).map((f) => ({
+    path: f.path,
+    resolvedContent: f.resolvedContent,
+  }));
+  emit("applyResolve", {
+    into: props.into,
+    from: props.from,
+    files,
+    push: true,
+  });
+  stashNote.value = "已提交一键解决请求（等待宿主确认）…";
+}
+
 function fileResolvedCount(path: string): string {
   const s = countHunkStats(hunksByPath.value[path] ?? []);
   if (s.conflicts === 0) {
@@ -442,7 +491,10 @@ const resultLineStarts = computed(() => {
             {{ allStats.changes }} changes, {{ allStats.conflicts }} conflicts
           </span>
         </div>
-        <p class="muted resolve-tip">三栏对照选择，结果仅暂存，不写回仓库。</p>
+        <p class="muted resolve-tip">
+          选边后可暂存；「一键解决」按方案 A：从目标分支建临时分支 → merge 待合并 →
+          写回暂存 → commit → push（MR 需手动打开链接）。
+        </p>
         <div class="resolve-actions">
           <button
             type="button"
@@ -451,6 +503,15 @@ const resultLineStarts = computed(() => {
             @click="stashNow"
           >
             暂存结果
+          </button>
+          <button
+            type="button"
+            class="btn"
+            :disabled="!canApplyResolve()"
+            title="从目标分支创建临时分支并应用暂存，然后推送"
+            @click="applyResolveNow"
+          >
+            一键解决并推送
           </button>
           <button type="button" class="btn secondary" @click="resetStash">清除暂存</button>
           <span v-if="stashNote" class="stash-note">{{ stashNote }}</span>

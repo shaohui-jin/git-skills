@@ -1,4 +1,5 @@
 import {
+  applyStashedResolve,
   buildBranchGraph,
   fetchRemote,
   rehearseMerge,
@@ -277,6 +278,67 @@ export async function handleWebviewRequest(
             report: reportMergeRehearsal(data),
             mermaid: mergeToMermaid(data),
           },
+        ],
+      };
+    }
+
+    if (req.type === "applyResolve") {
+      if (previewMode) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "预览模式不支持写仓库 / 推送，请在扩展中打开真实仓库后操作",
+              code: "PREVIEW_READONLY",
+            },
+          ],
+        };
+      }
+      if (!req.into || !req.from) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "请填写目标分支与待合并分支",
+              code: "USAGE",
+            },
+          ],
+        };
+      }
+      if (!req.files?.length) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "没有暂存的解决结果，请先完成冲突选择并「暂存结果」",
+              code: "NO_STASH",
+            },
+          ],
+        };
+      }
+      const data = await applyStashedResolve({
+        cwd,
+        into: req.into,
+        from: req.from,
+        files: req.files,
+        remote: req.remote,
+        push: req.push,
+        tempBranch: req.tempBranch,
+        onProgress,
+      });
+      return {
+        messages: [
+          {
+            type: "applyResolveResult",
+            tempBranch: data.tempBranch,
+            commitSha: data.commitSha,
+            pushed: data.pushed,
+            createMrUrl: data.createMrUrl,
+            messages: data.messages,
+            into: data.into,
+            from: data.from,
+          },
+          await workspacePayload(cwd, previewMode),
         ],
       };
     }

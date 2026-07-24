@@ -110,6 +110,23 @@ export class GitInsightPanel {
       return;
     }
 
+    if (req.type === "applyResolve") {
+      const push = req.push !== false;
+      const pick = await vscode.window.showWarningMessage(
+        `将按方案 A 写仓库并${push ? "推送" : "仅本地提交"}：\n` +
+          `1) 从「${req.into}」创建临时分支\n` +
+          `2) merge「${req.from}」并应用暂存解决结果后 commit\n` +
+          (push ? `3) push 到 origin\n` : "") +
+          `\n要求工作区干净。MR 不会自动创建（完成后可打开链接）。`,
+        { modal: true },
+        "继续",
+      );
+      if (pick !== "继续") {
+        await this.post({ type: "error", message: "已取消一键解决冲突", code: "CANCELLED" });
+        return;
+      }
+    }
+
     const label =
       req.type === "fetch"
         ? "正在 Fetch…"
@@ -117,9 +134,11 @@ export class GitInsightPanel {
           ? "正在加载全量分支图…"
           : req.type === "preview" || req.type === "blame"
             ? "合并预演中…"
-            : req.type === "setCwd"
-              ? "正在打开仓库…"
-              : undefined;
+            : req.type === "applyResolve"
+              ? "一键解决冲突（建分支 / merge / 提交 / 推送）…"
+              : req.type === "setCwd"
+                ? "正在打开仓库…"
+                : undefined;
 
     if (label) {
       await this.post({ type: "busy", busy: true, label, percent: 0 });
@@ -130,7 +149,10 @@ export class GitInsightPanel {
       const result = await handleWebviewRequest(req, cwd, {
         previewMode: false,
         onProgress:
-          req.type === "graph" || req.type === "preview" || req.type === "blame"
+          req.type === "graph" ||
+          req.type === "preview" ||
+          req.type === "blame" ||
+          req.type === "applyResolve"
             ? async (u) => {
                 await this.post({
                   type: "progress",
@@ -147,6 +169,18 @@ export class GitInsightPanel {
       }
       for (const msg of result.messages) {
         await this.post(msg);
+        if (msg.type === "applyResolveResult" && msg.createMrUrl) {
+          const open = await vscode.window.showInformationMessage(
+            `已完成：${msg.tempBranch} @ ${msg.commitSha.slice(0, 7)}` +
+              (msg.pushed ? "（已推送）" : "（未推送）") +
+              "\n是否打开「创建 MR/PR」页面？",
+            "打开 MR 页面",
+            "稍后",
+          );
+          if (open === "打开 MR 页面") {
+            await vscode.env.openExternal(vscode.Uri.parse(msg.createMrUrl));
+          }
+        }
       }
     } finally {
       if (label) {

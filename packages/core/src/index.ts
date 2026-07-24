@@ -26,6 +26,16 @@ export { buildBranchGraph } from "./graph/builder.js";
 export { previewMerge } from "./merge/preview.js";
 export { conflictBlame } from "./merge/blame.js";
 export { rehearseMerge } from "./merge/rehearsal.js";
+export {
+  applyStashedResolve,
+  buildCreateMrUrl,
+  defaultTempBranchName,
+} from "./merge/applyResolve.js";
+export type {
+  ApplyResolveOptions,
+  ApplyResolveResult,
+  StashFilePayload,
+} from "./merge/applyResolve.js";
 export { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
 export {
   reportGraph,

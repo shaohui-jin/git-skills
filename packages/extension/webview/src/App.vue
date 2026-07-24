@@ -17,6 +17,22 @@ function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
+function onApplyResolve(payload: {
+  into: string;
+  from: string;
+  files: Array<{ path: string; resolvedContent: string }>;
+  push: boolean;
+}): void {
+  loadingAction.value = "preview";
+  vscode.postMessage({
+    type: "applyResolve",
+    into: payload.into,
+    from: payload.from,
+    files: payload.files,
+    push: payload.push,
+  });
+}
+
 const vscode = getVsCodeApi();
 
 const tab = ref<TabId>("graph");
@@ -123,6 +139,16 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     error.value = null;
     loadingAction.value = "";
     busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "applyResolveResult") {
+    status.value = [
+      `一键解决完成：${msg.tempBranch}`,
+      `commit ${short(msg.commitSha)}`,
+      msg.pushed ? "已推送" : "未推送",
+      msg.createMrUrl ? "可打开创建 MR 页" : "未能生成 MR 链接",
+    ].join(" · ");
+    error.value = null;
     return;
   }
   if (msg.type === "previewResult") {
@@ -389,6 +415,8 @@ function statusBusyText(): string {
               :cwd="cwd"
               :into="preview.into"
               :from="preview.from"
+              :preview-mode="previewMode"
+              @apply-resolve="onApplyResolve"
             >
               <template #summary>
                 <div class="card preview-summary">

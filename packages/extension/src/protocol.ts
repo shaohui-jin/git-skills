@@ -21,7 +21,17 @@ export type WebviewRequest =
     }
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
   /** @deprecated 同 preview（合并预演） */
-  | { type: "blame"; into: string; from: string; noFetch?: boolean };
+  | { type: "blame"; into: string; from: string; noFetch?: boolean }
+  /** 方案 A：按暂存一键建分支 / merge / commit / push（不自动建 MR） */
+  | {
+      type: "applyResolve";
+      into: string;
+      from: string;
+      files: Array<{ path: string; resolvedContent: string }>;
+      remote?: string;
+      push?: boolean;
+      tempBranch?: string;
+    };
 
 /** Extension host / preview server -> Webview */
 export type HostMessage =
@@ -49,4 +59,14 @@ export type HostMessage =
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
-  | { type: "focusTab"; tab: "graph" | "preview" };
+  | { type: "focusTab"; tab: "graph" | "preview" }
+  | {
+      type: "applyResolveResult";
+      tempBranch: string;
+      commitSha: string;
+      pushed: boolean;
+      createMrUrl: string | null;
+      messages: string[];
+      into: string;
+      from: string;
+    };

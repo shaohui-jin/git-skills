@@ -104,6 +104,16 @@ export type HostMessage =
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
-  | { type: "focusTab"; tab: "graph" | "preview" };
+  | { type: "focusTab"; tab: "graph" | "preview" }
+  | {
+      type: "applyResolveResult";
+      tempBranch: string;
+      commitSha: string;
+      pushed: boolean;
+      createMrUrl: string | null;
+      messages: string[];
+      into: string;
+      from: string;
+    };
 
 export type TabId = "graph" | "preview";
