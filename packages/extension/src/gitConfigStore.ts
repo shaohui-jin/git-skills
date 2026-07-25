@@ -1,0 +1,162 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  defaultGitInsightConfig,
+  GIT_INSIGHT_CONFIG_FILE,
+  GIT_INSIGHT_DIR,
+  type GitInsightProjectConfig,
+  type MrMethod,
+} from "@git-insight/core";
+
+/** Cursor/VS Code globalState 键：Token 与 MR 方式全仓库共用 */
+export const GLOBAL_CONFIG_KEY = "gitInsight.userConfig";
+
+export type ConfigMemento = {
+  get<T>(key: string): T | undefined;
+  update(key: string, value: unknown): Thenable<void>;
+};
+
+export function configPathLabel(): string {
+  return "扩展全局配置（各仓库共用，不写进项目）";
+}
+
+/** 兼容：曾写入项目内的旧配置路径 */
+function legacyProjectConfigPath(repoRoot: string): string {
+  return join(repoRoot, GIT_INSIGHT_DIR, GIT_INSIGHT_CONFIG_FILE);
+}
+
+function normalizeConfig(raw: Partial<GitInsightProjectConfig> | undefined): GitInsightProjectConfig {
+  const base = defaultGitInsightConfig();
+  if (!raw) {
+    return base;
+  }
+  return {
+    ...base,
+    ...raw,
+    version: 1,
+    mrMethod: (raw.mrMethod as MrMethod | null | undefined) ?? null,
+    githubToken: raw.githubToken ?? "",
+    gitlabToken: raw.gitlabToken ?? "",
+    updatedAt: raw.updatedAt ?? Date.now(),
+  };
+}
+
+async function tryLoadLegacyProject(repoRoot: string | null): Promise<GitInsightProjectConfig | null> {
+  if (!repoRoot) {
+    return null;
+  }
+  try {
+    const raw = await readFile(legacyProjectConfigPath(repoRoot), "utf8");
+    return normalizeConfig(JSON.parse(raw) as Partial<GitInsightProjectConfig>);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从扩展 globalState 读取；若为空且项目里有旧文件，则迁移一次到全局。
+ */
+export async function loadUserConfig(
+  memento: ConfigMemento,
+  repoRoot?: string | null,
+): Promise<GitInsightProjectConfig> {
+  const stored = memento.get<Partial<GitInsightProjectConfig>>(GLOBAL_CONFIG_KEY);
+  if (stored && (stored.mrMethod != null || stored.githubToken || stored.gitlabToken)) {
+    return normalizeConfig(stored);
+  }
+  const legacy = await tryLoadLegacyProject(repoRoot ?? null);
+  if (legacy) {
+    await memento.update(GLOBAL_CONFIG_KEY, legacy);
+    return legacy;
+  }
+  return defaultGitInsightConfig();
+}
+
+export async function saveUserConfig(
+  memento: ConfigMemento,
+  config: GitInsightProjectConfig,
+): Promise<GitInsightProjectConfig> {
+  const next: GitInsightProjectConfig = {
+    version: 1,
+    mrMethod: config.mrMethod,
+    githubToken: config.githubToken ?? "",
+    gitlabToken: config.gitlabToken ?? "",
+    updatedAt: Date.now(),
+  };
+  await memento.update(GLOBAL_CONFIG_KEY, next);
+  return next;
+}
+
+/** @deprecated 兼容旧名 */
+export const loadProjectConfig = async (
+  repoRoot: string,
+  memento?: ConfigMemento,
+): Promise<GitInsightProjectConfig> => {
+  if (memento) {
+    return loadUserConfig(memento, repoRoot);
+  }
+  return (await tryLoadLegacyProject(repoRoot)) ?? defaultGitInsightConfig();
+};
+
+/** @deprecated 兼容旧名 */
+export const saveProjectConfig = async (
+  _repoRoot: string,
+  config: GitInsightProjectConfig,
+  memento?: ConfigMemento,
+): Promise<GitInsightProjectConfig> => {
+  if (!memento) {
+    throw new Error("saveProjectConfig 需要扩展 globalState");
+  }
+  return saveUserConfig(memento, config);
+};
+
+export function configPath(_repoRoot?: string): string {
+  return configPathLabel();
+}
+
+/** 方式是否已配置到可执行程度（不含「必须先一键推送」） */
+export function isMrMethodReady(
+  config: GitInsightProjectConfig,
+  ctx: {
+    platformHint: "github" | "gitlab" | "unknown";
+    systemCliOk: boolean;
+    bundledCliOk: boolean;
+  },
+): { ok: boolean; reason?: string } {
+  if (!config.mrMethod) {
+    return { ok: false, reason: "请先在「Git 配置」中选择 MR 方式" };
+  }
+  switch (config.mrMethod) {
+    case "cli":
+      return ctx.systemCliOk
+        ? { ok: true }
+        : {
+            ok: false,
+            reason: "本机 gh/glab 未就绪：请安装并登录（可用选项内「登录」按钮）",
+          };
+    case "download-cli":
+      return ctx.bundledCliOk
+        ? { ok: true }
+        : {
+            ok: false,
+            reason: "扩展内 CLI 未就绪：请先下载，再登录（可用选项内按钮）",
+          };
+    case "token": {
+      if (ctx.platformHint === "github") {
+        return config.githubToken?.trim()
+          ? { ok: true }
+          : { ok: false, reason: "请填写 GitHub Token 并保存" };
+      }
+      if (ctx.platformHint === "gitlab") {
+        return config.gitlabToken?.trim()
+          ? { ok: true }
+          : { ok: false, reason: "请填写 GitLab Token 并保存" };
+      }
+      return { ok: false, reason: "无法识别远程平台，Token 方式不可用" };
+    }
+    case "browser":
+      return { ok: true };
+    default:
+      return { ok: false, reason: "未知的 MR 方式" };
+  }
+}

@@ -16,8 +16,21 @@ import {
   handleWebviewRequest,
   resolveWorkspaceCwd,
 } from "../src/coreBridge.js";
+import type { ConfigMemento } from "../src/gitConfigStore.js";
 import { isRemoteOnlyMode, looksLikeRemoteRepo } from "../src/remoteRepo.js";
 import type { WebviewRequest } from "../src/protocol.js";
+
+function memoryConfigMemento(): ConfigMemento {
+  const store = new Map<string, unknown>();
+  return {
+    get: <T>(key: string) => store.get(key) as T | undefined,
+    update: async (key, value) => {
+      store.set(key, value);
+    },
+  };
+}
+
+const previewConfigMemento = memoryConfigMemento();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(__dirname, "..");
@@ -69,7 +82,7 @@ async function main(): Promise<void> {
     const result = await handleWebviewRequest(
       { type: "setCwd", path: initialRequested },
       null,
-      { previewMode: true },
+      { previewMode: true, configMemento: previewConfigMemento },
     );
     if (result.cwd) {
       repoCwd = result.cwd;
@@ -176,6 +189,7 @@ async function main(): Promise<void> {
         try {
           const result = await handleWebviewRequest(req, repoCwd, {
             previewMode: true,
+            configMemento: previewConfigMemento,
             onProgress:
               req.type === "graph" || req.type === "preview" || req.type === "blame"
                 ? async (u) => {

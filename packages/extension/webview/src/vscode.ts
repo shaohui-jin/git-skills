@@ -12,7 +12,48 @@ export type WebviewRequest =
       maxNodes?: number;
     }
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
-  | { type: "blame"; into: string; from: string; noFetch?: boolean };
+  | { type: "blame"; into: string; from: string; noFetch?: boolean }
+  | {
+      type: "applyResolve";
+      into: string;
+      from: string;
+      files: Array<{ path: string; resolvedContent: string }>;
+      remote?: string;
+      push?: boolean;
+      tempBranch?: string;
+    }
+  | {
+      type: "prepareCreateMr";
+      into: string;
+      from: string;
+      sourceBranch?: string;
+      remote?: string;
+    }
+  | {
+      type: "createMr";
+      sourceBranch: string;
+      targetBranch: string;
+      title?: string;
+      body?: string;
+      reviewers?: string[];
+      remote?: string;
+    }
+  | { type: "openExternal"; url: string }
+  | { type: "getGitConfig" }
+  | {
+      type: "saveGitConfig";
+      config: {
+        mrMethod: "cli" | "download-cli" | "token" | "browser" | null;
+        githubToken?: string;
+        gitlabToken?: string;
+      };
+    }
+  | { type: "downloadCli"; kind: "gh" | "glab" }
+  | {
+      type: "cliAuthLogin";
+      scope: "system" | "bundled";
+      kind: "gh" | "glab";
+    };
 
 export interface VsCodeApi {
   postMessage(message: WebviewRequest): void;

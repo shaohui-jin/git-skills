@@ -26,6 +26,10 @@ const props = defineProps<{
   from: string;
   /** 浏览器预览模式不可写仓库 */
   previewMode?: boolean;
+  /** 是否允许点「一键申请 MR」 */
+  canCreateMr?: boolean;
+  /** 不可点时的原因 */
+  createMrBlockReason?: string;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +41,7 @@ const emit = defineEmits<{
       push: boolean;
     },
   ];
+  requestCreateMr: [payload: { into: string; from: string }];
 }>();
 
 const activePath = ref("");
@@ -492,8 +497,8 @@ const resultLineStarts = computed(() => {
           </span>
         </div>
         <p class="muted resolve-tip">
-          选边后可暂存；「一键解决」按方案 A：从目标分支建临时分支 → merge 待合并 →
-          写回暂存 → commit → push（MR 需手动打开链接）。
+          选边后可暂存；「一键解决」在独立 worktree 中完成推送（不切换当前分支）。推送后可用「一键申请
+          MR」通过本机 gh/glab 选人并创建合并请求。
         </p>
         <div class="resolve-actions">
           <button
@@ -508,10 +513,28 @@ const resultLineStarts = computed(() => {
             type="button"
             class="btn"
             :disabled="!canApplyResolve()"
-            title="从目标分支创建临时分支并应用暂存，然后推送"
+            title="在独立 worktree 中创建临时分支并应用暂存后推送（不改当前分支）"
             @click="applyResolveNow"
           >
             一键解决并推送
+          </button>
+          <button
+            type="button"
+            class="btn"
+            :disabled="previewMode || !into || !from || !canCreateMr"
+            :title="
+              createMrBlockReason ||
+              '需先完成一键解决并推送，且在 Git 配置中选好可用方式'
+            "
+            @click="
+              canCreateMr
+                ? emit('requestCreateMr', { into, from })
+                : (stashNote =
+                    createMrBlockReason ||
+                    '请先完成「一键解决并推送」，并在「Git 配置」中选择 MR 方式')
+            "
+          >
+            一键申请 MR
           </button>
           <button type="button" class="btn secondary" @click="resetStash">清除暂存</button>
           <span v-if="stashNote" class="stash-note">{{ stashNote }}</span>

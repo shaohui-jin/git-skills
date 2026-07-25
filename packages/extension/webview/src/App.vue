@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";
+import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
+import GitConfigPanel from "./GitConfigPanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
 import { normalizeBranches, type BranchOption } from "./graph/branchTree";
+import { overviewReport, pathReport } from "./graph/branchPathReport";
 import type {
   BranchGraph,
+  CliStatusPayload,
   ConflictBlameResult,
+  GitInsightConfigView,
   HostMessage,
   TabId,
 } from "./types";
@@ -33,6 +38,41 @@ function onApplyResolve(payload: {
   });
 }
 
+function onRequestCreateMr(payload: { into: string; from: string }): void {
+  if (!canCreateMr.value) {
+    error.value = createMrBlockReason.value;
+    status.value = createMrBlockReason.value;
+    return;
+  }
+  mrBusy.value = true;
+  vscode.postMessage({
+    type: "prepareCreateMr",
+    into: payload.into,
+    from: payload.from,
+    sourceBranch: lastTempBranch.value || undefined,
+  });
+}
+
+function submitCreateMr(payload: {
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  reviewers: string[];
+}): void {
+  mrBusy.value = true;
+  vscode.postMessage({
+    type: "createMr",
+    sourceBranch: payload.sourceBranch,
+    targetBranch: payload.targetBranch,
+    title: payload.title,
+    reviewers: payload.reviewers,
+  });
+}
+
+function openExternalUrl(url: string): void {
+  vscode.postMessage({ type: "openExternal", url });
+}
+
 const vscode = getVsCodeApi();
 
 const tab = ref<TabId>("graph");
@@ -51,8 +91,65 @@ const status = ref("准备就绪");
 const previewMode = ref(false);
 
 const graph = ref<BranchGraph | null>(null);
+/** 服务端中文报告（备用）；画布交互以 overview / path 为准 */
 const graphReport = ref("");
+const selectedPath = ref<{ tipName: string; chain: string[] } | null>(null);
 const preview = ref<ConflictBlameResult | null>(null);
+/** 最近一次一键解决产生的临时分支，供申请 MR 默认源分支 */
+const lastTempBranch = ref<string | null>(null);
+/** 一键解决并推送是否已成功（与 into/from 绑定） */
+const resolvePushDone = ref<{ into: string; from: string; tempBranch: string } | null>(
+  null,
+);
+const mrDialogOpen = ref(false);
+const mrDraft = ref<MrDialogDraft | null>(null);
+const mrBusy = ref(false);
+
+const gitConfig = ref<GitInsightConfigView | null>(null);
+const cliStatus = ref<CliStatusPayload | null>(null);
+const gitConfigPath = ref("");
+const methodReady = ref(false);
+const methodReadyReason = ref<string | undefined>(undefined);
+
+const createMrBlockReason = computed(() => {
+  if (previewMode.value) {
+    return "预览模式不支持申请 MR";
+  }
+  if (!methodReady.value) {
+    return methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
+  }
+  // 有冲突时：必须先一键解决并推送；干净合并可直接申请（源=from）
+  const hasConflicts =
+    !!preview.value &&
+    !preview.value.clean &&
+    (preview.value.conflictFiles?.length ?? 0) > 0;
+  if (hasConflicts) {
+    if (
+      !resolvePushDone.value ||
+      resolvePushDone.value.into !== into.value ||
+      resolvePushDone.value.from !== from.value
+    ) {
+      return "请先完成「一键解决并推送」后再申请 MR";
+    }
+  }
+  return "";
+});
+
+const canCreateMr = computed(() => !createMrBlockReason.value);
+
+const displayGraphReport = computed(() => {
+  if (!graph.value) {
+    return graphReport.value;
+  }
+  if (selectedPath.value) {
+    return pathReport(graph.value, selectedPath.value.chain, selectedPath.value.tipName);
+  }
+  return overviewReport(graph.value);
+});
+
+function onGraphSelect(payload: { tipName: string; chain: string[] } | null): void {
+  selectedPath.value = payload;
+}
 
 function onHostMessage(event: MessageEvent<HostMessage>) {
   const msg = event.data;
@@ -61,7 +158,8 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   }
 
   if (msg.type === "focusTab") {
-    tab.value = msg.tab === "preview" ? "preview" : "graph";
+    tab.value =
+      msg.tab === "preview" ? "preview" : msg.tab === "config" ? "config" : "graph";
     return;
   }
   if (msg.type === "busy") {
@@ -86,6 +184,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     error.value = msg.message;
     status.value = msg.message;
     loadingAction.value = "";
+    mrBusy.value = false;
     return;
   }
   if (msg.type === "workspace") {
@@ -133,26 +232,102 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "graphResult") {
     graph.value = msg.data;
     graphReport.value = msg.report;
+    selectedPath.value = null;
+    const tips = msg.data.tips.length;
     status.value = msg.data.truncated
-      ? `分支图已更新（${msg.data.nodes.length} 节点，已截断）`
-      : `分支图已更新（${msg.data.nodes.length} 节点，全量）`;
+      ? `分支图已更新（${tips} 个分支 tip，提交元数据已截断）`
+      : `分支图已更新（${tips} 个分支 tip）`;
     error.value = null;
     loadingAction.value = "";
     busyPercent.value = null;
     return;
   }
   if (msg.type === "applyResolveResult") {
+    lastTempBranch.value = msg.tempBranch;
+    if (msg.pushed) {
+      resolvePushDone.value = {
+        into: msg.into,
+        from: msg.from,
+        tempBranch: msg.tempBranch,
+      };
+      into.value = msg.into;
+      from.value = msg.from;
+    }
     status.value = [
       `一键解决完成：${msg.tempBranch}`,
       `commit ${short(msg.commitSha)}`,
       msg.pushed ? "已推送" : "未推送",
-      msg.createMrUrl ? "可打开创建 MR 页" : "未能生成 MR 链接",
-    ].join(" · ");
+      msg.usedWorktree
+        ? msg.previousBranch
+          ? `主分支仍为 ${msg.previousBranch}`
+          : "主工作区未切换"
+        : null,
+      msg.pushed ? "现在可以「一键申请 MR」" : "未推送成功，暂不可申请 MR",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    error.value = null;
+    return;
+  }
+  if (msg.type === "gitConfigResult") {
+    gitConfig.value = msg.config;
+    cliStatus.value = msg.cliStatus;
+    gitConfigPath.value = msg.configPath;
+    methodReady.value = msg.methodReady;
+    methodReadyReason.value = msg.methodReadyReason;
+    status.value = msg.methodReady
+      ? `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
+      : msg.methodReadyReason || "请完善 Git 配置";
+    return;
+  }
+  if (msg.type === "downloadCliResult") {
+    status.value = msg.messages.join(" · ") || `已下载 ${msg.kind}`;
+    return;
+  }
+  if (msg.type === "prepareCreateMrResult") {
+    mrBusy.value = false;
+    mrDraft.value = {
+      platform: msg.platform,
+      cli: msg.cli,
+      method: msg.method,
+      sourceBranch: msg.sourceBranch,
+      targetBranch: msg.targetBranch,
+      title: msg.title,
+      candidates: msg.candidates,
+      createMrUrl: msg.createMrUrl,
+      messages: msg.messages,
+      cliError: msg.cliError,
+    };
+    mrDialogOpen.value = true;
+    status.value = msg.method
+      ? `已准备申请 MR（${msg.platform} / ${msg.method}）`
+      : msg.cliError || "请检查 Git 配置";
+    return;
+  }
+  if (msg.type === "createMrResult") {
+    mrBusy.value = false;
+    mrDialogOpen.value = false;
+    status.value = [
+      `MR 已创建：${msg.sourceBranch} → ${msg.targetBranch}`,
+      msg.url ?? "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
     error.value = null;
     return;
   }
   if (msg.type === "previewResult") {
     preview.value = msg.data;
+    // 换了一对分支预演时，需重新走一键推送才能申请 MR
+    if (
+      resolvePushDone.value &&
+      (resolvePushDone.value.into !== msg.data.into ||
+        resolvePushDone.value.from !== msg.data.from)
+    ) {
+      resolvePushDone.value = null;
+    }
+    into.value = msg.data.into;
+    from.value = msg.data.from;
     loadingAction.value = "";
     busyPercent.value = null;
     if (msg.data.unrelatedHistories || msg.data.outcome === "unrelated") {
@@ -231,6 +406,29 @@ function statusBusyText(): string {
       ? ` ${busyPercent.value}%`
       : "";
   return `${busyLabel.value || "处理中…"}${pct}`;
+}
+
+function saveGitConfig(payload: {
+  mrMethod: GitInsightConfigView["mrMethod"];
+  githubToken: string;
+  gitlabToken: string;
+}): void {
+  vscode.postMessage({
+    type: "saveGitConfig",
+    config: payload,
+  });
+}
+
+function refreshGitConfig(): void {
+  vscode.postMessage({ type: "getGitConfig" });
+}
+
+function downloadCli(kind: "gh" | "glab"): void {
+  vscode.postMessage({ type: "downloadCli", kind });
+}
+
+function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab" }): void {
+  vscode.postMessage({ type: "cliAuthLogin", ...payload });
 }
 </script>
 
@@ -311,13 +509,16 @@ function statusBusyText(): string {
     </div>
 
     <div class="tabs">
+      <button class="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'">
+        Git 配置
+      </button>
       <button class="tab" :class="{ active: tab === 'graph' }" @click="tab = 'graph'">分支图</button>
       <button class="tab" :class="{ active: tab === 'preview' }" @click="tab = 'preview'">
         合并预演
       </button>
     </div>
 
-    <div class="main" :class="{ 'main--full': tab === 'graph' }">
+    <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
       <aside v-if="tab === 'preview'" class="sidebar">
         <label>
           目标分支 (--into)
@@ -341,16 +542,32 @@ function statusBusyText(): string {
       </aside>
 
       <section class="content">
+        <template v-if="tab === 'config'">
+          <GitConfigPanel
+            :config="gitConfig"
+            :cli-status="cliStatus"
+            :config-path="gitConfigPath"
+            :method-ready="methodReady"
+            :method-ready-reason="methodReadyReason"
+            :busy="busy || mrBusy"
+            :preview-mode="previewMode"
+            @save="saveGitConfig"
+            @refresh="refreshGitConfig"
+            @download-cli="downloadCli"
+            @cli-auth-login="cliAuthLogin"
+          />
+        </template>
+
         <template v-if="tab === 'graph'">
           <div v-if="graph" class="panel-stack panel-stack--split">
             <div class="card card--viz">
-              <h3>可视化</h3>
-              <GraphView :graph="graph" />
+              <h3>可视化（仅分支）</h3>
+              <GraphView :graph="graph" @select="onGraphSelect" />
             </div>
             <div class="card card--report">
-              <h3>报告</h3>
+              <h3>{{ selectedPath ? "链路报告" : "总览报告" }}</h3>
               <div class="report-scroll">
-                <MarkdownView :source="graphReport" />
+                <MarkdownView :source="displayGraphReport" />
               </div>
             </div>
           </div>
@@ -405,6 +622,18 @@ function statusBusyText(): string {
                   <code>{{ preview.into }}</code>。
                 </p>
                 <p v-else>未检测到可解析的冲突文件内容。</p>
+                <div v-if="preview.clean && !previewMode" class="btn-row" style="margin-top: 10px">
+                  <button
+                    type="button"
+                    class="btn"
+                    :disabled="busy || mrBusy || !canCreateMr"
+                    :title="createMrBlockReason || '申请 MR'"
+                    @click="onRequestCreateMr({ into: preview.into, from: preview.from })"
+                  >
+                    一键申请 MR
+                  </button>
+                  <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
+                </div>
               </div>
             </div>
 
@@ -416,7 +645,10 @@ function statusBusyText(): string {
               :into="preview.into"
               :from="preview.from"
               :preview-mode="previewMode"
+              :can-create-mr="canCreateMr"
+              :create-mr-block-reason="createMrBlockReason"
               @apply-resolve="onApplyResolve"
+              @request-create-mr="onRequestCreateMr"
             >
               <template #summary>
                 <div class="card preview-summary">
@@ -441,5 +673,14 @@ function statusBusyText(): string {
         </template>
       </section>
     </div>
+
+    <CreateMrDialog
+      :open="mrDialogOpen"
+      :draft="mrDraft"
+      :busy="mrBusy || busy"
+      @close="mrDialogOpen = false"
+      @submit="submitCreateMr"
+      @open-url="openExternalUrl"
+    />
   </div>
 </template>

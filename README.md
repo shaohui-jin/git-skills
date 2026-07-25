@@ -1,15 +1,22 @@
 # git-skill
 
-Git 分支溯源与合并冲突预演：可发布的 npm 引擎 + Cursor Skill +（后续）网页可视化扩展。
+Git 分支溯源、合并冲突预演，以及 Cursor/VS Code 扩展内的一键解决冲突与申请 MR。
+
+## 文档（仅两份）
+
+| 文档 | 说明 |
+|------|------|
+| [skills/git-branch-insight/SKILL.md](skills/git-branch-insight/SKILL.md) | **Skill**：Agent 用 CLI 做分支图 / 合并预演（只读） |
+| [docs/project-design.md](docs/project-design.md) | **项目整体设计**：包结构、业务流、各模块与 git/gh/glab 指令表 |
 
 ## 结构
 
 ```text
-packages/core                 @git-insight/core     — CLI + 库（主交付）
-packages/extension            git-insight           — Cursor/VS Code 扩展 + Webview（次交付）
-packages/extension/webview    @git-insight/webview  — 可视化前端
-skills/git-branch-insight                           — Cursor Agent Skill
-docs/plan-git-branch-insight.md                     — 计划保留稿
+packages/core                 @git-insight/core     — CLI + 库（引擎）
+packages/extension            git-insight           — Cursor/VS Code 扩展
+packages/extension/webview    @git-insight/webview  — Vue + G6 前端
+skills/git-branch-insight                           — Agent Skill
+docs/project-design.md                              — 整体设计
 ```
 
 ## 快速开始
@@ -18,50 +25,22 @@ docs/plan-git-branch-insight.md                     — 计划保留稿
 pnpm install
 pnpm --filter @git-insight/core build
 
-# 在任意 git 仓库中：
+# 任意 git 仓库：
 pnpm --filter @git-insight/core exec node dist/cli.js graph
 pnpm --filter @git-insight/core exec node dist/cli.js preview-merge --into main --from feature/x
-pnpm --filter @git-insight/core exec node dist/cli.js conflict-blame --into main --from feature/x
 ```
 
 默认会先 `git fetch`；加 `--no-fetch` 可跳过。
 
-## Skill（主交付）
-
-见 [skills/git-branch-insight/SKILL.md](skills/git-branch-insight/SKILL.md)。
-
-## 扩展网页（次交付）
-
-### 本地浏览器预览（Vue + G6，推荐先这样看）
+## 扩展
 
 ```bash
-pnpm install
+# 浏览器预览
 pnpm preview
-# 浏览器打开 http://127.0.0.1:5173/
-# 指定仓库：
-pnpm preview:repo -- --cwd D:\path\to\repo
-```
 
-也可在网页顶部输入路径「打开路径」，或点「浏览…」选目录（走系统对话框，**不需要 HTTPS**；扩展里同理用 Cursor 宿主选目录）。
-
-### 装进 Cursor / VS Code
-
-```bash
-# 开发：从目录安装或 F5
-pnpm build
-# Developer: Install Extension from Location… → packages/extension
-
-# 打包给人安装
+# 打包安装
 pnpm package:vsix
-# 得到仓库根目录 git-insight.vsix → Extensions: Install from VSIX…
+cursor --install-extension git-insight.vsix --force
 ```
 
 详见 [packages/extension/README.md](packages/extension/README.md)。
-
-## 设计要点
-
-- 冲突预演：任意两分支名（本地或 `origin/xxx`），`merge-tree`，不改工作区
-- 远程：fetch 后本地算，不依赖平台 PR
-- Skill / 网页加载图与合并预演默认 fetch
-- **网页预览请本地运行**（`pnpm preview`）；不部署到 GitHub Pages（远程静态站无法操作本机 git）
-

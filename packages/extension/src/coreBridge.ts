@@ -1,7 +1,10 @@
 import {
   applyStashedResolve,
   buildBranchGraph,
+  createMergeRequest,
+  detectMrPlatform,
   fetchRemote,
+  prepareCreateMr,
   rehearseMerge,
   reportFetch,
   reportGraph,
@@ -12,7 +15,20 @@ import {
   mergeToMermaid,
   GitError,
 } from "@git-insight/core";
-import type { HostMessage, WebviewRequest } from "./protocol.js";
+import type { CliStatusPayload, HostMessage, WebviewRequest } from "./protocol.js";
+import {
+  bundledCliPath,
+  checkBundledCli,
+  checkSystemCli,
+  downloadBundledCli,
+} from "./cliBundle.js";
+import {
+  configPath,
+  type ConfigMemento,
+  isMrMethodReady,
+  loadUserConfig,
+  saveUserConfig,
+} from "./gitConfigStore.js";
 import {
   ensureRemoteRepo,
   isRemoteOnlyMode,
@@ -102,19 +118,120 @@ async function workspacePayload(
  * Handle requests that do not need a folder picker.
  * `setCwd` returns the new cwd via workspace message; caller should persist it.
  */
+function cliPairOk(
+  platformHint: "github" | "gitlab" | "unknown",
+  gh: { installed: boolean; loggedIn: boolean },
+  glab: { installed: boolean; loggedIn: boolean },
+): boolean {
+  if (platformHint === "github") {
+    return gh.installed && gh.loggedIn;
+  }
+  if (platformHint === "gitlab") {
+    return glab.installed && glab.loggedIn;
+  }
+  return (gh.installed && gh.loggedIn) || (glab.installed && glab.loggedIn);
+}
+
+/** 仅“已安装”（可不登录）——用于默认选中方案 A */
+function cliPairInstalled(
+  platformHint: "github" | "gitlab" | "unknown",
+  gh: { installed: boolean },
+  glab: { installed: boolean },
+): boolean {
+  if (platformHint === "github") {
+    return gh.installed;
+  }
+  if (platformHint === "gitlab") {
+    return glab.installed;
+  }
+  return gh.installed || glab.installed;
+}
+
+async function buildCliStatus(
+  repoRoot: string,
+  cliStorageDir: string | undefined,
+): Promise<CliStatusPayload> {
+  const remote = await runGit(repoRoot, ["remote", "get-url", "origin"], {
+    allowFail: true,
+  });
+  const platformHint = detectMrPlatform(remote.stdout.trim());
+  const systemGh = await checkSystemCli(repoRoot, "gh");
+  const systemGlab = await checkSystemCli(repoRoot, "glab");
+  const bundledGh = cliStorageDir
+    ? await checkBundledCli(cliStorageDir, "gh", repoRoot)
+    : { installed: false, loggedIn: false };
+  const bundledGlab = cliStorageDir
+    ? await checkBundledCli(cliStorageDir, "glab", repoRoot)
+    : { installed: false, loggedIn: false };
+  return {
+    platformHint,
+    systemGh,
+    systemGlab,
+    bundledGh,
+    bundledGlab,
+    systemCliOk: cliPairOk(platformHint, systemGh, systemGlab),
+    bundledCliOk: cliPairOk(platformHint, bundledGh, bundledGlab),
+  };
+}
+
 export async function handleWebviewRequest(
   req: WebviewRequest,
   cwd: string | null,
   options?: {
     previewMode?: boolean;
     onProgress?: (update: { percent: number; label: string }) => void;
+    /** 扩展 globalStorage，用于 B：下载 CLI */
+    cliStorageDir?: string;
+    /** 扩展 globalState：Token / MR 方式全仓库共用 */
+    configMemento?: ConfigMemento;
   },
 ): Promise<{ messages: HostMessage[]; cwd?: string | null }> {
   const previewMode = options?.previewMode;
   const onProgress = options?.onProgress;
+  const cliStorageDir = options?.cliStorageDir;
+  const configMemento = options?.configMemento;
+
+  const loadCfg = async () => {
+    if (!configMemento) {
+      throw new Error("扩展配置存储不可用");
+    }
+    return loadUserConfig(configMemento, cwd);
+  };
+  const saveCfg = async (config: Awaited<ReturnType<typeof loadUserConfig>>) => {
+    if (!configMemento) {
+      throw new Error("扩展配置存储不可用");
+    }
+    return saveUserConfig(configMemento, config);
+  };
 
   if (req.type === "ready" || req.type === "refreshWorkspace") {
-    return { messages: [await workspacePayload(cwd, previewMode)] };
+    const messages: HostMessage[] = [await workspacePayload(cwd, previewMode)];
+    if (cwd && configMemento) {
+      try {
+        const config = await loadCfg();
+        const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+        // 本机已安装 CLI（可不登录）且未选方式 → 默认选 A，便于展示登录按钮
+        let cfg = config;
+        if (
+          cfg.mrMethod == null &&
+          cliPairInstalled(cliStatus.platformHint, cliStatus.systemGh, cliStatus.systemGlab)
+        ) {
+          cfg = await saveCfg({ ...cfg, mrMethod: "cli" });
+        }
+        const ready = isMrMethodReady(cfg, cliStatus);
+        messages.push({
+          type: "gitConfigResult",
+          config: cfg,
+          cliStatus,
+          configPath: configPath(),
+          methodReady: ready.ok,
+          methodReadyReason: ready.reason,
+        });
+      } catch {
+        // ignore config bootstrap errors
+      }
+    }
+    return { messages };
   }
 
   if (req.type === "setCwd") {
@@ -337,8 +454,231 @@ export async function handleWebviewRequest(
             messages: data.messages,
             into: data.into,
             from: data.from,
+            previousBranch: data.previousBranch,
+            usedWorktree: data.usedWorktree,
           },
           await workspacePayload(cwd, previewMode),
+        ],
+      };
+    }
+
+    if (req.type === "getGitConfig") {
+      const config = await loadCfg();
+      let cfg = config;
+      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      if (
+        cfg.mrMethod == null &&
+        cliPairInstalled(cliStatus.platformHint, cliStatus.systemGh, cliStatus.systemGlab)
+      ) {
+        cfg = await saveCfg({ ...cfg, mrMethod: "cli" });
+      }
+      const ready = isMrMethodReady(cfg, cliStatus);
+      return {
+        messages: [
+          {
+            type: "gitConfigResult",
+            config: cfg,
+            cliStatus,
+            configPath: configPath(),
+            methodReady: ready.ok,
+            methodReadyReason: ready.reason,
+          },
+        ],
+      };
+    }
+
+    if (req.type === "saveGitConfig") {
+      const prev = await loadCfg();
+      const saved = await saveCfg({
+        ...prev,
+        mrMethod: req.config.mrMethod,
+        githubToken: req.config.githubToken ?? "",
+        gitlabToken: req.config.gitlabToken ?? "",
+      });
+      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const ready = isMrMethodReady(saved, cliStatus);
+      return {
+        messages: [
+          {
+            type: "gitConfigResult",
+            config: saved,
+            cliStatus,
+            configPath: configPath(),
+            methodReady: ready.ok,
+            methodReadyReason: ready.reason,
+          },
+        ],
+      };
+    }
+
+    if (req.type === "downloadCli") {
+      if (!cliStorageDir) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "扩展存储目录不可用，无法下载 CLI",
+              code: "NO_STORAGE",
+            },
+          ],
+        };
+      }
+      const path = await downloadBundledCli(cliStorageDir, req.kind, (label) => {
+        void onProgress?.({ percent: 50, label });
+      });
+      const config = await loadCfg();
+      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const ready = isMrMethodReady(config, cliStatus);
+      const st = req.kind === "glab" ? cliStatus.bundledGlab : cliStatus.bundledGh;
+      const loginHint = st.loggedIn
+        ? "登录状态：已登录"
+        : "登录状态：未登录（请在选项 B 内点「登录」）";
+      return {
+        messages: [
+          {
+            type: "downloadCliResult",
+            kind: req.kind,
+            path,
+            messages: [`已下载 ${req.kind} → ${path}`, loginHint],
+          },
+          {
+            type: "gitConfigResult",
+            config,
+            cliStatus,
+            configPath: configPath(),
+            methodReady: ready.ok,
+            methodReadyReason: ready.reason,
+          },
+        ],
+      };
+    }
+
+    if (req.type === "prepareCreateMr") {
+      if (previewMode) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "预览模式不支持创建 MR，请在扩展中打开真实仓库后操作",
+              code: "PREVIEW_READONLY",
+            },
+          ],
+        };
+      }
+      const config = await loadCfg();
+      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const ready = isMrMethodReady(config, cliStatus);
+      if (!ready.ok) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: ready.reason || "请先在「Git 配置」中完成 MR 方式配置",
+              code: "MR_CONFIG_REQUIRED",
+            },
+          ],
+        };
+      }
+      const kind = cliStatus.platformHint === "gitlab" ? "glab" : "gh";
+      const cliPath =
+        config.mrMethod === "download-cli" && cliStorageDir
+          ? bundledCliPath(cliStorageDir, kind)
+          : undefined;
+      const token =
+        config.mrMethod === "token"
+          ? cliStatus.platformHint === "gitlab"
+            ? config.gitlabToken
+            : config.githubToken
+          : undefined;
+      const data = await prepareCreateMr({
+        cwd,
+        into: req.into,
+        from: req.from,
+        sourceBranch: req.sourceBranch,
+        remote: req.remote,
+        method: config.mrMethod,
+        cliPath,
+        token,
+      });
+      return {
+        messages: [
+          {
+            type: "prepareCreateMrResult",
+            platform: data.platform,
+            cli: data.cli,
+            sourceBranch: data.sourceBranch,
+            targetBranch: data.targetBranch,
+            title: data.title,
+            candidates: data.candidates,
+            createMrUrl: data.createMrUrl,
+            messages: data.messages,
+            cliError: data.cliError,
+            method: config.mrMethod,
+          },
+        ],
+      };
+    }
+
+    if (req.type === "createMr") {
+      if (previewMode) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "预览模式不支持创建 MR，请在扩展中打开真实仓库后操作",
+              code: "PREVIEW_READONLY",
+            },
+          ],
+        };
+      }
+      const config = await loadCfg();
+      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const ready = isMrMethodReady(config, cliStatus);
+      if (!ready.ok) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: ready.reason || "请先在「Git 配置」中完成 MR 方式配置",
+              code: "MR_CONFIG_REQUIRED",
+            },
+          ],
+        };
+      }
+      const kind = cliStatus.platformHint === "gitlab" ? "glab" : "gh";
+      const cliPath =
+        config.mrMethod === "download-cli" && cliStorageDir
+          ? bundledCliPath(cliStorageDir, kind)
+          : undefined;
+      const token =
+        config.mrMethod === "token"
+          ? cliStatus.platformHint === "gitlab"
+            ? config.gitlabToken
+            : config.githubToken
+          : undefined;
+      const data = await createMergeRequest({
+        cwd,
+        sourceBranch: req.sourceBranch,
+        targetBranch: req.targetBranch,
+        title: req.title,
+        body: req.body,
+        reviewers: req.reviewers,
+        remote: req.remote,
+        method: config.mrMethod,
+        cliPath,
+        token,
+      });
+      return {
+        messages: [
+          {
+            type: "createMrResult",
+            platform: data.platform,
+            via: data.via,
+            url: data.url,
+            sourceBranch: data.sourceBranch,
+            targetBranch: data.targetBranch,
+            messages: data.messages,
+          },
         ],
       };
     }

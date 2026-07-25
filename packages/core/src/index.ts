@@ -1,4 +1,15 @@
 export type {
+  GitInsightProjectConfig,
+  MrMethod,
+} from "./config/gitInsightConfig.js";
+export {
+  defaultGitInsightConfig,
+  GIT_INSIGHT_CONFIG_FILE,
+  GIT_INSIGHT_DIR,
+  mrMethodLabel,
+} from "./config/gitInsightConfig.js";
+
+export type {
   BranchGraph,
   BranchLineage,
   BranchTip,
@@ -36,6 +47,21 @@ export type {
   ApplyResolveResult,
   StashFilePayload,
 } from "./merge/applyResolve.js";
+export {
+  branchNameForMr,
+  createMergeRequest,
+  detectMrPlatform,
+  normalizeRemoteWebUrl,
+  prepareCreateMr,
+} from "./merge/createMr.js";
+export type {
+  CreateMergeRequestOptions,
+  CreateMergeRequestResult,
+  MrCandidate,
+  MrPlatform,
+  PrepareCreateMrOptions,
+  PrepareCreateMrResult,
+} from "./merge/createMr.js";
 export { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
 export {
   reportGraph,

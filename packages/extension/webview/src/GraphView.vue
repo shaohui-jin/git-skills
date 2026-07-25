@@ -2,10 +2,21 @@
 import { CanvasEvent, Graph, NodeEvent } from "@antv/g6";
 import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { pathToRoots } from "./graph/pathToRoot";
-import { branchGraphToG6, kindColor, type G6GraphData, type G6NodeKind } from "./graph/toG6Data";
+import {
+  branchGraphToG6,
+  kindColor,
+  tipNameFromNodeId,
+  type G6GraphData,
+  type G6NodeKind,
+} from "./graph/toG6Data";
 import type { BranchGraph } from "./types";
 
 const props = defineProps<{ graph: BranchGraph }>();
+
+const emit = defineEmits<{
+  /** chain: tip node ids from selected → root；null 表示清除 */
+  select: [payload: { tipName: string; chain: string[] } | null];
+}>();
 
 const stageRef = ref<HTMLDivElement | null>(null);
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -13,13 +24,44 @@ const graphInst = shallowRef<Graph | null>(null);
 const pathHint = ref("");
 let resizeObserver: ResizeObserver | null = null;
 let g6Data: G6GraphData | null = null;
+let renderSeq = 0;
+/** 底部 path-hint 预留 */
+const HINT_RESERVE = 44;
 
 function nodeLabel(id: string): string {
   const n = g6Data?.nodes.find((x) => x.id === id);
   if (!n) {
-    return id.slice(0, 7);
+    return tipNameFromNodeId(id) ?? id.slice(0, 7);
   }
   return n.data.tipName || n.data.label || id.slice(0, 7);
+}
+
+/** 用 stage 测尺寸：container 在 G6 destroy 后常被写成很小的 inline height */
+function measureSize(): { width: number; height: number } {
+  const stage = stageRef.value;
+  const w = Math.max(120, stage?.clientWidth || containerRef.value?.clientWidth || 640);
+  const stageH = stage?.clientHeight || 0;
+  const h = Math.max(160, (stageH > 0 ? stageH : 360) - HINT_RESERVE);
+  return { width: w, height: h };
+}
+
+function clearContainerInlineSize(): void {
+  const el = containerRef.value;
+  if (!el) {
+    return;
+  }
+  el.style.width = "";
+  el.style.height = "";
+  el.style.minHeight = "";
+  el.style.maxHeight = "";
+}
+
+function waitLayout(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 async function clearHighlight(g: Graph): Promise<void> {
@@ -35,6 +77,7 @@ async function clearHighlight(g: Graph): Promise<void> {
   }
   await g.setElementState(states);
   pathHint.value = "";
+  emit("select", null);
 }
 
 async function highlightPath(g: Graph, startId: string): Promise<void> {
@@ -59,12 +102,18 @@ async function highlightPath(g: Graph, startId: string): Promise<void> {
 
   await g.setElementState(states);
 
-  // chain：当前 → … → 根；展示为左根源 → 右当前
   const labels = [...chain].reverse().map(nodeLabel);
   pathHint.value =
     labels.length <= 1
-      ? `已选：${labels[0] ?? startId.slice(0, 7)}（已是根源）`
-      : `到根源：${labels.join(" → ")}（高亮 ${nodeIds.size} 节点）`;
+      ? `已选：${labels[0] ?? startId}（已是根源）`
+      : `到根源：${labels.join(" → ")}（高亮 ${nodeIds.size} 个分支）`;
+
+  const tipName = tipNameFromNodeId(startId);
+  if (tipName) {
+    emit("select", { tipName, chain });
+  } else {
+    emit("select", { tipName: nodeLabel(startId), chain });
+  }
 }
 
 async function destroyGraph(): Promise<void> {
@@ -73,11 +122,26 @@ async function destroyGraph(): Promise<void> {
   g6Data = null;
   pathHint.value = "";
   if (g) {
-    g.destroy();
+    try {
+      g.destroy();
+    } catch {
+      // ignore
+    }
   }
+  clearContainerInlineSize();
+}
+
+async function applySizeAndFit(g: Graph): Promise<void> {
+  const { width, height } = measureSize();
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  g.setSize(width, height);
+  await g.fitView();
 }
 
 async function renderGraph(): Promise<void> {
+  const seq = ++renderSeq;
   await nextTick();
   const el = containerRef.value;
   if (!el) {
@@ -85,6 +149,17 @@ async function renderGraph(): Promise<void> {
   }
 
   await destroyGraph();
+  if (seq !== renderSeq) {
+    return;
+  }
+  emit("select", null);
+
+  // 等 flex 布局恢复，避免第二次加载读到塌缩高度
+  await waitLayout();
+  if (seq !== renderSeq) {
+    return;
+  }
+  clearContainerInlineSize();
 
   const data = branchGraphToG6(props.graph);
   g6Data = data;
@@ -92,10 +167,12 @@ async function renderGraph(): Promise<void> {
     return;
   }
 
+  const { width, height } = measureSize();
+
   const g = new Graph({
     container: el,
-    width: el.clientWidth || 640,
-    height: el.clientHeight || 360,
+    width,
+    height,
     data,
     autoFit: "view",
     padding: 32,
@@ -110,7 +187,7 @@ async function renderGraph(): Promise<void> {
     node: {
       type: "rect",
       style: {
-        size: [156, 42],
+        size: [168, 44],
         radius: 6,
         labelText: (d) => {
           const sub = (d as { data?: { label?: string; sub?: string } }).data?.sub;
@@ -123,7 +200,7 @@ async function renderGraph(): Promise<void> {
         labelPlacement: "center",
         fill: (d) => {
           const kind = ((d as { data?: { kind?: G6NodeKind } }).data?.kind ??
-            "commit") as G6NodeKind;
+            "local-tip") as G6NodeKind;
           return kindColor(kind);
         },
         stroke: "rgba(255,255,255,0.25)",
@@ -185,6 +262,17 @@ async function renderGraph(): Promise<void> {
 
   graphInst.value = g;
   await g.render();
+  if (seq !== renderSeq) {
+    return;
+  }
+
+  // layout 完成后再按 stage 真实尺寸校正（防止 G6 写回错误 inline size）
+  await waitLayout();
+  if (seq !== renderSeq || graphInst.value !== g) {
+    return;
+  }
+  clearContainerInlineSize();
+  await applySizeAndFit(g);
 }
 
 function bindResize(): void {
@@ -193,18 +281,20 @@ function bindResize(): void {
   if (!stage) {
     return;
   }
+  let timer: ReturnType<typeof setTimeout> | null = null;
   resizeObserver = new ResizeObserver(() => {
-    const g = graphInst.value;
-    const el = containerRef.value;
-    if (!g || !el) {
-      return;
+    if (timer) {
+      clearTimeout(timer);
     }
-    const w = el.clientWidth;
-    const h = el.clientHeight;
-    if (w > 0 && h > 0) {
-      g.setSize(w, h);
-      void g.fitView();
-    }
+    // 忽略 destroy 瞬间的 0 尺寸回调
+    timer = setTimeout(() => {
+      const g = graphInst.value;
+      const { width, height } = measureSize();
+      if (!g || width < 80 || height < 80) {
+        return;
+      }
+      void applySizeAndFit(g);
+    }, 50);
   });
   resizeObserver.observe(stage);
 }
@@ -214,6 +304,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  renderSeq += 1;
   resizeObserver?.disconnect();
   resizeObserver = null;
   void destroyGraph();
@@ -231,6 +322,8 @@ watch(
   <div ref="stageRef" class="graph-stage">
     <div ref="containerRef" class="graph-scroll graph-g6" />
     <div v-if="pathHint" class="path-hint" :title="pathHint">{{ pathHint }}</div>
-    <div v-else class="path-hint path-hint--idle">点击节点：高亮到根源的链路 · 点击空白处清除</div>
+    <div v-else class="path-hint path-hint--idle">
+      点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览
+    </div>
   </div>
 </template>

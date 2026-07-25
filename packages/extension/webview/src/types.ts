@@ -62,7 +62,7 @@ export interface ConflictFile {
 
 export type MergeOutcome = "clean" | "conflicts" | "unrelated";
 
-export interface MergePreviewResult {
+export interface ConflictBlameResult {
   repoRoot: string;
   into: string;
   from: string;
@@ -73,12 +73,8 @@ export interface MergePreviewResult {
   fetched: boolean;
   conflictFiles: ConflictFile[];
   messages: string[];
-  blamed?: ConflictHunk[];
   outcome?: MergeOutcome;
   unrelatedHistories?: boolean;
-}
-
-export interface ConflictBlameResult extends MergePreviewResult {
   blamed: ConflictHunk[];
 }
 
@@ -88,6 +84,26 @@ export interface FetchResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+}
+
+export type MrMethod = "cli" | "download-cli" | "token" | "browser";
+
+export interface GitInsightConfigView {
+  version: 1;
+  mrMethod: MrMethod | null;
+  githubToken?: string;
+  gitlabToken?: string;
+  updatedAt: number;
+}
+
+export interface CliStatusPayload {
+  platformHint: "github" | "gitlab" | "unknown";
+  systemGh: { installed: boolean; loggedIn: boolean };
+  systemGlab: { installed: boolean; loggedIn: boolean };
+  bundledGh: { installed: boolean; loggedIn: boolean };
+  bundledGlab: { installed: boolean; loggedIn: boolean };
+  systemCliOk: boolean;
+  bundledCliOk: boolean;
 }
 
 export type HostMessage =
@@ -104,7 +120,7 @@ export type HostMessage =
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
-  | { type: "focusTab"; tab: "graph" | "preview" }
+  | { type: "focusTab"; tab: "config" | "graph" | "preview" }
   | {
       type: "applyResolveResult";
       tempBranch: string;
@@ -114,6 +130,44 @@ export type HostMessage =
       messages: string[];
       into: string;
       from: string;
+      previousBranch: string | null;
+      usedWorktree: boolean;
+    }
+  | {
+      type: "prepareCreateMrResult";
+      platform: "github" | "gitlab" | "unknown";
+      cli: "gh" | "glab" | null;
+      sourceBranch: string;
+      targetBranch: string;
+      title: string;
+      candidates: Array<{ username: string; name?: string; role?: string }>;
+      createMrUrl: string | null;
+      messages: string[];
+      cliError?: string;
+      method: MrMethod | null;
+    }
+  | {
+      type: "createMrResult";
+      platform: "github" | "gitlab" | "unknown";
+      via: "gh" | "glab" | "token" | "browser";
+      url: string | null;
+      sourceBranch: string;
+      targetBranch: string;
+      messages: string[];
+    }
+  | {
+      type: "gitConfigResult";
+      config: GitInsightConfigView;
+      cliStatus: CliStatusPayload;
+      configPath: string;
+      methodReady: boolean;
+      methodReadyReason?: string;
+    }
+  | {
+      type: "downloadCliResult";
+      kind: "gh" | "glab";
+      path: string;
+      messages: string[];
     };
 
-export type TabId = "graph" | "preview";
+export type TabId = "config" | "graph" | "preview";

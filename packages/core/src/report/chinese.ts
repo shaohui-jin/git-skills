@@ -15,7 +15,7 @@ export function reportGraph(graph: BranchGraph): string {
     ``,
     `- 仓库：${graph.repoRoot}`,
     `- 分支 tip 数：${graph.tips.length}`,
-    `- 提交节点：${graph.nodes.length}${graph.truncated ? `（已截断，上限 ${graph.maxNodes}）` : "（全量）"}`,
+    `- 分支 tip：${graph.tips.length}（可视化画布仅展示 tip 链路；提交元数据 ${graph.nodes.length} 条${graph.truncated ? `，已截断上限 ${graph.maxNodes}` : ""}）`,
   ];
 
   if (graph.lineage) {

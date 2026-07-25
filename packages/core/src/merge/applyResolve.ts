@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { reportProgress } from "../progress.js";
 import type { ProgressReporter } from "../types.js";
@@ -38,7 +39,10 @@ export interface ApplyResolveResult {
   remote: string;
   /** 浏览器打开即可创建 MR/PR（不做 API 提交） */
   createMrUrl: string | null;
+  /** 主工作区当前分支（全程不切换） */
   previousBranch: string | null;
+  /** 是否使用了独立 worktree（主工作区未 checkout） */
+  usedWorktree: boolean;
   messages: string[];
 }
 
@@ -61,14 +65,10 @@ async function currentBranch(cwd: string): Promise<string | null> {
   return name || null;
 }
 
-async function assertCleanWorktree(cwd: string): Promise<void> {
-  const { stdout } = await runGit(cwd, ["status", "--porcelain"]);
-  if (stdout.trim()) {
-    throw new GitError(
-      "工作区或暂存区不干净，请先 commit / stash / 丢弃本地修改后再一键解决冲突",
-      { code: "DIRTY_WORKTREE", args: ["status", "--porcelain"] },
-    );
-  }
+async function removeWorktree(repoRoot: string, wtPath: string): Promise<void> {
+  await runGit(repoRoot, ["worktree", "remove", "--force", wtPath], { allowFail: true });
+  await rm(wtPath, { recursive: true, force: true });
+  await runGit(repoRoot, ["worktree", "prune"], { allowFail: true });
 }
 
 /**
@@ -133,11 +133,24 @@ async function listUnmerged(cwd: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+async function writeStashFiles(
+  workDir: string,
+  files: StashFilePayload[],
+): Promise<void> {
+  for (const f of files) {
+    const rel = f.path.replace(/\\/g, "/");
+    const abs = join(workDir, rel);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, f.resolvedContent, "utf8");
+    await runGit(workDir, ["add", "--", rel]);
+  }
+}
+
 /**
- * 方案 A 一键解决冲突：
- * 1) 从 into 创建临时分支
- * 2) merge from，按暂存 resolvedContent 写回并 commit
- * 3) 可选 push
+ * 方案 A 一键解决冲突（独立 git worktree，不切换主工作区 HEAD）：
+ * 1) 在临时目录 `worktree add -B` 基于 into 的临时分支
+ * 2) 在该 worktree 内 merge from，按暂存 resolvedContent 写回并 commit
+ * 3) 可选 push，然后移除 worktree
  * MR：只生成创建页 URL，不自动调 GitLab/GitHub API（后续可接 glab/gh）。
  */
 export async function applyStashedResolve(
@@ -169,134 +182,133 @@ export async function applyStashedResolve(
   }
 
   const messages: string[] = [];
-  reportProgress(onProgress, 2, "检查工作区…");
-  await assertCleanWorktree(repoRoot);
-
   const previousBranch = await currentBranch(repoRoot);
-  reportProgress(onProgress, 8, "解析分支…");
+  reportProgress(onProgress, 5, "解析分支…");
   const intoSha = await ensureRev(repoRoot, into);
   const fromSha = await ensureRev(repoRoot, from);
 
-  reportProgress(onProgress, 15, `创建临时分支 ${tempBranch}（基于 ${into}）…`);
-  // -B：已存在则重置到 into，避免脏历史
-  await runGit(repoRoot, ["checkout", "-B", tempBranch, intoSha]);
-
-  reportProgress(onProgress, 35, `合并 ${from}（与预演同向）…`);
-  const mergeRun = await runGit(
-    repoRoot,
-    ["merge", "--no-ff", "--no-commit", fromSha],
-    { allowFail: true },
-  );
-
-  const unmerged = await listUnmerged(repoRoot);
-  const stashPaths = new Set(options.files.map((f) => f.path.replace(/\\/g, "/")));
-
-  if (mergeRun.code !== 0 || unmerged.length > 0) {
-    reportProgress(onProgress, 50, `写入暂存解决结果（${options.files.length} 文件）…`);
-    for (const f of options.files) {
-      const rel = f.path.replace(/\\/g, "/");
-      const abs = join(repoRoot, rel);
-      await mkdir(dirname(abs), { recursive: true });
-      await writeFile(abs, f.resolvedContent, "utf8");
-      await runGit(repoRoot, ["add", "--", rel]);
-    }
-
-    const still = await listUnmerged(repoRoot);
-    const missing = still.filter((p) => !stashPaths.has(p.replace(/\\/g, "/")));
-    if (missing.length > 0) {
-      // 尽量中止 merge，避免留下半成品
-      await runGit(repoRoot, ["merge", "--abort"], { allowFail: true });
-      if (previousBranch) {
-        await runGit(repoRoot, ["checkout", previousBranch], { allowFail: true });
-      }
-      throw new GitError(
-        `以下冲突文件没有暂存解决结果，已中止合并：\n${missing.join("\n")}`,
-        { code: "UNRESOLVED_LEFT", args: missing },
-      );
-    }
-    messages.push(`已按暂存覆盖 ${options.files.length} 个冲突文件`);
-  } else {
-    // 干净合并：仍写入暂存文件，保证与预演选择一致（若有）
-    reportProgress(onProgress, 50, "合并无冲突，同步写入暂存文件…");
-    for (const f of options.files) {
-      const rel = f.path.replace(/\\/g, "/");
-      const abs = join(repoRoot, rel);
-      await mkdir(dirname(abs), { recursive: true });
-      await writeFile(abs, f.resolvedContent, "utf8");
-      await runGit(repoRoot, ["add", "--", rel]);
-    }
-    messages.push("git merge 无冲突；已按暂存内容对齐文件");
-  }
-
-  reportProgress(onProgress, 70, "提交解决冲突…");
-  const commitMsg = [
-    `resolve: merge ${from} into ${into} via ${tempBranch}`,
-    "",
-    "Applied stash choices from Git Insight merge preview (scheme A).",
-  ].join("\n");
-
-  // 若无任何变更可提交（极端情况）
-  const staged = await runGit(repoRoot, ["diff", "--cached", "--quiet"], {
-    allowFail: true,
-  });
-  const unstaged = await runGit(repoRoot, ["diff", "--quiet"], { allowFail: true });
-  if (staged.code === 0 && unstaged.code === 0 && mergeRun.code === 0) {
-    // merge --no-commit 成功但无 diff：仍需完成 merge commit
-  }
-
-  const commitRun = await runGit(repoRoot, ["commit", "-m", commitMsg], {
-    allowFail: true,
-  });
-  if (commitRun.code !== 0) {
-    await runGit(repoRoot, ["merge", "--abort"], { allowFail: true });
-    if (previousBranch) {
-      await runGit(repoRoot, ["checkout", previousBranch], { allowFail: true });
-    }
+  // 临时分支若已在主工作区检出，worktree add 会失败
+  if (previousBranch === tempBranch) {
     throw new GitError(
-      `提交失败：${(commitRun.stderr || commitRun.stdout).trim()}`,
-      { code: "COMMIT_FAILED" },
+      `主工作区当前正在检出临时分支「${tempBranch}」，请先切回其他分支后再一键解决`,
+      { code: "TEMP_BRANCH_CHECKED_OUT" },
     );
   }
 
-  const head = await runGit(repoRoot, ["rev-parse", "HEAD"]);
-  const commitSha = head.stdout.trim();
-  messages.push(`已提交 ${commitSha.slice(0, 7)} @ ${tempBranch}`);
+  reportProgress(onProgress, 12, `创建独立 worktree（分支 ${tempBranch}）…`);
+  const wtPath = await mkdtemp(join(tmpdir(), "git-insight-resolve-"));
 
-  let pushed = false;
-  if (doPush) {
-    reportProgress(onProgress, 85, `推送 ${remote} ${tempBranch}…`);
-    const pushRun = await runGit(
+  try {
+    const addRun = await runGit(
       repoRoot,
-      ["push", "-u", remote, `HEAD:refs/heads/${tempBranch}`],
+      ["worktree", "add", "-B", tempBranch, wtPath, intoSha],
       { allowFail: true },
     );
-    if (pushRun.code !== 0) {
+    if (addRun.code !== 0) {
       throw new GitError(
-        `本地已提交，但推送失败：${(pushRun.stderr || pushRun.stdout).trim()}`,
-        { code: "PUSH_FAILED", stderr: pushRun.stderr, stdout: pushRun.stdout },
+        `无法创建 worktree（主工作区未改动）：${(addRun.stderr || addRun.stdout).trim()}` +
+          `\n若「${tempBranch}」已在其他 worktree 中检出，请先移除该 worktree。`,
+        { code: "WORKTREE_ADD_FAILED", stderr: addRun.stderr, stdout: addRun.stdout },
       );
     }
-    pushed = true;
-    messages.push(`已推送 ${remote}/${tempBranch}`);
+    messages.push(`已在独立 worktree 处理：${wtPath}`);
+    messages.push(
+      previousBranch
+        ? `主工作区保持在「${previousBranch}」，未切换分支`
+        : "主工作区 HEAD 未切换",
+    );
+
+    reportProgress(onProgress, 35, `合并 ${from}（与预演同向）…`);
+    const mergeRun = await runGit(
+      wtPath,
+      ["merge", "--no-ff", "--no-commit", fromSha],
+      { allowFail: true },
+    );
+
+    const unmerged = await listUnmerged(wtPath);
+    const stashPaths = new Set(options.files.map((f) => f.path.replace(/\\/g, "/")));
+
+    if (mergeRun.code !== 0 || unmerged.length > 0) {
+      reportProgress(onProgress, 50, `写入暂存解决结果（${options.files.length} 文件）…`);
+      await writeStashFiles(wtPath, options.files);
+
+      const still = await listUnmerged(wtPath);
+      const missing = still.filter((p) => !stashPaths.has(p.replace(/\\/g, "/")));
+      if (missing.length > 0) {
+        await runGit(wtPath, ["merge", "--abort"], { allowFail: true });
+        throw new GitError(
+          `以下冲突文件没有暂存解决结果，已中止合并（主工作区未改动）：\n${missing.join("\n")}`,
+          { code: "UNRESOLVED_LEFT", args: missing },
+        );
+      }
+      messages.push(`已按暂存覆盖 ${options.files.length} 个冲突文件`);
+    } else {
+      reportProgress(onProgress, 50, "合并无冲突，同步写入暂存文件…");
+      await writeStashFiles(wtPath, options.files);
+      messages.push("git merge 无冲突；已按暂存内容对齐文件");
+    }
+
+    reportProgress(onProgress, 70, "提交解决冲突…");
+    const commitMsg = [
+      `resolve: merge ${from} into ${into} via ${tempBranch}`,
+      "",
+      "Applied stash choices from Git Insight merge preview (scheme A, worktree).",
+    ].join("\n");
+
+    const commitRun = await runGit(wtPath, ["commit", "-m", commitMsg], {
+      allowFail: true,
+    });
+    if (commitRun.code !== 0) {
+      await runGit(wtPath, ["merge", "--abort"], { allowFail: true });
+      throw new GitError(
+        `提交失败（主工作区未改动）：${(commitRun.stderr || commitRun.stdout).trim()}`,
+        { code: "COMMIT_FAILED" },
+      );
+    }
+
+    const head = await runGit(wtPath, ["rev-parse", "HEAD"]);
+    const commitSha = head.stdout.trim();
+    messages.push(`已提交 ${commitSha.slice(0, 7)} @ ${tempBranch}`);
+
+    let pushed = false;
+    if (doPush) {
+      reportProgress(onProgress, 85, `推送 ${remote} ${tempBranch}…`);
+      const pushRun = await runGit(
+        wtPath,
+        ["push", "-u", remote, `HEAD:refs/heads/${tempBranch}`],
+        { allowFail: true },
+      );
+      if (pushRun.code !== 0) {
+        throw new GitError(
+          `本地临时分支已提交，但推送失败（主工作区仍在原分支）：${(pushRun.stderr || pushRun.stdout).trim()}`,
+          { code: "PUSH_FAILED", stderr: pushRun.stderr, stdout: pushRun.stdout },
+        );
+      }
+      pushed = true;
+      messages.push(`已推送 ${remote}/${tempBranch}`);
+    }
+
+    reportProgress(onProgress, 95, "生成创建 MR 链接…");
+    const remoteUrl = await remoteHttpsOrSsh(repoRoot, remote);
+    const createMrUrl = buildCreateMrUrl(remoteUrl, tempBranch, into);
+
+    reportProgress(onProgress, 100, "完成");
+    return {
+      repoRoot,
+      into,
+      from,
+      tempBranch,
+      intoSha,
+      fromSha,
+      commitSha,
+      pushed,
+      remote,
+      createMrUrl,
+      previousBranch,
+      usedWorktree: true,
+      messages,
+    };
+  } finally {
+    await removeWorktree(repoRoot, wtPath);
   }
-
-  reportProgress(onProgress, 95, "生成创建 MR 链接…");
-  const remoteUrl = await remoteHttpsOrSsh(repoRoot, remote);
-  const createMrUrl = buildCreateMrUrl(remoteUrl, tempBranch, into);
-
-  reportProgress(onProgress, 100, "完成");
-  return {
-    repoRoot,
-    into,
-    from,
-    tempBranch,
-    intoSha,
-    fromSha,
-    commitSha,
-    pushed,
-    remote,
-    createMrUrl,
-    previousBranch,
-    messages,
-  };
 }

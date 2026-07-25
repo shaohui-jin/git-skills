@@ -2,6 +2,8 @@ import type {
   BranchGraph,
   ConflictBlameResult,
   FetchResult,
+  GitInsightProjectConfig,
+  MrMethod,
 } from "@git-insight/core";
 
 /** Webview -> Extension host / preview server */
@@ -22,7 +24,6 @@ export type WebviewRequest =
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
   /** @deprecated 同 preview（合并预演） */
   | { type: "blame"; into: string; from: string; noFetch?: boolean }
-  /** 方案 A：按暂存一键建分支 / merge / commit / push（不自动建 MR） */
   | {
       type: "applyResolve";
       into: string;
@@ -31,14 +32,58 @@ export type WebviewRequest =
       remote?: string;
       push?: boolean;
       tempBranch?: string;
+    }
+  | {
+      type: "prepareCreateMr";
+      into: string;
+      from: string;
+      sourceBranch?: string;
+      remote?: string;
+    }
+  | {
+      type: "createMr";
+      sourceBranch: string;
+      targetBranch: string;
+      title?: string;
+      body?: string;
+      reviewers?: string[];
+      remote?: string;
+    }
+  | { type: "openExternal"; url: string }
+  | { type: "getGitConfig" }
+  | {
+      type: "saveGitConfig";
+      config: {
+        mrMethod: MrMethod | null;
+        githubToken?: string;
+        gitlabToken?: string;
+      };
+    }
+  | { type: "downloadCli"; kind: "gh" | "glab" }
+  | {
+      type: "cliAuthLogin";
+      /** system = PATH 中的 A；bundled = 扩展目录 B */
+      scope: "system" | "bundled";
+      kind: "gh" | "glab";
     };
+
+export interface CliStatusPayload {
+  platformHint: "github" | "gitlab" | "unknown";
+  systemGh: { installed: boolean; loggedIn: boolean };
+  systemGlab: { installed: boolean; loggedIn: boolean };
+  bundledGh: { installed: boolean; loggedIn: boolean };
+  bundledGlab: { installed: boolean; loggedIn: boolean };
+  /** 有可用系统 CLI（按平台，需已登录） */
+  systemCliOk: boolean;
+  /** 扩展内 CLI 已下载且已登录（按平台） */
+  bundledCliOk: boolean;
+}
 
 /** Extension host / preview server -> Webview */
 export type HostMessage =
   | {
       type: "workspace";
       cwd: string | null;
-      /** 全量分支；remote 由 refs 类型决定，勿用名称是否含 / 判断 */
       branches: Array<{ name: string; remote: boolean }>;
       error?: string;
       previewMode?: boolean;
@@ -59,7 +104,7 @@ export type HostMessage =
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
-  | { type: "focusTab"; tab: "graph" | "preview" }
+  | { type: "focusTab"; tab: "config" | "graph" | "preview" }
   | {
       type: "applyResolveResult";
       tempBranch: string;
@@ -69,4 +114,43 @@ export type HostMessage =
       messages: string[];
       into: string;
       from: string;
+      previousBranch: string | null;
+      usedWorktree: boolean;
+    }
+  | {
+      type: "prepareCreateMrResult";
+      platform: "github" | "gitlab" | "unknown";
+      cli: "gh" | "glab" | null;
+      sourceBranch: string;
+      targetBranch: string;
+      title: string;
+      candidates: Array<{ username: string; name?: string; role?: string }>;
+      createMrUrl: string | null;
+      messages: string[];
+      cliError?: string;
+      method: MrMethod | null;
+    }
+  | {
+      type: "createMrResult";
+      platform: "github" | "gitlab" | "unknown";
+      via: "gh" | "glab" | "token" | "browser";
+      url: string | null;
+      sourceBranch: string;
+      targetBranch: string;
+      messages: string[];
+    }
+  | {
+      type: "gitConfigResult";
+      config: GitInsightProjectConfig;
+      cliStatus: CliStatusPayload;
+      configPath: string;
+      /** 方式是否就绪（不含推送顺序） */
+      methodReady: boolean;
+      methodReadyReason?: string;
+    }
+  | {
+      type: "downloadCliResult";
+      kind: "gh" | "glab";
+      path: string;
+      messages: string[];
     };

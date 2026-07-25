@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { buildBranchTree, type BranchOption } from "./graph/branchTree";
+import {
+  buildBranchTree,
+  filterPathTree,
+  flattenPathTree,
+  type BranchOption,
+} from "./graph/branchTree";
+import PathTreeNodes from "./PathTreeNodes.vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -21,47 +27,48 @@ const bodyRef = ref<HTMLElement | null>(null);
 const filter = ref("");
 const expandedLocal = ref(true);
 const expandedRemotes = ref<Record<string, boolean>>({});
+/** 路径文件夹展开：key 如 `remote:origin/npm_and_yarn`；默认折叠 */
+const expandedFolders = ref<Record<string, boolean>>({});
 const panelStyle = ref<Record<string, string>>({});
-/** 键盘高亮在可见叶子中的下标；-1 表示仍在输入框 */
 const activeIndex = ref(-1);
 
 const tree = computed(() => buildBranchTree(props.branches));
 
 const filtered = computed(() => {
-  const q = filter.value.trim().toLowerCase();
+  const q = filter.value.trim();
   if (!q) {
     return tree.value;
   }
-  const local = tree.value.local.filter(
-    (b) => b.full.toLowerCase().includes(q) || b.name.toLowerCase().includes(q),
-  );
+  const local = filterPathTree(tree.value.local, q);
   const remotes = tree.value.remotes
-    .map((g) => ({
-      remote: g.remote,
-      branches: g.branches.filter(
-        (b) =>
-          b.full.toLowerCase().includes(q) ||
-          b.name.toLowerCase().includes(q) ||
-          g.remote.toLowerCase().includes(q),
-      ),
-    }))
-    .filter((g) => g.branches.length > 0);
-  return { local, remotes };
+    .map((g) => {
+      const t = filterPathTree(g.tree, q);
+      return {
+        remote: g.remote,
+        tree: t,
+        leafCount: flattenPathTree(t).length,
+      };
+    })
+    .filter((g) => g.leafCount > 0);
+  return {
+    local,
+    localLeafCount: flattenPathTree(local).length,
+    remotes,
+  };
 });
 
-/** 当前筛选结果中的全部叶子（不因折叠而跳过，上下键能扫过每一项） */
 const flatLeaves = computed(() => {
-  const list: Array<{ full: string; name: string }> = [];
-  for (const b of filtered.value.local) {
-    list.push(b);
-  }
+  const list: Array<{ full: string; label: string }> = [];
+  list.push(...flattenPathTree(filtered.value.local));
   for (const g of filtered.value.remotes) {
-    for (const b of g.branches) {
-      list.push(b);
-    }
+    list.push(...flattenPathTree(g.tree));
   }
   return list;
 });
+
+const activeFull = computed(() =>
+  activeIndex.value >= 0 ? (flatLeaves.value[activeIndex.value]?.full ?? null) : null,
+);
 
 watch(
   () => tree.value.remotes,
@@ -73,6 +80,31 @@ watch(
     }
   },
   { immediate: true },
+);
+
+/** 筛选时自动展开命中路径上的文件夹 */
+watch(
+  filtered,
+  (f) => {
+    if (!filter.value.trim()) {
+      return;
+    }
+    const expandAll = (nodes: typeof f.local, prefix: string) => {
+      for (const n of nodes) {
+        if (n.children.length > 0) {
+          const key = `${prefix}/${n.segment}`;
+          expandedFolders.value[key] = true;
+          expandAll(n.children, key);
+        }
+      }
+    };
+    expandAll(f.local, "local");
+    for (const g of f.remotes) {
+      expandedRemotes.value[g.remote] = true;
+      expandAll(g.tree, `remote:${g.remote}`);
+    }
+  },
+  { deep: true },
 );
 
 watch(filter, () => {
@@ -92,7 +124,7 @@ async function placePanel(): Promise<void> {
     return;
   }
   const r = trigger.getBoundingClientRect();
-  const maxH = Math.min(280, window.innerHeight - r.bottom - 12);
+  const maxH = Math.min(320, window.innerHeight - r.bottom - 12);
   panelStyle.value = {
     position: "fixed",
     left: `${Math.max(8, r.left)}px`,
@@ -114,6 +146,10 @@ function select(full: string): void {
   open.value = false;
   filter.value = "";
   activeIndex.value = -1;
+}
+
+function toggleFolder(key: string): void {
+  expandedFolders.value[key] = !expandedFolders.value[key];
 }
 
 async function openPanel(): Promise<void> {
@@ -148,21 +184,39 @@ function scrollActiveIntoView(): void {
   });
 }
 
-function ensureExpandedForIndex(index: number): void {
-  const leaf = flatLeaves.value[index];
-  if (!leaf) {
-    return;
-  }
-  // 本地
-  if (filtered.value.local.some((b) => b.full === leaf.full)) {
+function expandPathToFull(full: string): void {
+  const localHit = flattenPathTree(filtered.value.local).some((x) => x.full === full);
+  if (localHit) {
     expandedLocal.value = true;
+    // 展开 local 下路径
+    for (const leaf of flattenPathTree(tree.value.local)) {
+      if (leaf.full !== full) {
+        continue;
+      }
+      const parts = leaf.label.split("/");
+      let prefix = "local";
+      for (let i = 0; i < parts.length - 1; i++) {
+        prefix = `${prefix}/${parts[i]}`;
+        expandedFolders.value[prefix] = true;
+      }
+    }
     return;
   }
-  // 远程：展开对应 remote 组
   for (const g of filtered.value.remotes) {
-    if (g.branches.some((b) => b.full === leaf.full)) {
-      expandedRemotes.value[g.remote] = true;
-      return;
+    if (!flattenPathTree(g.tree).some((x) => x.full === full)) {
+      continue;
+    }
+    expandedRemotes.value[g.remote] = true;
+    for (const leaf of flattenPathTree(g.tree)) {
+      if (leaf.full !== full) {
+        continue;
+      }
+      const parts = leaf.label.split("/");
+      let prefix = `remote:${g.remote}`;
+      for (let i = 0; i < parts.length - 1; i++) {
+        prefix = `${prefix}/${parts[i]}`;
+        expandedFolders.value[prefix] = true;
+      }
     }
   }
 }
@@ -178,7 +232,6 @@ function moveActive(delta: number): void {
     next = delta > 0 ? 0 : n - 1;
   } else {
     next = activeIndex.value + delta;
-    // 到顶/到底不再循环，避免「跳到另一头」
     if (next < 0) {
       next = 0;
     } else if (next >= n) {
@@ -186,7 +239,10 @@ function moveActive(delta: number): void {
     }
   }
   activeIndex.value = next;
-  ensureExpandedForIndex(next);
+  const leaf = flatLeaves.value[next];
+  if (leaf) {
+    expandPathToFull(leaf.full);
+  }
   scrollActiveIntoView();
 }
 
@@ -293,26 +349,19 @@ onBeforeUnmount(() => {
             >
               <span class="tree-caret">{{ expandedLocal ? "▾" : "▸" }}</span>
               本地
-              <span class="tree-count">{{ filtered.local.length }}</span>
+              <span class="tree-count">{{ filtered.localLeafCount }}</span>
             </button>
-            <ul v-show="expandedLocal" class="tree-children">
-              <li
-                v-for="b in filtered.local"
-                :key="b.full"
-                class="tree-leaf"
-                :class="{
-                  active: b.full === modelValue,
-                  'kbd-active':
-                    activeIndex >= 0 && flatLeaves[activeIndex]?.full === b.full,
-                }"
-                @click="select(b.full)"
-                @mouseenter="
-                  activeIndex = flatLeaves.findIndex((x) => x.full === b.full)
-                "
-              >
-                {{ b.name }}
-              </li>
-            </ul>
+            <PathTreeNodes
+              v-if="expandedLocal"
+              :nodes="filtered.local"
+              :model-value="modelValue"
+              expand-key-prefix="local"
+              :expanded="expandedFolders"
+              :active-full="activeFull"
+              @select="select"
+              @toggle="toggleFolder"
+              @hover="(full) => (activeIndex = flatLeaves.findIndex((x) => x.full === full))"
+            />
           </div>
 
           <div v-if="filtered.remotes.length" class="tree-group">
@@ -332,27 +381,19 @@ onBeforeUnmount(() => {
                   expandedRemotes[g.remote] ? "▾" : "▸"
                 }}</span>
                 {{ g.remote }}
-                <span class="tree-count">{{ g.branches.length }}</span>
+                <span class="tree-count">{{ g.leafCount }}</span>
               </button>
-              <ul v-show="expandedRemotes[g.remote]" class="tree-children nested">
-                <li
-                  v-for="b in g.branches"
-                  :key="b.full"
-                  class="tree-leaf"
-                  :class="{
-                    active: b.full === modelValue,
-                    'kbd-active':
-                      activeIndex >= 0 && flatLeaves[activeIndex]?.full === b.full,
-                  }"
-                  :title="b.full"
-                  @click="select(b.full)"
-                  @mouseenter="
-                    activeIndex = flatLeaves.findIndex((x) => x.full === b.full)
-                  "
-                >
-                  {{ b.name }}
-                </li>
-              </ul>
+              <PathTreeNodes
+                v-if="expandedRemotes[g.remote]"
+                :nodes="g.tree"
+                :model-value="modelValue"
+                :expand-key-prefix="`remote:${g.remote}`"
+                :expanded="expandedFolders"
+                :active-full="activeFull"
+                @select="select"
+                @toggle="toggleFolder"
+                @hover="(full) => (activeIndex = flatLeaves.findIndex((x) => x.full === full))"
+              />
             </div>
           </div>
 
