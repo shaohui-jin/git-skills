@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   defaultGitInsightConfig,
@@ -10,13 +10,18 @@ import {
 
 /** Cursor/VS Code globalState 键：Token 与 MR 方式全仓库共用 */
 export const GLOBAL_CONFIG_KEY = "gitInsight.userConfig";
+/** 扩展 globalStorage 内备份文件名（与 globalState 双写，避免仅内存态丢失） */
+export const GLOBAL_CONFIG_FILE = "user-config.json";
 
 export type ConfigMemento = {
   get<T>(key: string): T | undefined;
   update(key: string, value: unknown): Thenable<void>;
 };
 
-export function configPathLabel(): string {
+export function configPathLabel(storageDir?: string | null): string {
+  if (storageDir) {
+    return `扩展全局配置（${join(storageDir, GLOBAL_CONFIG_FILE)}）`;
+  }
   return "扩展全局配置（各仓库共用，不写进项目）";
 }
 
@@ -41,6 +46,13 @@ function normalizeConfig(raw: Partial<GitInsightProjectConfig> | undefined): Git
   };
 }
 
+function configHasUserData(c: Partial<GitInsightProjectConfig> | undefined): boolean {
+  if (!c) {
+    return false;
+  }
+  return c.mrMethod != null || !!c.githubToken?.trim() || !!c.gitlabToken?.trim();
+}
+
 async function tryLoadLegacyProject(repoRoot: string | null): Promise<GitInsightProjectConfig | null> {
   if (!repoRoot) {
     return null;
@@ -53,20 +65,74 @@ async function tryLoadLegacyProject(repoRoot: string | null): Promise<GitInsight
   }
 }
 
+async function tryLoadStorageFile(
+  storageDir: string | null | undefined,
+): Promise<GitInsightProjectConfig | null> {
+  if (!storageDir) {
+    return null;
+  }
+  try {
+    const raw = await readFile(join(storageDir, GLOBAL_CONFIG_FILE), "utf8");
+    return normalizeConfig(JSON.parse(raw) as Partial<GitInsightProjectConfig>);
+  } catch {
+    return null;
+  }
+}
+
+async function writeStorageFile(
+  storageDir: string | null | undefined,
+  config: GitInsightProjectConfig,
+): Promise<void> {
+  if (!storageDir) {
+    return;
+  }
+  await mkdir(storageDir, { recursive: true });
+  await writeFile(
+    join(storageDir, GLOBAL_CONFIG_FILE),
+    `${JSON.stringify(config, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 /**
- * 从扩展 globalState 读取；若为空且项目里有旧文件，则迁移一次到全局。
+ * 从扩展 globalState 读取；并与 globalStorage 文件双读双写。
+ * 若为空且项目里有旧文件，则迁移一次到全局。
  */
 export async function loadUserConfig(
   memento: ConfigMemento,
   repoRoot?: string | null,
+  storageDir?: string | null,
 ): Promise<GitInsightProjectConfig> {
   const stored = memento.get<Partial<GitInsightProjectConfig>>(GLOBAL_CONFIG_KEY);
-  if (stored && (stored.mrMethod != null || stored.githubToken || stored.gitlabToken)) {
-    return normalizeConfig(stored);
+  const fromFile = await tryLoadStorageFile(storageDir);
+
+  // 取更新时间较新的一侧
+  if (configHasUserData(stored) && fromFile) {
+    const a = stored!.updatedAt ?? 0;
+    const b = fromFile.updatedAt ?? 0;
+    const newer = a >= b ? normalizeConfig(stored) : fromFile;
+    // 回填较弱一侧
+    if (a < b) {
+      await memento.update(GLOBAL_CONFIG_KEY, newer);
+    } else if (b < a) {
+      await writeStorageFile(storageDir, newer);
+    }
+    return newer;
   }
+  if (configHasUserData(stored)) {
+    const cfg = normalizeConfig(stored);
+    await writeStorageFile(storageDir, cfg);
+    return cfg;
+  }
+  if (fromFile) {
+    await memento.update(GLOBAL_CONFIG_KEY, fromFile);
+    return fromFile;
+  }
+
   const legacy = await tryLoadLegacyProject(repoRoot ?? null);
   if (legacy) {
     await memento.update(GLOBAL_CONFIG_KEY, legacy);
+    await writeStorageFile(storageDir, legacy);
     return legacy;
   }
   return defaultGitInsightConfig();
@@ -75,6 +141,7 @@ export async function loadUserConfig(
 export async function saveUserConfig(
   memento: ConfigMemento,
   config: GitInsightProjectConfig,
+  storageDir?: string | null,
 ): Promise<GitInsightProjectConfig> {
   const next: GitInsightProjectConfig = {
     version: 1,
@@ -84,6 +151,7 @@ export async function saveUserConfig(
     updatedAt: Date.now(),
   };
   await memento.update(GLOBAL_CONFIG_KEY, next);
+  await writeStorageFile(storageDir, next);
   return next;
 }
 
@@ -91,9 +159,10 @@ export async function saveUserConfig(
 export const loadProjectConfig = async (
   repoRoot: string,
   memento?: ConfigMemento,
+  storageDir?: string | null,
 ): Promise<GitInsightProjectConfig> => {
   if (memento) {
-    return loadUserConfig(memento, repoRoot);
+    return loadUserConfig(memento, repoRoot, storageDir);
   }
   return (await tryLoadLegacyProject(repoRoot)) ?? defaultGitInsightConfig();
 };
@@ -103,15 +172,16 @@ export const saveProjectConfig = async (
   _repoRoot: string,
   config: GitInsightProjectConfig,
   memento?: ConfigMemento,
+  storageDir?: string | null,
 ): Promise<GitInsightProjectConfig> => {
   if (!memento) {
     throw new Error("saveProjectConfig 需要扩展 globalState");
   }
-  return saveUserConfig(memento, config);
+  return saveUserConfig(memento, config, storageDir);
 };
 
-export function configPath(_repoRoot?: string): string {
-  return configPathLabel();
+export function configPath(storageDir?: string | null): string {
+  return configPathLabel(storageDir);
 }
 
 /**
@@ -168,12 +238,12 @@ export function isMrMethodReady(
       if (ctx.platformHint === "github") {
         return config.githubToken?.trim()
           ? { ok: true }
-          : { ok: false, reason: "请填写 GitHub Token 并保存" };
+          : { ok: false, reason: "请填写 GitHub Token（失焦后自动校验并保存）" };
       }
       if (ctx.platformHint === "gitlab") {
         return config.gitlabToken?.trim()
           ? { ok: true }
-          : { ok: false, reason: "请填写 GitLab Token 并保存" };
+          : { ok: false, reason: "请填写以 glpat- 开头的 GitLab Token" };
       }
       return { ok: false, reason: "无法识别远程平台，Token 方式不可用" };
     }

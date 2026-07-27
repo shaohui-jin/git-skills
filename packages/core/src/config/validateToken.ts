@@ -20,8 +20,10 @@ export interface TokenValidateResult {
   login?: string;
   /** ISO 日期（仅日期或含时间）；null=永不过期/未设置；undefined=未知 */
   expiresAt?: string | null;
-  /** 给人看的有效期说明 */
+  /** 给人看的有效期说明（中国时间） */
   expiresMessage?: string;
+  /** 标题旁短状态，如「有效」「无效」「格式错误」 */
+  statusLabel: string;
   error?: string;
   /** 综合是否可用（格式对且 API 成功） */
   ok: boolean;
@@ -31,8 +33,34 @@ export interface TokenValidateResult {
 const GITHUB_PAT =
   /^(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|ghr_[A-Za-z0-9]{36})$/;
 
-/** GitLab Personal Access Token（含常见 glpat-） */
-const GITLAB_PAT = /^(glpat-[A-Za-z0-9_\-]{20,}|gldt-[A-Za-z0-9_\-]{20,}|gloas-[A-Za-z0-9_\-]{20,})$/;
+/** GitLab：仅允许 glpat- 前缀的 Personal Access Token */
+const GITLAB_PAT = /^glpat-[A-Za-z0-9_\-]{20,}$/;
+
+/** 格式化为中国时区：yyyy/MM/dd HH:mm:ss */
+export function formatChinaDateTime(input: string): string {
+  let ms = Date.parse(input);
+  if (Number.isNaN(ms) && /^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    // GitLab 常只返回日期：按当天中国时间 23:59:59
+    ms = Date.parse(`${input}T23:59:59+08:00`);
+  }
+  if (Number.isNaN(ms)) {
+    return input;
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(ms));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return `${get("year")}/${get("month")}/${get("day")} ${hour}:${get("minute")}:${get("second")}`;
+}
 
 export function validateGithubTokenFormat(token: string): TokenFormatResult {
   const t = token.trim();
@@ -70,54 +98,71 @@ export function validateGitlabTokenFormat(token: string): TokenFormatResult {
   if (t.includes(" ") || t.includes("\n")) {
     return { ok: false, message: "Token 不应包含空格或换行" };
   }
-  if (GITLAB_PAT.test(t)) {
-    const kind = t.startsWith("gldt-")
-      ? "deploy token"
-      : t.startsWith("gloas-")
-        ? "OAuth token"
-        : "personal access token";
-    return { ok: true, kind, message: `格式正确（${kind}）` };
-  }
-  // 部分自建 GitLab 仍发放无前缀长 token
-  if (/^[A-Za-z0-9_\-]{20,64}$/.test(t) && !t.includes(".")) {
+  if (/^gh[pousr]_/i.test(t) || /^github_pat_/i.test(t)) {
     return {
-      ok: true,
-      kind: "legacy/opaque",
-      message: "格式可接受（无 glpat- 前缀的长 token，常见于自建实例）",
+      ok: false,
+      message: "这是 GitHub Token 格式，GitLab 必须使用 glpat- 前缀",
     };
+  }
+  if (GITLAB_PAT.test(t)) {
+    return { ok: true, kind: "personal access token", message: "格式正确（glpat-）" };
   }
   if (/^glpat-/i.test(t)) {
     return {
       ok: false,
-      message: "前缀像 GitLab Token，但长度不足或含非法字符，请检查是否复制完整",
+      message: "须以 glpat- 开头，且后面至少 20 位字母数字/下划线/连字符",
     };
   }
   return {
     ok: false,
-    message: "格式不符：期望 glpat-…（GitLab Personal Access Token）",
+    message: "格式不符：GitLab Token 必须以 glpat- 为前缀",
   };
 }
 
 function formatExpiryMessage(expiresAt: string | null | undefined): string | undefined {
   if (expiresAt === undefined) {
-    return "有效期：未知（平台未返回）";
+    return "有效期未知";
   }
   if (expiresAt === null) {
-    return "有效期：未设置过期（或永久）";
+    return "永久有效";
   }
-  const ms = Date.parse(expiresAt);
+  const china = formatChinaDateTime(expiresAt);
+  let ms = Date.parse(expiresAt);
+  if (Number.isNaN(ms) && /^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) {
+    ms = Date.parse(`${expiresAt}T23:59:59+08:00`);
+  }
   if (Number.isNaN(ms)) {
-    return `有效期：${expiresAt}`;
+    return `有效期 ${china}`;
   }
   const days = Math.floor((ms - Date.now()) / (24 * 60 * 60 * 1000));
-  const local = new Date(ms).toLocaleString();
   if (days < 0) {
-    return `已过期（${local}）`;
+    return `已过期（${china}）`;
   }
   if (days === 0) {
-    return `即将过期（今日，${local}）`;
+    return `今日到期（${china}）`;
   }
-  return `有效期至 ${local}（约 ${days} 天）`;
+  return `至 ${china}`;
+}
+
+function statusFromResult(partial: {
+  ok: boolean;
+  formatOk: boolean;
+  apiChecked: boolean;
+  error?: string;
+}): string {
+  if (!partial.formatOk) {
+    return "格式错误";
+  }
+  if (!partial.apiChecked) {
+    return "未校验";
+  }
+  if (partial.ok) {
+    return "有效";
+  }
+  if (partial.error?.includes("过期")) {
+    return "已过期";
+  }
+  return "无效";
 }
 
 /**
@@ -132,6 +177,7 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
       formatMessage: format.message,
       apiChecked: false,
       apiOk: false,
+      statusLabel: "格式错误",
       ok: false,
       error: format.message,
     };
@@ -152,12 +198,12 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
       const parsed = Date.parse(expHeader);
       expiresAt = Number.isNaN(parsed) ? expHeader : new Date(parsed).toISOString();
     } else {
-      // 经典 PAT 常无此头 → 视为未返回过期信息
       expiresAt = undefined;
     }
 
     if (res.status === 401 || res.status === 403) {
       const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const error = body.message || `GitHub 拒绝该 Token（HTTP ${res.status}）`;
       return {
         platform: "github",
         formatOk: true,
@@ -166,53 +212,66 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
         apiOk: false,
         expiresAt,
         expiresMessage: formatExpiryMessage(expiresAt),
+        statusLabel: statusFromResult({ ok: false, formatOk: true, apiChecked: true, error }),
         ok: false,
-        error: body.message || `GitHub 拒绝该 Token（HTTP ${res.status}）`,
+        error,
       };
     }
     if (!res.ok) {
+      const error = `GitHub API 异常：HTTP ${res.status}`;
       return {
         platform: "github",
         formatOk: true,
         formatMessage: format.message,
         apiChecked: true,
         apiOk: false,
+        statusLabel: "无效",
         ok: false,
-        error: `GitHub API 异常：HTTP ${res.status}`,
+        error,
       };
     }
     const user = (await res.json()) as { login?: string };
     const expiresMessage = formatExpiryMessage(expiresAt);
     const expired =
-      expiresAt != null && !Number.isNaN(Date.parse(expiresAt)) && Date.parse(expiresAt) < Date.now();
+      expiresAt != null &&
+      !Number.isNaN(Date.parse(expiresAt)) &&
+      Date.parse(expiresAt) < Date.now();
+    const ok = !expired;
     return {
       platform: "github",
       formatOk: true,
       formatMessage: format.message,
       apiChecked: true,
-      apiOk: !expired,
+      apiOk: ok,
       login: user.login,
       expiresAt: expiresAt === undefined ? undefined : expiresAt,
       expiresMessage,
-      ok: !expired,
+      statusLabel: statusFromResult({
+        ok,
+        formatOk: true,
+        apiChecked: true,
+        error: expired ? "Token 已过期" : undefined,
+      }),
+      ok,
       error: expired ? "Token 已过期" : undefined,
     };
   } catch (err) {
+    const error = `无法连接 GitHub API：${err instanceof Error ? err.message : String(err)}`;
     return {
       platform: "github",
       formatOk: true,
       formatMessage: format.message,
       apiChecked: true,
       apiOk: false,
+      statusLabel: "无效",
       ok: false,
-      error: `无法连接 GitHub API：${err instanceof Error ? err.message : String(err)}`,
+      error,
     };
   }
 }
 
 /**
  * 校验 GitLab Token：格式 + GET /user；再试 personal_access_tokens/self 取 expires_at。
- * @param apiOrigin 如 https://gitlab.com 或自建实例 origin
  */
 export async function validateGitlabToken(
   token: string,
@@ -226,6 +285,7 @@ export async function validateGitlabToken(
       formatMessage: format.message,
       apiChecked: false,
       apiOk: false,
+      statusLabel: "格式错误",
       ok: false,
       error: format.message,
     };
@@ -240,6 +300,7 @@ export async function validateGitlabToken(
       formatMessage: format.message,
       apiChecked: false,
       apiOk: false,
+      statusLabel: "无效",
       ok: false,
       error: "无法解析 GitLab 地址，请确认仓库 origin 可访问",
     };
@@ -253,14 +314,16 @@ export async function validateGitlabToken(
     const res = await fetch(`${origin}/api/v4/user`, { headers });
     if (res.status === 401 || res.status === 403) {
       const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const error = body.message || `GitLab 拒绝该 Token（HTTP ${res.status}）`;
       return {
         platform: "gitlab",
         formatOk: true,
         formatMessage: format.message,
         apiChecked: true,
         apiOk: false,
+        statusLabel: "无效",
         ok: false,
-        error: body.message || `GitLab 拒绝该 Token（HTTP ${res.status}）`,
+        error,
       };
     }
     if (!res.ok) {
@@ -270,6 +333,7 @@ export async function validateGitlabToken(
         formatMessage: format.message,
         apiChecked: true,
         apiOk: false,
+        statusLabel: "无效",
         ok: false,
         error: `GitLab API 异常：HTTP ${res.status}`,
       };
@@ -294,6 +358,7 @@ export async function validateGitlabToken(
             apiChecked: true,
             apiOk: false,
             login: user.username,
+            statusLabel: "无效",
             ok: false,
             error: "Token 已被撤销",
           };
@@ -306,14 +371,18 @@ export async function validateGitlabToken(
             apiChecked: true,
             apiOk: false,
             login: user.username,
+            statusLabel: "无效",
             ok: false,
             error: "Token 未处于 active 状态",
           };
         }
         expiresAt = pat.expires_at === undefined ? null : pat.expires_at;
         if (expiresAt) {
-          // GitLab 常返回 YYYY-MM-DD
-          const end = Date.parse(`${expiresAt}T23:59:59Z`);
+          const end = Date.parse(
+            /^\d{4}-\d{2}-\d{2}$/.test(expiresAt)
+              ? `${expiresAt}T23:59:59+08:00`
+              : expiresAt,
+          );
           if (!Number.isNaN(end) && end < Date.now()) {
             return {
               platform: "gitlab",
@@ -324,6 +393,7 @@ export async function validateGitlabToken(
               login: user.username,
               expiresAt,
               expiresMessage: formatExpiryMessage(expiresAt),
+              statusLabel: "已过期",
               ok: false,
               error: "Token 已过期",
             };
@@ -342,6 +412,7 @@ export async function validateGitlabToken(
       login: user.username,
       expiresAt,
       expiresMessage: formatExpiryMessage(expiresAt),
+      statusLabel: "有效",
       ok: true,
     };
   } catch (err) {
@@ -351,22 +422,29 @@ export async function validateGitlabToken(
       formatMessage: format.message,
       apiChecked: true,
       apiOk: false,
+      statusLabel: "无效",
       ok: false,
       error: `无法连接 GitLab API：${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
 
-export function summarizeTokenValidation(r: TokenValidateResult): string {
-  const parts: string[] = [];
-  if (r.login) {
-    parts.push(`账号 ${r.login}`);
+/** 标题旁展示：状态 · 有效期 */
+export function titleSideStatus(r: TokenValidateResult): string {
+  const parts = [r.statusLabel];
+  if (r.ok && r.login) {
+    parts.push(r.login);
   }
   if (r.expiresMessage) {
     parts.push(r.expiresMessage);
+  } else if (!r.ok && r.error && r.formatOk) {
+    parts.push(r.error);
+  } else if (!r.formatOk && r.formatMessage) {
+    parts.push(r.formatMessage);
   }
-  if (r.ok) {
-    return `Token 有效${parts.length ? `：${parts.join("；")}` : ""}`;
-  }
-  return r.error || r.formatMessage || "Token 校验失败";
+  return parts.join(" · ");
+}
+
+export function summarizeTokenValidation(r: TokenValidateResult): string {
+  return titleSideStatus(r);
 }

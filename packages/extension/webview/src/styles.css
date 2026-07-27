@@ -1182,24 +1182,29 @@ div.config-option {
   gap: 4px;
 }
 
-.token-hint {
-  font-size: 12px;
+.token-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
 }
 
-.token-hint.ok,
-.token-check.ok {
+.token-title-status {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.token-title-status.ok {
   color: var(--ok);
 }
 
-.token-hint.bad,
-.token-check.bad {
+.token-title-status.bad {
   color: var(--danger, #c44);
 }
 
-.token-check {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.4;
+.token-title-status.muted {
+  color: var(--muted);
 }
 
 .config-steps {

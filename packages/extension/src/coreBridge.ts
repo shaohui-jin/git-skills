@@ -14,10 +14,11 @@ import {
   runGit,
   graphToMermaid,
   mergeToMermaid,
-  summarizeTokenValidation,
+  titleSideStatus,
   validateGithubToken,
   validateGitlabToken,
   GitError,
+  type TokenPlatform,
   type TokenValidateResult,
 } from "@git-insight/core";
 import type { CliStatusPayload, HostMessage, WebviewRequest } from "./protocol.js";
@@ -172,21 +173,21 @@ async function remoteOrigin(repoRoot: string): Promise<string> {
   return remote.stdout.trim();
 }
 
-/** 方案 C：按当前远程平台校验 Token 格式 + API 有效性/有效期 */
+/** 方案 C：按指定平台或远程倾向校验 Token */
 async function validateTokenForRepo(
   repoRoot: string,
   tokens: { githubToken?: string; gitlabToken?: string },
+  platform?: TokenPlatform,
 ): Promise<TokenValidateResult> {
   const originUrl = await remoteOrigin(repoRoot);
-  const platform = detectMrPlatform(originUrl);
-  if (platform === "github") {
+  const hint = platform ?? detectMrPlatform(originUrl);
+  if (hint === "github") {
     return validateGithubToken(tokens.githubToken ?? "");
   }
-  if (platform === "gitlab") {
+  if (hint === "gitlab") {
     const web = normalizeRemoteWebUrl(originUrl) || "https://gitlab.com";
     return validateGitlabToken(tokens.gitlabToken ?? "", web);
   }
-  // 平台未知：优先校已填写的一侧
   if (tokens.githubToken?.trim()) {
     return validateGithubToken(tokens.githubToken);
   }
@@ -200,15 +201,17 @@ async function validateTokenForRepo(
     formatMessage: "请先填写 Token",
     apiChecked: false,
     apiOk: false,
+    statusLabel: "格式错误",
     ok: false,
-    error: "无法识别远程平台，且未填写 Token",
+    error: "请先填写 Token",
   };
 }
 
 function tokenResultPayload(result: TokenValidateResult) {
   return {
     ...result,
-    summary: summarizeTokenValidation(result),
+    summary: titleSideStatus(result),
+    titleStatus: titleSideStatus(result),
   };
 }
 
@@ -233,14 +236,15 @@ export async function handleWebviewRequest(
     if (!configMemento) {
       throw new Error("扩展配置存储不可用");
     }
-    return loadUserConfig(configMemento, cwd);
+    return loadUserConfig(configMemento, cwd, cliStorageDir);
   };
   const saveCfg = async (config: Awaited<ReturnType<typeof loadUserConfig>>) => {
     if (!configMemento) {
       throw new Error("扩展配置存储不可用");
     }
-    return saveUserConfig(configMemento, config);
+    return saveUserConfig(configMemento, config, cliStorageDir);
   };
+  const cfgPath = () => configPath(cliStorageDir);
 
   if (req.type === "ready" || req.type === "refreshWorkspace") {
     const messages: HostMessage[] = [await workspacePayload(cwd, previewMode)];
@@ -263,7 +267,7 @@ export async function handleWebviewRequest(
           type: "gitConfigResult",
           config: cfg,
           cliStatus,
-          configPath: configPath(),
+          configPath: cfgPath(),
           methodReady: ready.ok,
           methodReadyReason: ready.reason,
         });
@@ -521,7 +525,7 @@ export async function handleWebviewRequest(
             type: "gitConfigResult",
             config: cfg,
             cliStatus,
-            configPath: configPath(),
+            configPath: cfgPath(),
             methodReady: ready.ok,
             methodReadyReason: ready.reason,
           },
@@ -531,51 +535,12 @@ export async function handleWebviewRequest(
 
     if (req.type === "saveGitConfig") {
       const prev = await loadCfg();
-      const nextMethod = req.config.mrMethod;
-      const nextGithub = req.config.githubToken ?? "";
-      const nextGitlab = req.config.gitlabToken ?? "";
-      let tokenValidation: ReturnType<typeof tokenResultPayload> | undefined;
-
-      if (nextMethod === "token") {
-        void onProgress?.({ percent: 40, label: "校验 Token 格式与有效性…" });
-        const checked = await validateTokenForRepo(cwd, {
-          githubToken: nextGithub,
-          gitlabToken: nextGitlab,
-        });
-        tokenValidation = tokenResultPayload(checked);
-        if (!checked.ok) {
-          const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-          const ready = isMrMethodReady(prev, cliStatus);
-          return {
-            messages: [
-              {
-                type: "error",
-                message: `Token 校验未通过：${tokenValidation.summary}`,
-                code: "TOKEN_INVALID",
-              },
-              {
-                type: "tokenValidateResult",
-                ...tokenValidation,
-              },
-              {
-                type: "gitConfigResult",
-                config: prev,
-                cliStatus,
-                configPath: configPath(),
-                methodReady: ready.ok,
-                methodReadyReason: ready.reason,
-                tokenValidation,
-              },
-            ],
-          };
-        }
-      }
-
+      // 始终持久化（方法 + Token）；校验在失焦时单独做，不阻断写入
       const saved = await saveCfg({
         ...prev,
-        mrMethod: nextMethod,
-        githubToken: nextGithub,
-        gitlabToken: nextGitlab,
+        mrMethod: req.config.mrMethod,
+        githubToken: req.config.githubToken ?? "",
+        gitlabToken: req.config.gitlabToken ?? "",
       });
       const cliStatus = await buildCliStatus(cwd, cliStorageDir);
       const ready = isMrMethodReady(saved, cliStatus);
@@ -585,12 +550,9 @@ export async function handleWebviewRequest(
             type: "gitConfigResult",
             config: saved,
             cliStatus,
-            configPath: configPath(),
+            configPath: cfgPath(),
             methodReady: ready.ok,
-            methodReadyReason: tokenValidation
-              ? tokenValidation.summary
-              : ready.reason,
-            tokenValidation,
+            methodReadyReason: ready.reason,
           },
         ],
       };
@@ -598,13 +560,39 @@ export async function handleWebviewRequest(
 
     if (req.type === "validateToken") {
       void onProgress?.({ percent: 40, label: "校验 Token…" });
-      const checked = await validateTokenForRepo(cwd, {
-        githubToken: req.githubToken,
-        gitlabToken: req.gitlabToken,
-      });
-      return {
-        messages: [{ type: "tokenValidateResult", ...tokenResultPayload(checked) }],
-      };
+      const platform = req.platform;
+      const checked = await validateTokenForRepo(
+        cwd,
+        {
+          githubToken: req.githubToken,
+          gitlabToken: req.gitlabToken,
+        },
+        platform,
+      );
+      const payload = tokenResultPayload(checked);
+      const messages: HostMessage[] = [{ type: "tokenValidateResult", ...payload }];
+      // 校验通过后顺带落盘，避免只校验不保存
+      if (req.persist) {
+        const prev = await loadCfg();
+        const saved = await saveCfg({
+          ...prev,
+          mrMethod: req.mrMethod ?? prev.mrMethod,
+          githubToken: req.githubToken ?? prev.githubToken ?? "",
+          gitlabToken: req.gitlabToken ?? prev.gitlabToken ?? "",
+        });
+        const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+        const ready = isMrMethodReady(saved, cliStatus);
+        messages.push({
+          type: "gitConfigResult",
+          config: saved,
+          cliStatus,
+          configPath: cfgPath(),
+          methodReady: ready.ok,
+          methodReadyReason: ready.reason,
+          tokenValidation: payload,
+        });
+      }
+      return { messages };
     }
 
     if (req.type === "downloadCli") {
@@ -641,7 +629,7 @@ export async function handleWebviewRequest(
             type: "gitConfigResult",
             config,
             cliStatus,
-            configPath: configPath(),
+            configPath: cfgPath(),
             methodReady: ready.ok,
             methodReadyReason: ready.reason,
           },

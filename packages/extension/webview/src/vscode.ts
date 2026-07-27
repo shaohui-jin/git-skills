@@ -50,8 +50,11 @@ export type WebviewRequest =
     }
   | {
       type: "validateToken";
+      platform: "github" | "gitlab";
       githubToken?: string;
       gitlabToken?: string;
+      persist?: boolean;
+      mrMethod?: "cli" | "download-cli" | "token" | "browser" | null;
     }
   | { type: "downloadCli"; kind: "gh" | "glab" }
   | {

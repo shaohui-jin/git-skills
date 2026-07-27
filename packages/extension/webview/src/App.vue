@@ -111,7 +111,8 @@ const cliStatus = ref<CliStatusPayload | null>(null);
 const gitConfigPath = ref("");
 const methodReady = ref(false);
 const methodReadyReason = ref<string | undefined>(undefined);
-const tokenValidation = ref<TokenValidateView | null>(null);
+const githubTokenStatus = ref<TokenValidateView | null>(null);
+const gitlabTokenStatus = ref<TokenValidateView | null>(null);
 
 const createMrBlockReason = computed(() => {
   if (previewMode.value) {
@@ -278,16 +279,20 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     methodReady.value = msg.methodReady;
     methodReadyReason.value = msg.methodReadyReason;
     if (msg.tokenValidation) {
-      tokenValidation.value = msg.tokenValidation;
+      const v = msg.tokenValidation;
+      if (v.platform === "github") {
+        githubTokenStatus.value = v;
+      } else {
+        gitlabTokenStatus.value = v;
+      }
     }
     status.value = msg.methodReady
-      ? msg.tokenValidation?.summary ||
-        `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
+      ? `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
       : msg.methodReadyReason || "请完善 Git 配置";
     return;
   }
   if (msg.type === "tokenValidateResult") {
-    tokenValidation.value = {
+    const view: TokenValidateView = {
       ok: msg.ok,
       platform: msg.platform,
       formatOk: msg.formatOk,
@@ -297,15 +302,18 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       login: msg.login,
       expiresAt: msg.expiresAt,
       expiresMessage: msg.expiresMessage,
+      statusLabel: msg.statusLabel,
       error: msg.error,
       summary: msg.summary,
+      titleStatus: msg.titleStatus,
     };
-    status.value = msg.summary;
-    if (!msg.ok) {
-      error.value = msg.summary;
+    if (msg.platform === "github") {
+      githubTokenStatus.value = view;
     } else {
-      error.value = null;
+      gitlabTokenStatus.value = view;
     }
+    status.value = msg.titleStatus || msg.summary;
+    error.value = msg.ok ? null : msg.titleStatus || msg.summary;
     return;
   }
   if (msg.type === "downloadCliResult") {
@@ -441,26 +449,35 @@ function saveGitConfig(payload: {
   githubToken: string;
   gitlabToken: string;
 }): void {
-  if (payload.mrMethod === "token") {
-    tokenValidation.value = null;
-  }
   vscode.postMessage({
     type: "saveGitConfig",
     config: payload,
   });
 }
 
-function validateToken(payload: { githubToken: string; gitlabToken: string }): void {
-  tokenValidation.value = null;
+function validateToken(payload: {
+  platform: "github" | "gitlab";
+  githubToken: string;
+  gitlabToken: string;
+  persist: boolean;
+  mrMethod: GitInsightConfigView["mrMethod"];
+}): void {
   vscode.postMessage({
     type: "validateToken",
+    platform: payload.platform,
     githubToken: payload.githubToken,
     gitlabToken: payload.gitlabToken,
+    persist: payload.persist,
+    mrMethod: payload.mrMethod,
   });
 }
 
-function clearTokenValidation(): void {
-  tokenValidation.value = null;
+function clearTokenValidation(platform: "github" | "gitlab"): void {
+  if (platform === "github") {
+    githubTokenStatus.value = null;
+  } else {
+    gitlabTokenStatus.value = null;
+  }
 }
 
 function refreshGitConfig(): void {
@@ -593,7 +610,8 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             :config-path="gitConfigPath"
             :method-ready="methodReady"
             :method-ready-reason="methodReadyReason"
-            :token-validation="tokenValidation"
+            :github-token-status="githubTokenStatus"
+            :gitlab-token-status="gitlabTokenStatus"
             :busy="busy || mrBusy"
             :preview-mode="previewMode"
             @save="saveGitConfig"

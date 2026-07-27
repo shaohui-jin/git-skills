@@ -61,8 +61,12 @@ export type WebviewRequest =
     }
   | {
       type: "validateToken";
+      platform: "github" | "gitlab";
       githubToken?: string;
       gitlabToken?: string;
+      /** 校验后是否写入全局配置 */
+      persist?: boolean;
+      mrMethod?: MrMethod | null;
     }
   | { type: "downloadCli"; kind: "gh" | "glab" }
   | {
@@ -163,8 +167,10 @@ export type HostMessage =
         login?: string;
         expiresAt?: string | null;
         expiresMessage?: string;
+        statusLabel: string;
         error?: string;
         summary: string;
+        titleStatus: string;
       };
     }
   | {
@@ -178,8 +184,10 @@ export type HostMessage =
       login?: string;
       expiresAt?: string | null;
       expiresMessage?: string;
+      statusLabel: string;
       error?: string;
       summary: string;
+      titleStatus: string;
     }
   | {
       type: "downloadCliResult";

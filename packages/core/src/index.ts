@@ -9,7 +9,9 @@ export {
   mrMethodLabel,
 } from "./config/gitInsightConfig.js";
 export {
+  formatChinaDateTime,
   summarizeTokenValidation,
+  titleSideStatus,
   validateGithubToken,
   validateGithubTokenFormat,
   validateGitlabToken,

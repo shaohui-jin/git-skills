@@ -175,8 +175,10 @@ export type HostMessage =
       login?: string;
       expiresAt?: string | null;
       expiresMessage?: string;
+      statusLabel: string;
       error?: string;
       summary: string;
+      titleStatus: string;
     }
   | {
       type: "downloadCliResult";
@@ -195,8 +197,10 @@ export interface TokenValidateView {
   login?: string;
   expiresAt?: string | null;
   expiresMessage?: string;
+  statusLabel: string;
   error?: string;
   summary: string;
+  titleStatus: string;
 }
 
 export type TabId = "config" | "graph" | "preview";
