@@ -1182,6 +1182,26 @@ div.config-option {
   gap: 4px;
 }
 
+.token-hint {
+  font-size: 12px;
+}
+
+.token-hint.ok,
+.token-check.ok {
+  color: var(--ok);
+}
+
+.token-hint.bad,
+.token-check.bad {
+  color: var(--danger, #c44);
+}
+
+.token-check {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .config-steps {
   margin: 0;
   padding-left: 1.4em;

@@ -211,9 +211,13 @@ export class GitInsightPanel {
                   ? "正在创建 MR…"
                   : req.type === "downloadCli"
                     ? "正在下载 CLI 到扩展目录…"
-                    : req.type === "setCwd"
-                      ? "正在打开仓库…"
-                      : undefined;
+                    : req.type === "validateToken"
+                      ? "正在校验 Token…"
+                      : req.type === "saveGitConfig" && req.config.mrMethod === "token"
+                        ? "保存配置并校验 Token…"
+                        : req.type === "setCwd"
+                          ? "正在打开仓库…"
+                          : undefined;
 
     if (label) {
       await this.post({ type: "busy", busy: true, label, percent: 0 });
@@ -230,7 +234,9 @@ export class GitInsightPanel {
           req.type === "preview" ||
           req.type === "blame" ||
           req.type === "applyResolve" ||
-          req.type === "downloadCli"
+          req.type === "downloadCli" ||
+          req.type === "validateToken" ||
+          (req.type === "saveGitConfig" && req.config.mrMethod === "token")
             ? async (u) => {
                 await this.post({
                   type: "progress",

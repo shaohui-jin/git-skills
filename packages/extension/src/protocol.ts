@@ -59,6 +59,11 @@ export type WebviewRequest =
         gitlabToken?: string;
       };
     }
+  | {
+      type: "validateToken";
+      githubToken?: string;
+      gitlabToken?: string;
+    }
   | { type: "downloadCli"; kind: "gh" | "glab" }
   | {
       type: "cliAuthLogin";
@@ -147,6 +152,34 @@ export type HostMessage =
       /** 方式是否就绪（不含推送顺序） */
       methodReady: boolean;
       methodReadyReason?: string;
+      /** 方案 C 保存时附带的 Token 校验摘要 */
+      tokenValidation?: {
+        ok: boolean;
+        platform: "github" | "gitlab";
+        formatOk: boolean;
+        formatMessage: string;
+        apiChecked: boolean;
+        apiOk: boolean;
+        login?: string;
+        expiresAt?: string | null;
+        expiresMessage?: string;
+        error?: string;
+        summary: string;
+      };
+    }
+  | {
+      type: "tokenValidateResult";
+      ok: boolean;
+      platform: "github" | "gitlab";
+      formatOk: boolean;
+      formatMessage: string;
+      apiChecked: boolean;
+      apiOk: boolean;
+      login?: string;
+      expiresAt?: string | null;
+      expiresMessage?: string;
+      error?: string;
+      summary: string;
     }
   | {
       type: "downloadCliResult";

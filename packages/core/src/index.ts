@@ -8,6 +8,18 @@ export {
   GIT_INSIGHT_DIR,
   mrMethodLabel,
 } from "./config/gitInsightConfig.js";
+export {
+  summarizeTokenValidation,
+  validateGithubToken,
+  validateGithubTokenFormat,
+  validateGitlabToken,
+  validateGitlabTokenFormat,
+} from "./config/validateToken.js";
+export type {
+  TokenFormatResult,
+  TokenPlatform,
+  TokenValidateResult,
+} from "./config/validateToken.js";
 
 export type {
   BranchGraph,

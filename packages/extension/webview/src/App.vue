@@ -15,6 +15,7 @@ import type {
   GitInsightConfigView,
   HostMessage,
   TabId,
+  TokenValidateView,
 } from "./types";
 import { getVsCodeApi } from "./vscode";
 
@@ -110,6 +111,7 @@ const cliStatus = ref<CliStatusPayload | null>(null);
 const gitConfigPath = ref("");
 const methodReady = ref(false);
 const methodReadyReason = ref<string | undefined>(undefined);
+const tokenValidation = ref<TokenValidateView | null>(null);
 
 const createMrBlockReason = computed(() => {
   if (previewMode.value) {
@@ -275,9 +277,35 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     gitConfigPath.value = msg.configPath;
     methodReady.value = msg.methodReady;
     methodReadyReason.value = msg.methodReadyReason;
+    if (msg.tokenValidation) {
+      tokenValidation.value = msg.tokenValidation;
+    }
     status.value = msg.methodReady
-      ? `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
+      ? msg.tokenValidation?.summary ||
+        `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
       : msg.methodReadyReason || "请完善 Git 配置";
+    return;
+  }
+  if (msg.type === "tokenValidateResult") {
+    tokenValidation.value = {
+      ok: msg.ok,
+      platform: msg.platform,
+      formatOk: msg.formatOk,
+      formatMessage: msg.formatMessage,
+      apiChecked: msg.apiChecked,
+      apiOk: msg.apiOk,
+      login: msg.login,
+      expiresAt: msg.expiresAt,
+      expiresMessage: msg.expiresMessage,
+      error: msg.error,
+      summary: msg.summary,
+    };
+    status.value = msg.summary;
+    if (!msg.ok) {
+      error.value = msg.summary;
+    } else {
+      error.value = null;
+    }
     return;
   }
   if (msg.type === "downloadCliResult") {
@@ -413,10 +441,26 @@ function saveGitConfig(payload: {
   githubToken: string;
   gitlabToken: string;
 }): void {
+  if (payload.mrMethod === "token") {
+    tokenValidation.value = null;
+  }
   vscode.postMessage({
     type: "saveGitConfig",
     config: payload,
   });
+}
+
+function validateToken(payload: { githubToken: string; gitlabToken: string }): void {
+  tokenValidation.value = null;
+  vscode.postMessage({
+    type: "validateToken",
+    githubToken: payload.githubToken,
+    gitlabToken: payload.gitlabToken,
+  });
+}
+
+function clearTokenValidation(): void {
+  tokenValidation.value = null;
 }
 
 function refreshGitConfig(): void {
@@ -549,9 +593,12 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             :config-path="gitConfigPath"
             :method-ready="methodReady"
             :method-ready-reason="methodReadyReason"
+            :token-validation="tokenValidation"
             :busy="busy || mrBusy"
             :preview-mode="previewMode"
             @save="saveGitConfig"
+            @validate-token="validateToken"
+            @clear-token-validation="clearTokenValidation"
             @refresh="refreshGitConfig"
             @download-cli="downloadCli"
             @cli-auth-login="cliAuthLogin"

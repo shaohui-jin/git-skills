@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { CliStatusPayload, GitInsightConfigView } from "./types";
+import type { CliStatusPayload, GitInsightConfigView, TokenValidateView } from "./types";
 
 const props = defineProps<{
   config: GitInsightConfigView | null;
@@ -8,6 +8,7 @@ const props = defineProps<{
   configPath: string;
   methodReady: boolean;
   methodReadyReason?: string;
+  tokenValidation?: TokenValidateView | null;
   busy?: boolean;
   previewMode?: boolean;
 }>();
@@ -20,6 +21,8 @@ const emit = defineEmits<{
       gitlabToken: string;
     },
   ];
+  validateToken: [payload: { githubToken: string; gitlabToken: string }];
+  clearTokenValidation: [];
   downloadCli: [kind: "gh" | "glab"];
   cliAuthLogin: [payload: { scope: "system" | "bundled"; kind: "gh" | "glab" }];
   refresh: [];
@@ -60,6 +63,12 @@ watch(
   },
   { immediate: true },
 );
+
+function onTokenEdited(): void {
+  if (props.tokenValidation) {
+    emit("clearTokenValidation");
+  }
+}
 
 const platform = computed(() => props.cliStatus?.platformHint ?? "unknown");
 
@@ -140,8 +149,83 @@ const bundledTarget = computed(() => {
   return null;
 });
 
+/** 本地即时格式提示（不发网络） */
+function githubFormatHint(token: string): { ok: boolean; text: string } | null {
+  const t = token.trim();
+  if (!t) {
+    return null;
+  }
+  if (t.includes(" ") || t.includes("\n")) {
+    return { ok: false, text: "不应包含空格或换行" };
+  }
+  if (
+    /^(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|ghr_[A-Za-z0-9]{36})$/.test(
+      t,
+    )
+  ) {
+    return { ok: true, text: "格式正确" };
+  }
+  if (/^gh[pousr]_/i.test(t) || /^github_pat_/i.test(t)) {
+    return { ok: false, text: "前缀像 GitHub Token，但长度/字符可能不完整" };
+  }
+  return { ok: false, text: "期望 ghp_… / github_pat_…" };
+}
+
+function gitlabFormatHint(token: string): { ok: boolean; text: string } | null {
+  const t = token.trim();
+  if (!t) {
+    return null;
+  }
+  if (t.includes(" ") || t.includes("\n")) {
+    return { ok: false, text: "不应包含空格或换行" };
+  }
+  if (/^(glpat-[A-Za-z0-9_\-]{20,}|gldt-[A-Za-z0-9_\-]{20,}|gloas-[A-Za-z0-9_\-]{20,})$/.test(t)) {
+    return { ok: true, text: "格式正确" };
+  }
+  if (/^[A-Za-z0-9_\-]{20,64}$/.test(t) && !t.includes(".")) {
+    return { ok: true, text: "格式可接受（无前缀长 token）" };
+  }
+  if (/^glpat-/i.test(t)) {
+    return { ok: false, text: "前缀像 GitLab Token，但可能不完整" };
+  }
+  return { ok: false, text: "期望 glpat-…" };
+}
+
+const githubHint = computed(() => githubFormatHint(githubToken.value));
+const gitlabHint = computed(() => gitlabFormatHint(gitlabToken.value));
+
+const relevantTokenFilled = computed(() => {
+  if (platform.value === "github") {
+    return !!githubToken.value.trim();
+  }
+  if (platform.value === "gitlab") {
+    return !!gitlabToken.value.trim();
+  }
+  return !!(githubToken.value.trim() || gitlabToken.value.trim());
+});
+
+const relevantFormatOk = computed(() => {
+  if (platform.value === "github") {
+    return githubHint.value?.ok === true;
+  }
+  if (platform.value === "gitlab") {
+    return gitlabHint.value?.ok === true;
+  }
+  if (githubToken.value.trim()) {
+    return githubHint.value?.ok === true;
+  }
+  if (gitlabToken.value.trim()) {
+    return gitlabHint.value?.ok === true;
+  }
+  return false;
+});
+
 const options = computed(() => {
   const s = props.cliStatus;
+  const tokenReady =
+    relevantTokenFilled.value &&
+    relevantFormatOk.value &&
+    (props.tokenValidation == null || props.tokenValidation.ok);
   return [
     {
       id: "cli" as const,
@@ -164,13 +248,8 @@ const options = computed(() => {
     {
       id: "token" as const,
       title: "C. Token（API）",
-      desc: "在此填写 Token，持久化到扩展全局配置，各仓库共用",
-      ready:
-        platform.value === "github"
-          ? !!githubToken.value.trim()
-          : platform.value === "gitlab"
-            ? !!gitlabToken.value.trim()
-            : false,
+      desc: "填写 Token；保存时校验格式与 API 有效性/有效期",
+      ready: tokenReady,
       detail: `当前远程倾向：${platform.value}`,
     },
     {
@@ -191,8 +270,18 @@ function selectMethod(id: GitInsightConfigView["mrMethod"]): void {
 }
 
 function save(): void {
+  if (method.value === "token" && !relevantFormatOk.value) {
+    return;
+  }
   emit("save", {
     mrMethod: method.value,
+    githubToken: githubToken.value,
+    gitlabToken: gitlabToken.value,
+  });
+}
+
+function validateTokenNow(): void {
+  emit("validateToken", {
     githubToken: githubToken.value,
     gitlabToken: gitlabToken.value,
   });
@@ -353,8 +442,15 @@ function save(): void {
                   type="password"
                   autocomplete="off"
                   :disabled="busy || previewMode"
-                  placeholder="ghp_…"
+                  placeholder="ghp_… 或 github_pat_…"
+                  @input="onTokenEdited"
                 />
+                <span
+                  v-if="githubHint"
+                  class="token-hint"
+                  :class="githubHint.ok ? 'ok' : 'bad'"
+                  >{{ githubHint.text }}</span
+                >
               </label>
               <label>
                 GitLab Token（api 权限）
@@ -364,15 +460,50 @@ function save(): void {
                   autocomplete="off"
                   :disabled="busy || previewMode"
                   placeholder="glpat-…"
+                  @input="onTokenEdited"
                 />
+                <span
+                  v-if="gitlabHint"
+                  class="token-hint"
+                  :class="gitlabHint.ok ? 'ok' : 'bad'"
+                  >{{ gitlabHint.text }}</span
+                >
               </label>
-              <p class="muted" style="margin: 0">填写后点下方「保存配置」写入扩展全局存储。</p>
+              <div class="btn-row">
+                <button
+                  type="button"
+                  class="btn secondary"
+                  :disabled="busy || previewMode || !relevantTokenFilled"
+                  @click="validateTokenNow"
+                >
+                  校验 Token
+                </button>
+              </div>
+              <p
+                v-if="tokenValidation"
+                class="token-check"
+                :class="tokenValidation.ok ? 'ok' : 'bad'"
+              >
+                {{ tokenValidation.summary }}
+              </p>
+              <p class="muted" style="margin: 0">
+                保存方案 C 时会校验格式，并请求平台 API 确认有效性/有效期；不通过则不会写入。
+              </p>
             </div>
           </div>
         </div>
 
         <div class="btn-row config-actions">
-          <button type="button" class="btn" :disabled="busy || previewMode" @click="save">
+          <button
+            type="button"
+            class="btn"
+            :disabled="
+              busy ||
+              previewMode ||
+              (method === 'token' && (!relevantTokenFilled || !relevantFormatOk))
+            "
+            @click="save"
+          >
             保存配置
           </button>
           <button type="button" class="btn secondary" :disabled="busy" @click="emit('refresh')">

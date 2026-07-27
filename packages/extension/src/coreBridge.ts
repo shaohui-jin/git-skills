@@ -4,6 +4,7 @@ import {
   createMergeRequest,
   detectMrPlatform,
   fetchRemote,
+  normalizeRemoteWebUrl,
   prepareCreateMr,
   rehearseMerge,
   reportFetch,
@@ -13,7 +14,11 @@ import {
   runGit,
   graphToMermaid,
   mergeToMermaid,
+  summarizeTokenValidation,
+  validateGithubToken,
+  validateGitlabToken,
   GitError,
+  type TokenValidateResult,
 } from "@git-insight/core";
 import type { CliStatusPayload, HostMessage, WebviewRequest } from "./protocol.js";
 import {
@@ -157,6 +162,53 @@ async function buildCliStatus(
     bundledGlab,
     systemCliOk: cliPairOk(platformHint, systemGh, systemGlab),
     bundledCliOk: cliPairOk(platformHint, bundledGh, bundledGlab),
+  };
+}
+
+async function remoteOrigin(repoRoot: string): Promise<string> {
+  const remote = await runGit(repoRoot, ["remote", "get-url", "origin"], {
+    allowFail: true,
+  });
+  return remote.stdout.trim();
+}
+
+/** 方案 C：按当前远程平台校验 Token 格式 + API 有效性/有效期 */
+async function validateTokenForRepo(
+  repoRoot: string,
+  tokens: { githubToken?: string; gitlabToken?: string },
+): Promise<TokenValidateResult> {
+  const originUrl = await remoteOrigin(repoRoot);
+  const platform = detectMrPlatform(originUrl);
+  if (platform === "github") {
+    return validateGithubToken(tokens.githubToken ?? "");
+  }
+  if (platform === "gitlab") {
+    const web = normalizeRemoteWebUrl(originUrl) || "https://gitlab.com";
+    return validateGitlabToken(tokens.gitlabToken ?? "", web);
+  }
+  // 平台未知：优先校已填写的一侧
+  if (tokens.githubToken?.trim()) {
+    return validateGithubToken(tokens.githubToken);
+  }
+  if (tokens.gitlabToken?.trim()) {
+    const web = normalizeRemoteWebUrl(originUrl) || "https://gitlab.com";
+    return validateGitlabToken(tokens.gitlabToken, web);
+  }
+  return {
+    platform: "github",
+    formatOk: false,
+    formatMessage: "请先填写 Token",
+    apiChecked: false,
+    apiOk: false,
+    ok: false,
+    error: "无法识别远程平台，且未填写 Token",
+  };
+}
+
+function tokenResultPayload(result: TokenValidateResult) {
+  return {
+    ...result,
+    summary: summarizeTokenValidation(result),
   };
 }
 
@@ -479,11 +531,51 @@ export async function handleWebviewRequest(
 
     if (req.type === "saveGitConfig") {
       const prev = await loadCfg();
+      const nextMethod = req.config.mrMethod;
+      const nextGithub = req.config.githubToken ?? "";
+      const nextGitlab = req.config.gitlabToken ?? "";
+      let tokenValidation: ReturnType<typeof tokenResultPayload> | undefined;
+
+      if (nextMethod === "token") {
+        void onProgress?.({ percent: 40, label: "校验 Token 格式与有效性…" });
+        const checked = await validateTokenForRepo(cwd, {
+          githubToken: nextGithub,
+          gitlabToken: nextGitlab,
+        });
+        tokenValidation = tokenResultPayload(checked);
+        if (!checked.ok) {
+          const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+          const ready = isMrMethodReady(prev, cliStatus);
+          return {
+            messages: [
+              {
+                type: "error",
+                message: `Token 校验未通过：${tokenValidation.summary}`,
+                code: "TOKEN_INVALID",
+              },
+              {
+                type: "tokenValidateResult",
+                ...tokenValidation,
+              },
+              {
+                type: "gitConfigResult",
+                config: prev,
+                cliStatus,
+                configPath: configPath(),
+                methodReady: ready.ok,
+                methodReadyReason: ready.reason,
+                tokenValidation,
+              },
+            ],
+          };
+        }
+      }
+
       const saved = await saveCfg({
         ...prev,
-        mrMethod: req.config.mrMethod,
-        githubToken: req.config.githubToken ?? "",
-        gitlabToken: req.config.gitlabToken ?? "",
+        mrMethod: nextMethod,
+        githubToken: nextGithub,
+        gitlabToken: nextGitlab,
       });
       const cliStatus = await buildCliStatus(cwd, cliStorageDir);
       const ready = isMrMethodReady(saved, cliStatus);
@@ -495,9 +587,23 @@ export async function handleWebviewRequest(
             cliStatus,
             configPath: configPath(),
             methodReady: ready.ok,
-            methodReadyReason: ready.reason,
+            methodReadyReason: tokenValidation
+              ? tokenValidation.summary
+              : ready.reason,
+            tokenValidation,
           },
         ],
+      };
+    }
+
+    if (req.type === "validateToken") {
+      void onProgress?.({ percent: 40, label: "校验 Token…" });
+      const checked = await validateTokenForRepo(cwd, {
+        githubToken: req.githubToken,
+        gitlabToken: req.gitlabToken,
+      });
+      return {
+        messages: [{ type: "tokenValidateResult", ...tokenResultPayload(checked) }],
       };
     }
 

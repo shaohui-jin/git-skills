@@ -48,6 +48,11 @@ export type WebviewRequest =
         gitlabToken?: string;
       };
     }
+  | {
+      type: "validateToken";
+      githubToken?: string;
+      gitlabToken?: string;
+    }
   | { type: "downloadCli"; kind: "gh" | "glab" }
   | {
       type: "cliAuthLogin";

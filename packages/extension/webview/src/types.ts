@@ -162,6 +162,21 @@ export type HostMessage =
       configPath: string;
       methodReady: boolean;
       methodReadyReason?: string;
+      tokenValidation?: TokenValidateView;
+    }
+  | {
+      type: "tokenValidateResult";
+      ok: boolean;
+      platform: "github" | "gitlab";
+      formatOk: boolean;
+      formatMessage: string;
+      apiChecked: boolean;
+      apiOk: boolean;
+      login?: string;
+      expiresAt?: string | null;
+      expiresMessage?: string;
+      error?: string;
+      summary: string;
     }
   | {
       type: "downloadCliResult";
@@ -169,5 +184,19 @@ export type HostMessage =
       path: string;
       messages: string[];
     };
+
+export interface TokenValidateView {
+  ok: boolean;
+  platform: "github" | "gitlab";
+  formatOk: boolean;
+  formatMessage: string;
+  apiChecked: boolean;
+  apiOk: boolean;
+  login?: string;
+  expiresAt?: string | null;
+  expiresMessage?: string;
+  error?: string;
+  summary: string;
+}
 
 export type TabId = "config" | "graph" | "preview";
