@@ -181,8 +181,15 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
 
   await reportProgress(onProgress, 2, "准备仓库…");
   if (shouldFetch) {
-    await maybeFetch(repoRoot, true, options.remote ?? "origin", (u) =>
-      mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
+    await maybeFetch(
+      repoRoot,
+      true,
+      options.remote ?? "origin",
+      (u) => mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
+      {
+        token: options.authToken,
+        provider: options.authProvider,
+      },
     );
   }
   await reportProgress(onProgress, 20, "列举分支 tip…");

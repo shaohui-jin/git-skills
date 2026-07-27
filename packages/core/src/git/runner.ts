@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { gitAuthConfigArgs, gitNonInteractiveEnv, type GitAuthOptions } from "./auth.js";
 
 export class GitError extends Error {
   readonly code: string;
@@ -34,16 +35,20 @@ export async function runGit(
     allowFail?: boolean;
     /** stderr 按行回调（git --progress 常用 \\r 刷新） */
     onStderrLine?: (line: string) => void;
+    /** 注入 HTTPS Token，避免系统登录弹窗 */
+    auth?: GitAuthOptions;
+    /** 额外环境变量（覆盖非交互默认） */
+    env?: NodeJS.ProcessEnv;
   },
 ): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", args, {
+    const finalArgs = [...gitAuthConfigArgs(options?.auth), ...args];
+    const child = spawn("git", finalArgs, {
       cwd,
       windowsHide: true,
       env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-        LANG: "C",
+        ...gitNonInteractiveEnv(process.env),
+        ...options?.env,
       },
     });
 
@@ -80,7 +85,7 @@ export async function runGit(
       reject(
         new GitError(`无法启动 git：${err.message}`, {
           code: "GIT_SPAWN_FAILED",
-          args,
+          args: finalArgs,
         }),
       );
     });
@@ -91,12 +96,15 @@ export async function runGit(
       const exit = code ?? 1;
       if (exit !== 0 && !options?.allowFail) {
         reject(
-          new GitError(stderr.trim() || stdout.trim() || `git ${args.join(" ")} failed`, {
-            code: "GIT_COMMAND_FAILED",
-            stdout,
-            stderr,
-            args,
-          }),
+          new GitError(
+            stderr.trim() || stdout.trim() || `git ${finalArgs.join(" ")} failed`,
+            {
+              code: "GIT_COMMAND_FAILED",
+              stdout,
+              stderr,
+              args: finalArgs,
+            },
+          ),
         );
         return;
       }

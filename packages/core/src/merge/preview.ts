@@ -143,8 +143,15 @@ export async function previewMerge(options: MergeOptions): Promise<MergePreviewR
   const shouldFetch = options.fetch !== false;
   let fetched = false;
   if (shouldFetch) {
-    fetched = await maybeFetch(repoRoot, true, options.remote ?? "origin", (u) =>
-      mapProgress(onProgress, 2, 28, u.percent / 100, u.label),
+    fetched = await maybeFetch(
+      repoRoot,
+      true,
+      options.remote ?? "origin",
+      (u) => mapProgress(onProgress, 2, 28, u.percent / 100, u.label),
+      {
+        token: options.authToken,
+        provider: options.authProvider,
+      },
     );
   }
   await reportProgress(onProgress, 30, "解析分支…");

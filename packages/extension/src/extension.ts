@@ -4,7 +4,7 @@ import { GitInsightPanel } from "./GitInsightPanel.js";
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("gitInsight.openWeb", () => {
-      GitInsightPanel.createOrShow(context, "graph");
+      GitInsightPanel.createOrShow(context, "config");
     }),
     vscode.commands.registerCommand("gitInsight.previewMerge", () => {
       GitInsightPanel.createOrShow(context, "preview");

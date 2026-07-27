@@ -166,28 +166,24 @@ const bundledTarget = computed(() => {
   return null;
 });
 
-function githubFormatOk(token: string): boolean {
-  const t = token.trim();
-  return /^(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|ghr_[A-Za-z0-9]{36})$/.test(
-    t,
-  );
-}
+const githubEnabled = computed(
+  () => platform.value === "github" || platform.value === "unknown",
+);
+const gitlabEnabled = computed(
+  () => platform.value === "gitlab" || platform.value === "unknown",
+);
 
-function gitlabFormatOk(token: string): boolean {
-  return /^glpat-[A-Za-z0-9_\-]{20,}$/.test(token.trim());
-}
-
+/** C 可用：对应平台 Token 校验通过（校验中不算就绪） */
 const tokenReady = computed(() => {
   if (platform.value === "github") {
-    return !!githubToken.value.trim() && (props.githubTokenStatus?.ok ?? false);
+    return !githubChecking.value && props.githubTokenStatus?.ok === true;
   }
   if (platform.value === "gitlab") {
-    return !!gitlabToken.value.trim() && (props.gitlabTokenStatus?.ok ?? false);
+    return !gitlabChecking.value && props.gitlabTokenStatus?.ok === true;
   }
   return (
-    (githubToken.value.trim() && props.githubTokenStatus?.ok) ||
-    (gitlabToken.value.trim() && props.gitlabTokenStatus?.ok) ||
-    false
+    (!githubChecking.value && props.githubTokenStatus?.ok === true) ||
+    (!gitlabChecking.value && props.gitlabTokenStatus?.ok === true)
   );
 });
 
@@ -215,7 +211,12 @@ const options = computed(() => {
     {
       id: "token" as const,
       title: "C. Token（API）",
-      desc: "填写后失焦/回车自动校验并保存；GitLab 必须以 glpat- 开头",
+      desc:
+        platform.value === "github"
+          ? "仅可填写 GitHub Token；修改后触发校验并保存"
+          : platform.value === "gitlab"
+            ? "仅可填写 GitLab Token（须 glpat- 前缀）；修改后触发校验并保存"
+            : "按远程平台填写对应 Token；修改后触发校验并保存",
       ready: !!tokenReady.value,
       detail: `当前远程倾向：${platform.value}`,
     },
@@ -248,41 +249,38 @@ function selectMethod(id: GitInsightConfigView["mrMethod"]): void {
   persistConfig();
 }
 
-function onGithubInput(): void {
-  emit("clearTokenValidation", "github");
+/** input 的 change：值变更且失焦后触发（非逐键），避免过于频繁 */
+function onTokenChange(which: "github" | "gitlab"): void {
+  if (which === "github" && !githubEnabled.value) {
+    return;
+  }
+  if (which === "gitlab" && !gitlabEnabled.value) {
+    return;
+  }
+  triggerValidate(which);
 }
 
-function onGitlabInput(): void {
-  emit("clearTokenValidation", "gitlab");
-}
-
-function triggerValidate(platform: "github" | "gitlab"): void {
+function triggerValidate(which: "github" | "gitlab"): void {
   if (props.busy || props.previewMode) {
     return;
   }
-  const token = platform === "github" ? githubToken.value.trim() : gitlabToken.value.trim();
+  const token = which === "github" ? githubToken.value.trim() : gitlabToken.value.trim();
   if (!token) {
-    emit("clearTokenValidation", platform);
+    emit("clearTokenValidation", which);
     persistConfig();
     return;
   }
-  if (platform === "github" && !githubFormatOk(token)) {
-    // 仍持久化，宿主校验会返回格式错误状态
-  }
-  if (platform === "gitlab" && !gitlabFormatOk(token)) {
-    // 同上
-  }
-  if (platform === "github") {
+  if (which === "github") {
     githubChecking.value = true;
   } else {
     gitlabChecking.value = true;
   }
   emit("validateToken", {
-    platform,
+    platform: which,
     githubToken: githubToken.value,
     gitlabToken: gitlabToken.value,
     persist: true,
-    mrMethod: method.value,
+    mrMethod: method.value === "token" ? "token" : method.value,
   });
 }
 
@@ -446,11 +444,11 @@ const gitlabTitleStatus = computed(() => {
               class="config-tokens config-inline"
               @click.stop
             >
-              <label>
+              <label :class="{ 'token-disabled': !githubEnabled }">
                 <span class="token-label-row">
                   <span>GitHub Token（repo / pull request 权限）</span>
                   <span
-                    v-if="githubTitleStatus"
+                    v-if="githubEnabled && githubTitleStatus"
                     class="token-title-status"
                     :class="
                       githubChecking
@@ -461,23 +459,24 @@ const gitlabTitleStatus = computed(() => {
                     "
                     >{{ githubTitleStatus }}</span
                   >
+                  <span v-else-if="!githubEnabled" class="token-title-status muted"
+                    >当前远程为 GitLab，已禁用</span
+                  >
                 </span>
                 <input
                   v-model="githubToken"
                   type="password"
                   autocomplete="off"
-                  :disabled="busy || previewMode"
+                  :disabled="busy || previewMode || !githubEnabled"
                   placeholder="ghp_… 或 github_pat_…"
-                  @input="onGithubInput"
-                  @blur="triggerValidate('github')"
-                  @keydown.enter.prevent="triggerValidate('github')"
+                  @change="onTokenChange('github')"
                 />
               </label>
-              <label>
+              <label :class="{ 'token-disabled': !gitlabEnabled }">
                 <span class="token-label-row">
                   <span>GitLab Token（必须以 glpat- 开头）</span>
                   <span
-                    v-if="gitlabTitleStatus"
+                    v-if="gitlabEnabled && gitlabTitleStatus"
                     class="token-title-status"
                     :class="
                       gitlabChecking
@@ -488,20 +487,21 @@ const gitlabTitleStatus = computed(() => {
                     "
                     >{{ gitlabTitleStatus }}</span
                   >
+                  <span v-else-if="!gitlabEnabled" class="token-title-status muted"
+                    >当前远程为 GitHub，已禁用</span
+                  >
                 </span>
                 <input
                   v-model="gitlabToken"
                   type="password"
                   autocomplete="off"
-                  :disabled="busy || previewMode"
+                  :disabled="busy || previewMode || !gitlabEnabled"
                   placeholder="glpat-…"
-                  @input="onGitlabInput"
-                  @blur="triggerValidate('gitlab')"
-                  @keydown.enter.prevent="triggerValidate('gitlab')"
+                  @change="onTokenChange('gitlab')"
                 />
               </label>
               <p class="muted" style="margin: 0">
-                失焦或回车后自动校验并写入扩展全局配置；有效期为中国时间（年/月/日
+                Token 变更并确认后（change）自动校验并保存；有效期为中国时间（年/月/日
                 时:分:秒）。
               </p>
             </div>

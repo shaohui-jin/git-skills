@@ -76,7 +76,7 @@ function openExternalUrl(url: string): void {
 
 const vscode = getVsCodeApi();
 
-const tab = ref<TabId>("graph");
+const tab = ref<TabId>("config");
 const cwd = ref<string | null>(null);
 const pathInput = ref("");
 const branches = ref<BranchOption[]>([]);
@@ -113,6 +113,8 @@ const methodReady = ref(false);
 const methodReadyReason = ref<string | undefined>(undefined);
 const githubTokenStatus = ref<TokenValidateView | null>(null);
 const gitlabTokenStatus = ref<TokenValidateView | null>(null);
+/** 进入页面后对已有 Token 的预校验去重键 */
+let lastTokenPrecheckKey = "";
 
 const createMrBlockReason = computed(() => {
   if (previewMode.value) {
@@ -191,6 +193,11 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     return;
   }
   if (msg.type === "workspace") {
+    if (cwd.value !== msg.cwd) {
+      lastTokenPrecheckKey = "";
+      githubTokenStatus.value = null;
+      gitlabTokenStatus.value = null;
+    }
     cwd.value = msg.cwd;
     branches.value = normalizeBranches(msg.branches);
     previewMode.value = !!msg.previewMode;
@@ -285,10 +292,16 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       } else {
         gitlabTokenStatus.value = v;
       }
+      // 校验结果驱动 C 方案就绪态（比「仅有 token 文本」更准）
+      if (msg.config.mrMethod === "token") {
+        methodReady.value = v.ok;
+        methodReadyReason.value = v.ok ? undefined : v.titleStatus || v.summary;
+      }
     }
-    status.value = msg.methodReady
+    status.value = methodReady.value
       ? `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
-      : msg.methodReadyReason || "请完善 Git 配置";
+      : methodReadyReason.value || "请完善 Git 配置";
+    maybePrecheckTokens(msg.config, msg.cliStatus);
     return;
   }
   if (msg.type === "tokenValidateResult") {
@@ -311,6 +324,19 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       githubTokenStatus.value = view;
     } else {
       gitlabTokenStatus.value = view;
+    }
+    if (gitConfig.value?.mrMethod === "token") {
+      const plat = cliStatus.value?.platformHint;
+      const relevant =
+        plat === "gitlab"
+          ? msg.platform === "gitlab"
+          : plat === "github"
+            ? msg.platform === "github"
+            : true;
+      if (relevant) {
+        methodReady.value = msg.ok;
+        methodReadyReason.value = msg.ok ? undefined : msg.titleStatus || msg.summary;
+      }
     }
     status.value = msg.titleStatus || msg.summary;
     error.value = msg.ok ? null : msg.titleStatus || msg.summary;
@@ -478,6 +504,60 @@ function clearTokenValidation(platform: "github" | "gitlab"): void {
   } else {
     gitlabTokenStatus.value = null;
   }
+}
+
+/** 进入配置时：若已有对应 Token，自动校验一次 */
+function maybePrecheckTokens(
+  config: GitInsightConfigView,
+  status: CliStatusPayload,
+): void {
+  if (previewMode.value) {
+    return;
+  }
+  const plat = status.platformHint;
+  const gh = config.githubToken?.trim() ?? "";
+  const gl = config.gitlabToken?.trim() ?? "";
+  let platform: "github" | "gitlab" | null = null;
+  let token = "";
+  if (plat === "github" && gh) {
+    platform = "github";
+    token = gh;
+  } else if (plat === "gitlab" && gl) {
+    platform = "gitlab";
+    token = gl;
+  } else if (plat === "unknown") {
+    if (gh) {
+      platform = "github";
+      token = gh;
+    } else if (gl) {
+      platform = "gitlab";
+      token = gl;
+    }
+  }
+  if (!platform || !token) {
+    return;
+  }
+  const key = `${cwd.value ?? ""}|${platform}|${token}`;
+  if (key === lastTokenPrecheckKey) {
+    return;
+  }
+  // 已有成功校验结果则跳过
+  if (platform === "github" && githubTokenStatus.value?.ok) {
+    lastTokenPrecheckKey = key;
+    return;
+  }
+  if (platform === "gitlab" && gitlabTokenStatus.value?.ok) {
+    lastTokenPrecheckKey = key;
+    return;
+  }
+  lastTokenPrecheckKey = key;
+  validateToken({
+    platform,
+    githubToken: config.githubToken ?? "",
+    gitlabToken: config.gitlabToken ?? "",
+    persist: true,
+    mrMethod: config.mrMethod,
+  });
 }
 
 function refreshGitConfig(): void {

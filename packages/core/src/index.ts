@@ -46,7 +46,18 @@ export type {
 
 export { GitError, resolveRepoRoot, runGit, tryMergeBase } from "./git/runner.js";
 export { getGitVersion, assertMergeTreeSupported } from "./git/version.js";
-export { fetchRemote, maybeFetch } from "./git/fetch.js";
+export {
+  fetchRemote,
+  maybeFetch,
+  probeRemoteAccess,
+  resolveFetchAuth,
+} from "./git/fetch.js";
+export {
+  gitAuthConfigArgs,
+  gitNonInteractiveEnv,
+  httpsUrlWithToken,
+} from "./git/auth.js";
+export type { GitAuthOptions, GitAuthProvider } from "./git/auth.js";
 export { buildBranchGraph } from "./graph/builder.js";
 export { previewMerge } from "./merge/preview.js";
 export { conflictBlame } from "./merge/blame.js";

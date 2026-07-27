@@ -119,6 +119,9 @@ export interface GraphOptions {
   /** Default true for skill usage. */
   fetch?: boolean;
   remote?: string;
+  /** 扩展配置中的 Token，用于 fetch 鉴权（避免系统登录弹窗） */
+  authToken?: string;
+  authProvider?: "github" | "gitlab" | "unknown";
   onProgress?: ProgressReporter;
 }
 
@@ -129,6 +132,8 @@ export interface MergeOptions {
   /** Default true. */
   fetch?: boolean;
   remote?: string;
+  authToken?: string;
+  authProvider?: "github" | "gitlab" | "unknown";
   /** Max files to run blame on; default 20. */
   maxBlameFiles?: number;
   onProgress?: ProgressReporter;

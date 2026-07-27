@@ -1189,6 +1189,11 @@ div.config-option {
   gap: 8px 12px;
 }
 
+.token-disabled input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .token-title-status {
   font-size: 12px;
   font-weight: 500;

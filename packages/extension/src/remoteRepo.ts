@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runGit } from "@git-insight/core";
+import { httpsUrlWithToken, runGit } from "@git-insight/core";
 
 export interface RemoteRepoSpec {
   host: string;
@@ -91,18 +91,12 @@ function dataRoot(): string {
   );
 }
 
-function cloneUrlWithAuth(httpsUrl: string): string {
-  const token =
+function envGithubToken(): string | undefined {
+  return (
     process.env.GITHUB_TOKEN?.trim() ||
     process.env.GH_TOKEN?.trim() ||
-    process.env.GIT_INSIGHT_GITHUB_TOKEN?.trim();
-  if (!token) {
-    return httpsUrl;
-  }
-  // x-access-token 适用于 GitHub HTTPS
-  return httpsUrl.replace(
-    /^https:\/\//i,
-    `https://x-access-token:${encodeURIComponent(token)}@`,
+    process.env.GIT_INSIGHT_GITHUB_TOKEN?.trim() ||
+    undefined
   );
 }
 
@@ -127,8 +121,12 @@ const locks = new Map<string, Promise<string>>();
 
 /**
  * 用系统 git clone / fetch 准备仓库工作副本，返回本地路径。
+ * @param authToken 优先使用扩展配置的 Token，其次环境变量
  */
-export async function ensureRemoteRepo(input: string): Promise<string> {
+export async function ensureRemoteRepo(
+  input: string,
+  authToken?: string,
+): Promise<string> {
   const spec = parseRemoteRepoSpec(input);
   const dir = repoDir(spec);
 
@@ -139,14 +137,40 @@ export async function ensureRemoteRepo(input: string): Promise<string> {
 
   const job = (async () => {
     await mkdir(dataRoot(), { recursive: true });
-    const url = cloneUrlWithAuth(spec.httpsUrl);
+    const token = authToken?.trim() || envGithubToken();
     const exists = await pathExists(join(dir, ".git"));
+    const bareUrl = spec.httpsUrl;
+    const authedUrl = httpsUrlWithToken(bareUrl, token, "github");
+    const auth = token ? { token, provider: "github" as const } : undefined;
 
     if (!exists) {
-      await runGit(dataRoot(), ["clone", "--", url, dir]);
+      // 先试本机凭据/匿名；失败再用 Token（方案 C 兜底）
+      const first = await runGit(dataRoot(), ["clone", "--", bareUrl, dir], {
+        allowFail: true,
+      });
+      if (first.code !== 0) {
+        if (!token) {
+          throw new Error(
+            first.stderr.trim() ||
+              first.stdout.trim() ||
+              "clone 失败：未登录且未配置 GitHub Token",
+          );
+        }
+        await runGit(dataRoot(), ["clone", "--", authedUrl, dir], { auth });
+      }
     } else {
-      // 已有副本：拉取远程更新（不改工作区未提交内容——我们只读分析）
-      await runGit(dir, ["fetch", "--all", "--prune"]);
+      const first = await runGit(dir, ["fetch", "--all", "--prune"], {
+        allowFail: true,
+      });
+      if (first.code !== 0 && token) {
+        await runGit(dir, ["fetch", "--all", "--prune"], { auth });
+      } else if (first.code !== 0) {
+        throw new Error(
+          first.stderr.trim() ||
+            first.stdout.trim() ||
+            "fetch 失败：未登录且未配置 GitHub Token",
+        );
+      }
     }
     return dir;
   })();

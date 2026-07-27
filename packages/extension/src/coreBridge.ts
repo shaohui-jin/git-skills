@@ -246,6 +246,30 @@ export async function handleWebviewRequest(
   };
   const cfgPath = () => configPath(cliStorageDir);
 
+  /** 从扩展配置取当前仓库对应平台的 Token，供 fetch/clone 鉴权 */
+  const resolveGitAuth = async (): Promise<{
+    authToken?: string;
+    authProvider: "github" | "gitlab" | "unknown";
+  }> => {
+    if (!cwd || !configMemento) {
+      return { authProvider: "unknown" };
+    }
+    try {
+      const originUrl = await remoteOrigin(cwd);
+      const authProvider = detectMrPlatform(originUrl);
+      const cfg = await loadUserConfig(configMemento, cwd, cliStorageDir);
+      const authToken =
+        authProvider === "gitlab"
+          ? cfg.gitlabToken?.trim()
+          : authProvider === "github"
+            ? cfg.githubToken?.trim()
+            : cfg.githubToken?.trim() || cfg.gitlabToken?.trim() || undefined;
+      return { authToken: authToken || undefined, authProvider };
+    } catch {
+      return { authProvider: "unknown" };
+    }
+  };
+
   if (req.type === "ready" || req.type === "refreshWorkspace") {
     const messages: HostMessage[] = [await workspacePayload(cwd, previewMode)];
     if (cwd && configMemento) {
@@ -296,7 +320,16 @@ export async function handleWebviewRequest(
 
     if (looksLikeRemoteRepo(path)) {
       try {
-        const resolved = await ensureRemoteRepo(path);
+        let token: string | undefined;
+        if (configMemento) {
+          try {
+            const cfg = await loadUserConfig(configMemento, null, cliStorageDir);
+            token = cfg.githubToken?.trim() || undefined;
+          } catch {
+            token = undefined;
+          }
+        }
+        const resolved = await ensureRemoteRepo(path, token);
         return {
           messages: [await workspacePayload(resolved, previewMode)],
           cwd: resolved,
@@ -379,7 +412,11 @@ export async function handleWebviewRequest(
 
   try {
     if (req.type === "fetch") {
-      const data = await fetchRemote(cwd, req.remote ?? "origin");
+      const auth = await resolveGitAuth();
+      const data = await fetchRemote(cwd, req.remote ?? "origin", onProgress, {
+        token: auth.authToken,
+        provider: auth.authProvider,
+      });
       return {
         messages: [
           { type: "fetchResult", data, report: reportFetch(data) },
@@ -391,6 +428,7 @@ export async function handleWebviewRequest(
     if (req.type === "graph") {
       // 网页/扩展默认全量（maxNodes: 0）；CLI 仍默认 200
       const maxNodes = req.maxNodes === undefined ? 0 : req.maxNodes;
+      const auth = await resolveGitAuth();
       const data = await buildBranchGraph({
         cwd,
         into: req.into,
@@ -398,6 +436,8 @@ export async function handleWebviewRequest(
         fetch: !req.noFetch,
         maxNodes,
         onProgress,
+        authToken: auth.authToken,
+        authProvider: auth.authProvider,
       });
       return {
         messages: [
@@ -424,12 +464,15 @@ export async function handleWebviewRequest(
           ],
         };
       }
+      const auth = await resolveGitAuth();
       const data = await rehearseMerge({
         cwd,
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
         onProgress,
+        authToken: auth.authToken,
+        authProvider: auth.authProvider,
       });
       return {
         messages: [
@@ -571,7 +614,7 @@ export async function handleWebviewRequest(
       );
       const payload = tokenResultPayload(checked);
       const messages: HostMessage[] = [{ type: "tokenValidateResult", ...payload }];
-      // 校验通过后顺带落盘，避免只校验不保存
+      // 校验后落盘；方案 C 的就绪态以本次校验为准
       if (req.persist) {
         const prev = await loadCfg();
         const saved = await saveCfg({
@@ -581,7 +624,12 @@ export async function handleWebviewRequest(
           gitlabToken: req.gitlabToken ?? prev.gitlabToken ?? "",
         });
         const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-        const ready = isMrMethodReady(saved, cliStatus);
+        let ready = isMrMethodReady(saved, cliStatus);
+        if (saved.mrMethod === "token") {
+          ready = checked.ok
+            ? { ok: true }
+            : { ok: false, reason: payload.titleStatus || payload.summary };
+        }
         messages.push({
           type: "gitConfigResult",
           config: saved,
