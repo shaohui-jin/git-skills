@@ -1,4 +1,4 @@
-import { maybeFetch } from "../git/fetch.js";
+import { fetchRemote } from "../git/fetch.js";
 import {
   ensureRev,
   mergeBase,
@@ -180,10 +180,13 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
   const shouldFetch = options.fetch !== false;
 
   await reportProgress(onProgress, 2, "准备仓库…");
+  let fetched = false;
+  let fetchOk: boolean | undefined;
+  let fetchError: string | undefined;
   if (shouldFetch) {
-    await maybeFetch(
+    fetched = true;
+    const fr = await fetchRemote(
       repoRoot,
-      true,
       options.remote ?? "origin",
       (u) => mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
       {
@@ -191,6 +194,10 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
         provider: options.authProvider,
       },
     );
+    fetchOk = fr.ok;
+    if (!fr.ok) {
+      fetchError = fr.stderr || fr.stdout || "fetch 失败";
+    }
   }
   await reportProgress(onProgress, 20, "列举分支 tip…");
 
@@ -219,6 +226,9 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
         edges: [],
         truncated: false,
         maxNodes: 0,
+        fetched,
+        fetchOk,
+        fetchError,
       };
     }
     revListArgs = ["rev-list", "--parents"];
@@ -304,5 +314,8 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
     lineage,
     truncated,
     maxNodes: unlimited ? nodes.length : maxNodes,
+    fetched,
+    fetchOk,
+    fetchError,
   };
 }

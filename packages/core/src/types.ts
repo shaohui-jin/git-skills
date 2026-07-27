@@ -35,6 +35,12 @@ export interface BranchGraph {
   lineage?: BranchLineage;
   truncated: boolean;
   maxNodes: number;
+  /** 本次是否尝试了 fetch（未传 noFetch） */
+  fetched?: boolean;
+  /** fetch 是否成功；失败时 tips 可能落后于线上 */
+  fetchOk?: boolean;
+  /** fetch 失败原因摘要 */
+  fetchError?: string;
 }
 
 export interface CommitRef {

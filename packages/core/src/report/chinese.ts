@@ -17,6 +17,13 @@ export function reportGraph(graph: BranchGraph): string {
     `- 分支 tip 数：${graph.tips.length}`,
     `- 分支 tip：${graph.tips.length}（可视化画布仅展示 tip 链路；提交元数据 ${graph.nodes.length} 条${graph.truncated ? `，已截断上限 ${graph.maxNodes}` : ""}）`,
   ];
+  if (graph.fetched) {
+    lines.push(
+      `- 本次 fetch：${graph.fetchOk ? "成功" : `失败（数据可能落后于线上）${graph.fetchError ? `：${graph.fetchError}` : ""}`}`,
+    );
+  } else {
+    lines.push(`- 本次 fetch：已跳过`);
+  }
 
   if (graph.lineage) {
     lines.push(``, `## 溯源（相对两分支）`);

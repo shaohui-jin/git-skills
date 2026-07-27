@@ -244,10 +244,21 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     graphReport.value = msg.report;
     selectedPath.value = null;
     const tips = msg.data.tips.length;
+    const fetchNote =
+      msg.data.fetched === false
+        ? "（未 fetch）"
+        : msg.data.fetchOk === false
+          ? "（fetch 失败，可能与线上不一致）"
+          : msg.data.fetched
+            ? "（已 fetch）"
+            : "";
     status.value = msg.data.truncated
-      ? `分支图已更新（${tips} 个分支 tip，提交元数据已截断）`
-      : `分支图已更新（${tips} 个分支 tip）`;
-    error.value = null;
+      ? `分支图已更新（${tips} 个分支 tip，提交元数据已截断）${fetchNote}`
+      : `分支图已更新（${tips} 个分支 tip）${fetchNote}`;
+    error.value =
+      msg.data.fetched && msg.data.fetchOk === false
+        ? msg.data.fetchError || "Fetch 失败，分支图可能落后于线上"
+        : null;
     loadingAction.value = "";
     busyPercent.value = null;
     return;

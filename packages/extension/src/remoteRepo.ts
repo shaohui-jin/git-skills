@@ -144,31 +144,46 @@ export async function ensureRemoteRepo(
     const auth = token ? { token, provider: "github" as const } : undefined;
 
     if (!exists) {
-      // 先试本机凭据/匿名；失败再用 Token（方案 C 兜底）
-      const first = await runGit(dataRoot(), ["clone", "--", bareUrl, dir], {
+      // 1 本机凭据 → 2 Token → 3 交互登录
+      let r = await runGit(dataRoot(), ["clone", "--", bareUrl, dir], {
         allowFail: true,
       });
-      if (first.code !== 0) {
-        if (!token) {
-          throw new Error(
-            first.stderr.trim() ||
-              first.stdout.trim() ||
-              "clone 失败：未登录且未配置 GitHub Token",
-          );
-        }
-        await runGit(dataRoot(), ["clone", "--", authedUrl, dir], { auth });
+      if (r.code !== 0 && token) {
+        r = await runGit(dataRoot(), ["clone", "--", authedUrl, dir], {
+          allowFail: true,
+          auth,
+        });
+      }
+      if (r.code !== 0) {
+        r = await runGit(dataRoot(), ["clone", "--", bareUrl, dir], {
+          allowFail: true,
+          interactive: true,
+        });
+      }
+      if (r.code !== 0) {
+        throw new Error(
+          r.stderr.trim() || r.stdout.trim() || "clone 失败：鉴权未通过",
+        );
       }
     } else {
-      const first = await runGit(dir, ["fetch", "--all", "--prune"], {
+      let r = await runGit(dir, ["fetch", "--all", "--prune"], {
         allowFail: true,
       });
-      if (first.code !== 0 && token) {
-        await runGit(dir, ["fetch", "--all", "--prune"], { auth });
-      } else if (first.code !== 0) {
+      if (r.code !== 0 && token) {
+        r = await runGit(dir, ["fetch", "--all", "--prune"], {
+          allowFail: true,
+          auth,
+        });
+      }
+      if (r.code !== 0) {
+        r = await runGit(dir, ["fetch", "--all", "--prune"], {
+          allowFail: true,
+          interactive: true,
+        });
+      }
+      if (r.code !== 0) {
         throw new Error(
-          first.stderr.trim() ||
-            first.stdout.trim() ||
-            "fetch 失败：未登录且未配置 GitHub Token",
+          r.stderr.trim() || r.stdout.trim() || "fetch 失败：鉴权未通过",
         );
       }
     }

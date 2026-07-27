@@ -33,6 +33,9 @@ export interface BranchGraph {
   lineage?: BranchLineage;
   truncated: boolean;
   maxNodes: number;
+  fetched?: boolean;
+  fetchOk?: boolean;
+  fetchError?: string;
 }
 
 export interface CommitRef {

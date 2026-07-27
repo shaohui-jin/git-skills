@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { gitAuthConfigArgs, gitNonInteractiveEnv, type GitAuthOptions } from "./auth.js";
+import {
+  gitAuthConfigArgs,
+  gitInteractiveEnv,
+  gitNonInteractiveEnv,
+  type GitAuthOptions,
+} from "./auth.js";
 
 export class GitError extends Error {
   readonly code: string;
@@ -35,19 +40,24 @@ export async function runGit(
     allowFail?: boolean;
     /** stderr 按行回调（git --progress 常用 \\r 刷新） */
     onStderrLine?: (line: string) => void;
-    /** 注入 HTTPS Token，避免系统登录弹窗 */
+    /** 注入 HTTPS Token（方案 C） */
     auth?: GitAuthOptions;
-    /** 额外环境变量（覆盖非交互默认） */
+    /** true：允许 GCM / Cursor 弹窗登录（最后兜底） */
+    interactive?: boolean;
+    /** 额外环境变量 */
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
     const finalArgs = [...gitAuthConfigArgs(options?.auth), ...args];
+    const baseEnv = options?.interactive
+      ? gitInteractiveEnv(process.env)
+      : gitNonInteractiveEnv(process.env);
     const child = spawn("git", finalArgs, {
       cwd,
       windowsHide: true,
       env: {
-        ...gitNonInteractiveEnv(process.env),
+        ...baseEnv,
         ...options?.env,
       },
     });

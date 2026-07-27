@@ -54,6 +54,7 @@ export {
 } from "./git/fetch.js";
 export {
   gitAuthConfigArgs,
+  gitInteractiveEnv,
   gitNonInteractiveEnv,
   httpsUrlWithToken,
 } from "./git/auth.js";
