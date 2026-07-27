@@ -305,7 +305,7 @@ export class GitInsightPanel {
             onBridgeReady: async (info) => {
               this.lastAiPrompt = info.prompt;
               this.log(
-                `Chat 桥就绪 port=${info.port} copied=${info.copied} opened=${info.openedChat} pasted=${info.pasted} submitted=${info.submitted}`,
+                `Chat 桥就绪 port=${info.port} batch=${info.batchIndex ?? 1}/${info.batchTotal ?? 1} conflicts=${info.conflictsFile} copied=${info.copied} opened=${info.openedChat} pasted=${info.pasted} submitted=${info.submitted}`,
               );
               await this.post({
                 type: "aiResolveBridgeReady",
@@ -313,10 +313,13 @@ export class GitInsightPanel {
                 callbackUrl: info.callbackUrl,
                 prompt: info.prompt,
                 promptFile: info.promptFile,
+                conflictsFile: info.conflictsFile,
                 openedChat: info.openedChat,
                 copied: info.copied,
                 pasted: info.pasted,
                 submitted: info.submitted,
+                batchIndex: info.batchIndex,
+                batchTotal: info.batchTotal,
               });
               // 自动粘贴成功时不再抢焦点打开旁路文档；失败时旁开便于复制
               if (!info.pasted) {

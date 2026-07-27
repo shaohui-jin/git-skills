@@ -1,5 +1,11 @@
 import * as vscode from "vscode";
 import {
+  mapBatchProgress,
+  mergeBatchedResponses,
+  splitAiResolveBatches,
+  type AiBatchMeta,
+} from "./aiResolveBatch.js";
+import {
   parseBridgeResult,
   startAiResolveBridge,
   tryOpenCursorChat,
@@ -23,10 +29,13 @@ export type AiBridgeReadyInfo = {
   callbackUrl: string;
   prompt: string;
   promptFile: string;
+  conflictsFile: string;
   openedChat: boolean;
   copied: boolean;
   pasted: boolean;
   submitted: boolean;
+  batchIndex?: number;
+  batchTotal?: number;
 };
 
 async function readResponse(
@@ -115,52 +124,28 @@ export interface RunAiResolveOptions {
   onBridgeSession?: (session: AiBridgeSession | null) => void;
 }
 
-/**
- * 1) vscode.lm（若有）
- * 2) 可选 OpenAI 兼容 API（已配置时）
- * 3) Cursor Chat + 本地端口回传（零配置主路径）
- */
-export async function runAiResolve(
-  req: AiResolveRequestPayload,
-  options: RunAiResolveOptions = {},
-): Promise<AiResolveResponsePayload> {
-  if (!req.hunks.length) {
-    throw new Error("没有待解决的冲突块");
-  }
-
-  try {
-    return await runWithVscodeLm(req, options.onProgress);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg !== "NO_LM") {
-      // 有模型但失败：若已配 API 再试；否则走 Chat 桥
-      const api = options.openAi;
-      const hasApi =
-        !!api?.baseUrl?.trim() &&
-        !!api?.model?.trim() &&
-        (!!api.apiKey?.trim() || /localhost|127\.0\.0\.1/i.test(api.baseUrl));
-      if (hasApi) {
-        await options.onProgress?.("vscode.lm 失败，改用已配置 API…", 15);
-        return runAiResolveWithOpenAiCompat(req, api!, options.onProgress);
-      }
-    }
-  }
-
-  const api = options.openAi;
-  const hasApi =
+function hasOpenAi(api: OpenAiCompatOptions | null | undefined): boolean {
+  return (
     !!api?.baseUrl?.trim() &&
     !!api?.model?.trim() &&
-    (!!api.apiKey?.trim() || /localhost|127\.0\.0\.1/i.test(api.baseUrl ?? ""));
-  if (hasApi && (await options.onProgress?.("尝试已配置的 OpenAI 兼容 API…", 12), true)) {
-    try {
-      return await runAiResolveWithOpenAiCompat(req, api!, options.onProgress);
-    } catch {
-      // 继续 Chat 桥
-    }
-  }
+    (!!api.apiKey?.trim() || /localhost|127\.0\.0\.1/i.test(api.baseUrl ?? ""))
+  );
+}
 
-  await options.onProgress?.("启动本地回传端口 + Cursor Chat…", 18);
-  const session = await startAiResolveBridge(req);
+async function runAiResolveBridgeOnce(
+  req: AiResolveRequestPayload,
+  options: RunAiResolveOptions,
+  batch?: AiBatchMeta,
+): Promise<AiResolveResponsePayload> {
+  const batchHint =
+    batch && batch.batchTotal > 1
+      ? `第 ${batch.batchIndex}/${batch.batchTotal} 批 `
+      : "";
+  await options.onProgress?.(
+    `${batchHint}启动本地回传端口 + Cursor Chat…`,
+    18,
+  );
+  const session = await startAiResolveBridge(req, 5 * 60 * 1000, batch);
   options.onBridgeSession?.(session);
 
   let copied = false;
@@ -177,10 +162,13 @@ export async function runAiResolve(
     callbackUrl: session.callbackUrl,
     prompt: session.prompt,
     promptFile: session.promptFile,
+    conflictsFile: session.conflictsFile,
     openedChat: chat.opened,
     copied,
     pasted: chat.pasted,
     submitted: chat.submitted,
+    batchIndex: batch?.batchIndex,
+    batchTotal: batch?.batchTotal,
   });
 
   const stage = chat.submitted
@@ -193,16 +181,111 @@ export async function runAiResolve(
           ? "请手动打开 Chat，Ctrl+V 粘贴后发送"
           : "请复制提示词后打开 Chat";
 
-  await options.onProgress?.(`${stage}；监听 ${session.callbackUrl} …`, 30);
+  await options.onProgress?.(
+    `${batchHint}${stage}；监听 ${session.callbackUrl} …`,
+    30,
+  );
 
   try {
     const text = await session.waitResult;
-    await options.onProgress?.("已收到回传，解析中…", 85);
+    await options.onProgress?.(`${batchHint}已收到回传，解析中…`, 85);
     return parseBridgeResult(text, req);
   } finally {
     options.onBridgeSession?.(null);
     session.close();
   }
+}
+
+/**
+ * 单批裁决（不切分）。路径：vscode.lm → OpenAI 兼容 → Chat 桥。
+ */
+async function runAiResolveOnce(
+  req: AiResolveRequestPayload,
+  options: RunAiResolveOptions = {},
+  batch?: AiBatchMeta,
+): Promise<AiResolveResponsePayload> {
+  if (!req.hunks.length) {
+    throw new Error("没有待解决的冲突块");
+  }
+
+  try {
+    return await runWithVscodeLm(req, options.onProgress);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg !== "NO_LM") {
+      if (hasOpenAi(options.openAi)) {
+        await options.onProgress?.("vscode.lm 失败，改用已配置 API…", 15);
+        return runAiResolveWithOpenAiCompat(req, options.openAi!, options.onProgress);
+      }
+    }
+  }
+
+  if (hasOpenAi(options.openAi)) {
+    await options.onProgress?.("尝试已配置的 OpenAI 兼容 API…", 12);
+    try {
+      return await runAiResolveWithOpenAiCompat(
+        req,
+        options.openAi!,
+        options.onProgress,
+      );
+    } catch {
+      // 继续 Chat 桥
+    }
+  }
+
+  return runAiResolveBridgeOnce(req, options, batch);
+}
+
+/**
+ * 1) 超长自动分批后逐批调用
+ * 2) 每批：vscode.lm → OpenAI 兼容 → Cursor Chat 桥
+ */
+export async function runAiResolve(
+  req: AiResolveRequestPayload,
+  options: RunAiResolveOptions = {},
+): Promise<AiResolveResponsePayload> {
+  if (!req.hunks.length) {
+    throw new Error("没有待解决的冲突块");
+  }
+
+  const batches = splitAiResolveBatches(req);
+  if (batches.length <= 1) {
+    return runAiResolveOnce(req, options);
+  }
+
+  await options.onProgress?.(
+    `冲突较多，自动分成 ${batches.length} 批（共 ${req.hunks.length} 块）…`,
+    5,
+  );
+
+  const parts: AiResolveResponsePayload[] = [];
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i]!;
+    const meta: AiBatchMeta = {
+      batchIndex: i + 1,
+      batchTotal: batches.length,
+    };
+    await options.onProgress?.(
+      `处理第 ${meta.batchIndex}/${meta.batchTotal} 批（${batch.hunks.length} 块）…`,
+      mapBatchProgress(i, batches.length, 5),
+    );
+
+    const batchOptions: RunAiResolveOptions = {
+      ...options,
+      onProgress: async (label, percent) => {
+        await options.onProgress?.(
+          `[${meta.batchIndex}/${meta.batchTotal}] ${label}`,
+          mapBatchProgress(i, batches.length, percent),
+        );
+      },
+    };
+
+    const part = await runAiResolveOnce(batch, batchOptions, meta);
+    parts.push(part);
+  }
+
+  await options.onProgress?.("合并分批结果…", 95);
+  return mergeBatchedResponses(parts, req.hunks, batches.length);
 }
 
 /** @deprecated 使用 runAiResolve */

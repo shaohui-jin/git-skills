@@ -10,10 +10,13 @@ export interface AiBridgeView {
   callbackUrl: string;
   prompt: string;
   promptFile: string;
+  conflictsFile?: string;
   openedChat: boolean;
   copied: boolean;
   pasted?: boolean;
   submitted?: boolean;
+  batchIndex?: number;
+  batchTotal?: number;
 }
 
 const props = defineProps<{
@@ -236,9 +239,19 @@ function onSubmitPaste(): void {
 
       <div v-if="bridge && busy" class="ai-bridge-box">
         <div class="ai-error-title">正在等待 Cursor Chat 回传</div>
+        <p
+          v-if="bridge.batchTotal && bridge.batchTotal > 1"
+          class="muted"
+          style="margin: 0 0 6px"
+        >
+          自动分批：第 {{ bridge.batchIndex }}/{{ bridge.batchTotal }} 批（本批完成后会继续下一批）
+        </p>
         <p class="muted" style="margin: 0">{{ autoStatus }}</p>
         <p class="muted" style="margin: 6px 0 0">
           监听：<code>{{ bridge.callbackUrl }}</code>
+        </p>
+        <p v-if="bridge.conflictsFile" class="muted" style="margin: 6px 0 0">
+          冲突数据文件：<code>{{ bridge.conflictsFile }}</code>
         </p>
         <div class="ai-error-actions" style="margin-top: 8px">
           <button type="button" class="btn secondary tiny" @click="onCopyPrompt">
@@ -257,7 +270,7 @@ function onSubmitPaste(): void {
         <ol v-if="showOps" class="config-steps" style="margin: 8px 0 0; padding-left: 18px">
           <li>若 Chat 未打开：手动打开 Cursor Chat / Agent（可用当前模型）。</li>
           <li>点「复制提示词」→ 在 Chat 输入框 Ctrl+V → 发送。</li>
-          <li>Agent 模式：按提示词内 curl 把 JSON POST 到回调 URL（可先「复制回调 URL」）。</li>
+          <li>Agent 模式：先 Read 冲突数据 JSON 文件，再按提示词 curl 把结果 POST 到回调 URL。</li>
           <li>普通 Chat：把模型输出的 JSON 贴到下方 →「粘贴结果并应用」。</li>
           <li>仍无回传：输出面板选「Git Insight」看日志，或 Reload Window 后重试。</li>
         </ol>

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
+import type { AiBatchMeta } from "./aiResolveBatch.js";
 import type { AiResolveRequestPayload } from "./aiResolveTypes.js";
 import {
   buildAiSystemPrompt,
@@ -17,6 +18,8 @@ export interface AiBridgeSession {
   callbackUrl: string;
   prompt: string;
   promptFile: string;
+  /** 冲突数据 JSON（提示词内仅引用路径，避免粘贴超长） */
+  conflictsFile: string;
   waitResult: Promise<string>;
   cancel: (reason?: string) => void;
   submitText: (text: string) => void;
@@ -94,22 +97,32 @@ function closeAiBridgeServer(): void {
 export function buildCursorChatPrompt(
   req: AiResolveRequestPayload,
   callbackUrl: string,
+  conflictsFile: string,
+  batch?: AiBatchMeta,
 ): string {
   const allowMerge = req.rules.includes("mergeWhenPossible");
   const system = buildAiSystemPrompt(req.rules, allowMerge);
-  const user = buildAiUserPrompt(req);
+  const hunkCount = req.hunks.length;
+  const batchLine =
+    batch && batch.batchTotal > 1
+      ? `本请求为自动分批第 ${batch.batchIndex}/${batch.batchTotal} 批（只裁决本文件内 hunk，不要臆造其它批）。`
+      : "";
   return [
     `# Git Insight · 合并冲突 AI 选边`,
     ``,
-    `请根据下列规章制度与冲突数据，给出每个冲突块的裁决。`,
+    `请根据规章制度与冲突数据文件，给出每个冲突块的裁决。`,
+    batchLine,
     ``,
     `## 规章与角色`,
     system,
     ``,
-    `## 冲突数据（JSON）`,
-    "```json",
-    user,
-    "```",
+    `## 冲突数据文件（必须先读取）`,
+    `请用 Read 工具读取下列 JSON 文件（本批共 ${hunkCount} 个 hunk；不要凭猜测或摘要臆造）：`,
+    `\`${conflictsFile}\``,
+    ``,
+    `文件字段：into_online / from_mine / rules / extraNotes / hunks[]`,
+    `（每项含 id, path, left_online, right_mine, base, oursCommits, theirsCommits）。`,
+    `必须覆盖本文件中每一个 hunk；id 与 path 原样返回（id 形如 path::h-N，跨文件唯一）。`,
     ``,
     `## 完成后如何回传（二选一）`,
     ``,
@@ -207,6 +220,7 @@ export async function tryOpenCursorChat(
 export async function startAiResolveBridge(
   req: AiResolveRequestPayload,
   timeoutMs = 5 * 60 * 1000,
+  batch?: AiBatchMeta,
 ): Promise<AiBridgeSession> {
   if (active) {
     cancelAiBridge("上一次 AI 选边等待已中断");
@@ -278,8 +292,15 @@ export async function startAiResolveBridge(
   void waitResult.finally(() => clearTimeout(timer));
 
   const callbackUrl = `http://127.0.0.1:${port}/result`;
-  const prompt = buildCursorChatPrompt(req, callbackUrl);
-  const promptFile = join(tmpdir(), `git-insight-ai-prompt-${port}.md`);
+  const batchTag =
+    batch && batch.batchTotal > 1 ? `-b${batch.batchIndex}of${batch.batchTotal}` : "";
+  const conflictsFile = join(
+    tmpdir(),
+    `git-insight-ai-conflicts-${port}${batchTag}.json`,
+  );
+  const promptFile = join(tmpdir(), `git-insight-ai-prompt-${port}${batchTag}.md`);
+  await writeFile(conflictsFile, buildAiUserPrompt(req), "utf8");
+  const prompt = buildCursorChatPrompt(req, callbackUrl, conflictsFile, batch);
   await writeFile(promptFile, prompt, "utf8");
 
   return {
@@ -287,6 +308,7 @@ export async function startAiResolveBridge(
     callbackUrl,
     prompt,
     promptFile,
+    conflictsFile,
     waitResult,
     cancel: (reason) => {
       settleErr(new Error(reason ?? "已取消"));

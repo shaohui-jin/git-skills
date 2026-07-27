@@ -44,8 +44,7 @@ function onApplyResolve(payload: {
   });
 }
 
-const MAX_AI_HUNK_CHARS = 1200;
-const MAX_AI_HUNKS = 30;
+const MAX_AI_HUNK_CHARS = 4000;
 
 function truncateAiText(text: string, max: number): string {
   if (text.length <= max) {
@@ -54,8 +53,9 @@ function truncateAiText(text: string, max: number): string {
   return `${text.slice(0, max)}\n…(已截断，共 ${text.length} 字)`;
 }
 
+/** 只截断单块文本，不再丢弃超限 hunk；宿主侧按批数/字符自动分批 */
 function shrinkAiPayload(payload: AiResolveRequestPayload): AiResolveRequestPayload {
-  const hunks = payload.hunks.slice(0, MAX_AI_HUNKS).map((h) => ({
+  const hunks = payload.hunks.map((h) => ({
     ...h,
     leftText: truncateAiText(h.leftText, MAX_AI_HUNK_CHARS),
     rightText: truncateAiText(h.rightText, MAX_AI_HUNK_CHARS),
@@ -118,9 +118,8 @@ async function onAiResolve(payload: AiResolveRequestPayload): Promise<void> {
     status.value = aiProgressLabel.value;
 
     const slim = shrinkAiPayload(payload);
-    if (payload.hunks.length > slim.hunks.length) {
-      aiProgressLabel.value = `宿主已连通（v${ver}），发送前 ${slim.hunks.length}/${payload.hunks.length} 个冲突块…`;
-    }
+    aiProgressLabel.value = `宿主已连通（v${ver}），发送 ${slim.hunks.length} 个冲突块…`;
+    status.value = aiProgressLabel.value;
 
     aiWatchdog = setTimeout(() => {
       if (aiBusy.value && (aiProgressPercent.value ?? 0) < 3) {
@@ -342,19 +341,26 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       callbackUrl: msg.callbackUrl,
       prompt: msg.prompt,
       promptFile: msg.promptFile,
+      conflictsFile: msg.conflictsFile,
       openedChat: msg.openedChat,
       copied: msg.copied,
       pasted: msg.pasted,
       submitted: msg.submitted,
+      batchIndex: msg.batchIndex,
+      batchTotal: msg.batchTotal,
     };
+    const batchPrefix =
+      msg.batchTotal && msg.batchTotal > 1
+        ? `第 ${msg.batchIndex ?? "?"}/${msg.batchTotal} 批 · `
+        : "";
     if (msg.submitted) {
-      aiProgressLabel.value = `已自动发送，监听 ${msg.callbackUrl}`;
+      aiProgressLabel.value = `${batchPrefix}已自动发送，监听 ${msg.callbackUrl}`;
     } else if (msg.pasted) {
-      aiProgressLabel.value = `已粘贴到 Chat，监听 ${msg.callbackUrl}`;
+      aiProgressLabel.value = `${batchPrefix}已粘贴到 Chat，监听 ${msg.callbackUrl}`;
     } else if (msg.copied) {
-      aiProgressLabel.value = `已复制提示词，监听 ${msg.callbackUrl}`;
+      aiProgressLabel.value = `${batchPrefix}已复制提示词，监听 ${msg.callbackUrl}`;
     } else {
-      aiProgressLabel.value = `请复制提示词，监听 ${msg.callbackUrl}`;
+      aiProgressLabel.value = `${batchPrefix}请复制提示词，监听 ${msg.callbackUrl}`;
     }
     aiProgressPercent.value = 30;
     status.value = aiProgressLabel.value;

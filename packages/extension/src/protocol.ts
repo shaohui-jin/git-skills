@@ -237,10 +237,13 @@ export type HostMessage =
       callbackUrl: string;
       prompt: string;
       promptFile: string;
+      conflictsFile: string;
       openedChat: boolean;
       copied: boolean;
       pasted?: boolean;
       submitted?: boolean;
+      batchIndex?: number;
+      batchTotal?: number;
     }
   | {
       type: "aiResolveConflictsResult";
