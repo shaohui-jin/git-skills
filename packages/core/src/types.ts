@@ -48,6 +48,9 @@ export interface CommitRef {
   author: string;
   message?: string;
   pr?: string;
+  /** author-time（Unix 秒），来自 blame porcelain */
+  time?: number;
+  authorEmail?: string;
 }
 
 export interface ConflictHunk {

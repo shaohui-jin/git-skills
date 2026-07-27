@@ -83,15 +83,30 @@ async function blameRange(
   const lines = stdout.split("\n");
   let currentSha = "";
   let author = "";
+  let authorEmail = "";
+  let authorTime: number | undefined;
   let summary = "";
 
   for (const line of lines) {
     if (/^[0-9a-f]{40}/.test(line)) {
       currentSha = line.slice(0, 40);
+      author = "";
+      authorEmail = "";
+      authorTime = undefined;
+      summary = "";
       continue;
     }
     if (line.startsWith("author ")) {
       author = line.slice("author ".length);
+      continue;
+    }
+    if (line.startsWith("author-mail ")) {
+      authorEmail = line.slice("author-mail ".length).replace(/^<|>$/g, "");
+      continue;
+    }
+    if (line.startsWith("author-time ")) {
+      const n = Number(line.slice("author-time ".length));
+      authorTime = Number.isFinite(n) ? n : undefined;
       continue;
     }
     if (line.startsWith("summary ")) {
@@ -103,6 +118,8 @@ async function blameRange(
         sha: currentSha,
         author,
         message: summary,
+        time: authorTime,
+        authorEmail: authorEmail || undefined,
       });
     }
   }

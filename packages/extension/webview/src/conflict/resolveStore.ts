@@ -1,9 +1,13 @@
-export type StashChoice = "ours" | "theirs" | "base";
+export type StashChoice = "ours" | "theirs" | "base" | "custom";
 
 export interface StashedFileResolve {
   path: string;
   /** hunk / conflict 块 id → 选择 */
   choices: Record<string, StashChoice>;
+  /** custom 选边时的正文 */
+  customByHunk?: Record<string, string>;
+  /** AI 说明 */
+  reasons?: Record<string, string>;
   /** 应用选择后的完整文件内容 */
   resolvedContent: string;
   updatedAt: number;

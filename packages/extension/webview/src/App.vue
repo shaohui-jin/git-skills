@@ -6,6 +6,11 @@ import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
 import GitConfigPanel from "./GitConfigPanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
+import type {
+  AiResolveHunkResult,
+  AiResolveRequestPayload,
+} from "./conflict/aiResolveTypes";
+import type { AiBridgeView } from "./AiResolveDialog.vue";
 import { normalizeBranches, type BranchOption } from "./graph/branchTree";
 import { overviewReport, pathReport } from "./graph/branchPathReport";
 import type {
@@ -37,6 +42,115 @@ function onApplyResolve(payload: {
     files: payload.files,
     push: payload.push,
   });
+}
+
+const MAX_AI_HUNK_CHARS = 1200;
+const MAX_AI_HUNKS = 30;
+
+function truncateAiText(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, max)}\n…(已截断，共 ${text.length} 字)`;
+}
+
+function shrinkAiPayload(payload: AiResolveRequestPayload): AiResolveRequestPayload {
+  const hunks = payload.hunks.slice(0, MAX_AI_HUNKS).map((h) => ({
+    ...h,
+    leftText: truncateAiText(h.leftText, MAX_AI_HUNK_CHARS),
+    rightText: truncateAiText(h.rightText, MAX_AI_HUNK_CHARS),
+    baseText: truncateAiText(h.baseText, Math.floor(MAX_AI_HUNK_CHARS / 2)),
+    oursCommits: h.oursCommits.slice(0, 6),
+    theirsCommits: h.theirsCommits.slice(0, 6),
+  }));
+  return { ...payload, hunks };
+}
+
+/** 等待宿主 pong；用于确认扩展宿主已加载且通道可用 */
+function waitForPong(nonce: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onMsg);
+      reject(
+        new Error(
+          "宿主 ping 无响应。扩展宿主可能不是 0.1.1+，或面板连到了旧实例。\n" +
+            "请：命令面板 → Developer: Reload Window，再打开 Git Insight 重试。\n" +
+            "也可查看：查看 → 输出 → 下拉选「Git Insight」。",
+        ),
+      );
+    }, timeoutMs);
+    function onMsg(ev: MessageEvent): void {
+      const msg = ev.data as HostMessage;
+      if (msg?.type === "pong" && msg.nonce === nonce) {
+        clearTimeout(timer);
+        window.removeEventListener("message", onMsg);
+        resolve(msg.extensionVersion || "unknown");
+      }
+    }
+    window.addEventListener("message", onMsg);
+  });
+}
+
+function toPlainJson<T>(value: T): T {
+  // postMessage 只能传结构化克隆数据；Vue reactive Proxy 会触发 DataCloneError
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function onAiResolve(payload: AiResolveRequestPayload): Promise<void> {
+  aiBusy.value = true;
+  aiProgressPercent.value = 0;
+  aiProgressLabel.value = "检测宿主通道（ping）…";
+  aiError.value = null;
+  aiBridge.value = null;
+  aiResultHunks.value = null;
+  status.value = "AI 选边中…";
+  error.value = null;
+  if (aiWatchdog) {
+    clearTimeout(aiWatchdog);
+  }
+
+  const nonce = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    vscode.postMessage(toPlainJson({ type: "ping" as const, nonce }));
+    const ver = await waitForPong(nonce, 5_000);
+    aiProgressPercent.value = 2;
+    aiProgressLabel.value = `宿主已连通（v${ver}），发送冲突数据…`;
+    status.value = aiProgressLabel.value;
+
+    const slim = shrinkAiPayload(payload);
+    if (payload.hunks.length > slim.hunks.length) {
+      aiProgressLabel.value = `宿主已连通（v${ver}），发送前 ${slim.hunks.length}/${payload.hunks.length} 个冲突块…`;
+    }
+
+    aiWatchdog = setTimeout(() => {
+      if (aiBusy.value && (aiProgressPercent.value ?? 0) < 3) {
+        aiBusy.value = false;
+        aiError.value =
+          "已 ping 通宿主，但 AI 请求无回执（可能被载荷拦截）。\n" +
+          "请打开：查看 → 输出 →「Git Insight」，把日志复制给我。";
+        status.value = "AI 选边失败：无回执";
+        error.value = aiError.value;
+      }
+    }, 12_000);
+
+    const msg = toPlainJson({
+      type: "aiResolveConflicts" as const,
+      into: slim.into,
+      from: slim.from,
+      rules: slim.rules,
+      extraNotes: slim.extraNotes,
+      hunks: slim.hunks,
+    });
+    vscode.postMessage(msg);
+  } catch (err) {
+    aiBusy.value = false;
+    const raw = err instanceof Error ? err.message : String(err);
+    aiError.value = /DataCloneError|could not be cloned/i.test(raw)
+      ? `发送失败：消息里含无法克隆的数据（多为 Vue 响应式对象）。\n原始错误：${raw}`
+      : raw;
+    status.value = "AI 选边失败";
+    error.value = aiError.value;
+  }
 }
 
 function onRequestCreateMr(payload: { into: string; from: string }): void {
@@ -98,6 +212,21 @@ const selectedPath = ref<{ tipName: string; chain: string[] } | null>(null);
 const preview = ref<ConflictBlameResult | null>(null);
 /** 最近一次一键解决产生的临时分支，供申请 MR 默认源分支 */
 const lastTempBranch = ref<string | null>(null);
+const aiBusy = ref(false);
+const aiProgressPercent = ref<number | null>(null);
+const aiProgressLabel = ref("");
+const aiResultToken = ref(0);
+const aiResultHunks = ref<AiResolveHunkResult[] | null>(null);
+const aiError = ref<string | null>(null);
+const aiBridge = ref<AiBridgeView | null>(null);
+let aiWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+function clearAiWatchdog(): void {
+  if (aiWatchdog) {
+    clearTimeout(aiWatchdog);
+    aiWatchdog = null;
+  }
+}
 /** 一键解决并推送是否已成功（与 into/from 绑定） */
 const resolvePushDone = ref<{ into: string; from: string; tempBranch: string } | null>(
   null,
@@ -173,16 +302,76 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     if (typeof msg.percent === "number") {
       busyPercent.value = msg.percent;
     }
+    if (aiBusy.value) {
+      if (msg.label) {
+        aiProgressLabel.value = msg.label;
+      }
+      if (typeof msg.percent === "number") {
+        aiProgressPercent.value = msg.percent;
+      }
+      if (!msg.busy && aiProgressPercent.value != null && aiProgressPercent.value < 100) {
+        // 宿主结束 busy；若尚未收到 result，保持 aiBusy 等 result/error
+      }
+    }
     if (!msg.busy) {
       loadingAction.value = "";
       busyPercent.value = null;
     }
     return;
   }
+  if (msg.type === "pong") {
+    // waitForPong 的独立 listener 会处理；此处忽略
+    return;
+  }
   if (msg.type === "progress") {
     busy.value = true;
     busyLabel.value = msg.label;
     busyPercent.value = msg.percent;
+    if (aiBusy.value) {
+      clearAiWatchdog();
+      aiProgressLabel.value = msg.label || "AI 选边中…";
+      aiProgressPercent.value = msg.percent;
+      status.value = `${aiProgressLabel.value} ${Math.round(msg.percent)}%`;
+    }
+    return;
+  }
+  if (msg.type === "aiResolveBridgeReady") {
+    clearAiWatchdog();
+    aiBridge.value = {
+      port: msg.port,
+      callbackUrl: msg.callbackUrl,
+      prompt: msg.prompt,
+      promptFile: msg.promptFile,
+      openedChat: msg.openedChat,
+      copied: msg.copied,
+      pasted: msg.pasted,
+      submitted: msg.submitted,
+    };
+    if (msg.submitted) {
+      aiProgressLabel.value = `已自动发送，监听 ${msg.callbackUrl}`;
+    } else if (msg.pasted) {
+      aiProgressLabel.value = `已粘贴到 Chat，监听 ${msg.callbackUrl}`;
+    } else if (msg.copied) {
+      aiProgressLabel.value = `已复制提示词，监听 ${msg.callbackUrl}`;
+    } else {
+      aiProgressLabel.value = `请复制提示词，监听 ${msg.callbackUrl}`;
+    }
+    aiProgressPercent.value = 30;
+    status.value = aiProgressLabel.value;
+    return;
+  }
+  if (msg.type === "aiResolveConflictsResult") {
+    clearAiWatchdog();
+    aiBusy.value = false;
+    aiBridge.value = null;
+    aiProgressPercent.value = 100;
+    aiProgressLabel.value = "完成";
+    aiResultHunks.value = msg.hunks;
+    aiResultToken.value += 1;
+    aiError.value = null;
+    status.value = msg.model ? `AI 选边完成（${msg.model}）` : "AI 选边完成";
+    busy.value = false;
+    busyPercent.value = null;
     return;
   }
   if (msg.type === "error") {
@@ -190,6 +379,14 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     status.value = msg.message;
     loadingAction.value = "";
     mrBusy.value = false;
+    if (aiBusy.value) {
+      clearAiWatchdog();
+      aiBusy.value = false;
+      aiBridge.value = null;
+      aiError.value = msg.message;
+      aiProgressPercent.value = null;
+      aiProgressLabel.value = "";
+    }
     return;
   }
   if (msg.type === "workspace") {
@@ -485,6 +682,9 @@ function saveGitConfig(payload: {
   mrMethod: GitInsightConfigView["mrMethod"];
   githubToken: string;
   gitlabToken: string;
+  aiApiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
 }): void {
   vscode.postMessage({
     type: "saveGitConfig",
@@ -804,8 +1004,31 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               :preview-mode="previewMode"
               :can-create-mr="canCreateMr"
               :create-mr-block-reason="createMrBlockReason"
+              :ai-busy="aiBusy"
+              :ai-progress-percent="aiProgressPercent"
+              :ai-progress-label="aiProgressLabel"
+              :ai-result-token="aiResultToken"
+              :ai-result-hunks="aiResultHunks"
+              :ai-error="aiError"
+              :ai-bridge="aiBridge"
               @apply-resolve="onApplyResolve"
               @request-create-mr="onRequestCreateMr"
+              @ai-resolve="onAiResolve"
+              @ai-copy-prompt="vscode.postMessage({ type: 'aiResolveCopyPrompt' })"
+              @ai-cancel-bridge="
+                vscode.postMessage({ type: 'aiResolveCancelBridge' });
+                aiBusy = false;
+                aiBridge = null;
+              "
+              @ai-submit-paste="
+                (t) => vscode.postMessage({ type: 'aiResolveSubmitPaste', text: t })
+              "
+              @clear-ai-error="
+                aiError = null;
+                aiBridge = null;
+                aiProgressLabel = '';
+                aiProgressPercent = null;
+              "
             >
               <template #summary>
                 <div class="card preview-summary">

@@ -46,6 +46,9 @@ export type WebviewRequest =
         mrMethod: "cli" | "download-cli" | "token" | "browser" | null;
         githubToken?: string;
         gitlabToken?: string;
+        aiApiBaseUrl?: string;
+        aiApiKey?: string;
+        aiModel?: string;
       };
     }
   | {
@@ -61,7 +64,39 @@ export type WebviewRequest =
       type: "cliAuthLogin";
       scope: "system" | "bundled";
       kind: "gh" | "glab";
-    };
+    }
+  | { type: "ping"; nonce: string }
+  | {
+      type: "aiResolveConflicts";
+      into: string;
+      from: string;
+      rules: Array<"preferMine" | "preferOnline" | "newerWins" | "mergeWhenPossible">;
+      extraNotes: string;
+      hunks: Array<{
+        id: string;
+        path: string;
+        leftText: string;
+        rightText: string;
+        baseText: string;
+        oursCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+        theirsCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+      }>;
+    }
+  | { type: "aiResolveCancelBridge" }
+  | { type: "aiResolveSubmitPaste"; text: string }
+  | { type: "aiResolveCopyPrompt" };
 
 export interface VsCodeApi {
   postMessage(message: WebviewRequest): void;

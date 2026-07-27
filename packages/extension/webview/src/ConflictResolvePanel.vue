@@ -12,12 +12,17 @@ import {
 } from "./conflict/buildChangeHunks";
 import { highlightLines } from "./conflict/highlight";
 import {
-  clearStash,
   loadStash,
   saveStash,
   type StashedMergeResolve,
 } from "./conflict/resolveStore";
-import type { ConflictFile } from "./types";
+import type {
+  AiResolveHunkResult,
+  AiResolveRequestPayload,
+  AiResolveRuleId,
+} from "./conflict/aiResolveTypes";
+import type { CommitRef, ConflictFile } from "./types";
+import AiResolveDialog, { type AiBridgeView } from "./AiResolveDialog.vue";
 
 const props = defineProps<{
   files: ConflictFile[];
@@ -30,6 +35,14 @@ const props = defineProps<{
   canCreateMr?: boolean;
   /** 不可点时的原因 */
   createMrBlockReason?: string;
+  /** 由 App 转发的 AI 进度 / 结果 */
+  aiBusy?: boolean;
+  aiProgressPercent?: number | null;
+  aiProgressLabel?: string;
+  aiResultToken?: number;
+  aiResultHunks?: AiResolveHunkResult[] | null;
+  aiError?: string | null;
+  aiBridge?: AiBridgeView | null;
 }>();
 
 const emit = defineEmits<{
@@ -42,11 +55,18 @@ const emit = defineEmits<{
     },
   ];
   requestCreateMr: [payload: { into: string; from: string }];
+  aiResolve: [payload: AiResolveRequestPayload];
+  /** 关闭弹层时清掉 App 侧错误态 */
+  clearAiError: [];
+  aiCopyPrompt: [];
+  aiCancelBridge: [];
+  aiSubmitPaste: [text: string];
 }>();
 
 const activePath = ref("");
 const hunksByPath = ref<Record<string, ChangeHunk[]>>({});
 const stashNote = ref("");
+const aiDialogOpen = ref(false);
 const activeHunkId = ref<string | null>(null);
 /** 导航时短暂闪烁，强化「跳到了这里」的感知 */
 const flashHunkId = ref<string | null>(null);
@@ -119,6 +139,9 @@ const highlighted = computed(() => {
         ];
         return highlightLines(block, path);
       }
+      if (h.action === "custom") {
+        return highlightLines(h.customLines ?? [], path);
+      }
       if (h.action === "accept-left" || h.action === "ignore-right") {
         return highlightLines(h.leftLines, path);
       }
@@ -136,6 +159,36 @@ const highlighted = computed(() => {
     })(),
   }));
 });
+
+function uniqCommits(list: CommitRef[]): CommitRef[] {
+  const map = new Map<string, CommitRef>();
+  for (const c of list) {
+    if (!map.has(c.sha)) {
+      map.set(c.sha, c);
+    }
+  }
+  return [...map.values()];
+}
+
+function commitsForFile(path: string): { ours: CommitRef[]; theirs: CommitRef[] } {
+  const file = props.files.find((f) => f.path === path);
+  if (!file) {
+    return { ours: [], theirs: [] };
+  }
+  // 转成纯对象，避免 Vue Proxy 经 postMessage 时 DataCloneError
+  const plain = (c: CommitRef): CommitRef => ({
+    sha: String(c.sha),
+    author: String(c.author ?? ""),
+    message: c.message != null ? String(c.message) : undefined,
+    time: typeof c.time === "number" ? c.time : undefined,
+    authorEmail: c.authorEmail != null ? String(c.authorEmail) : undefined,
+    pr: c.pr != null ? String(c.pr) : undefined,
+  });
+  return {
+    ours: uniqCommits(file.hunks.flatMap((h) => h.oursCommits)).map(plain),
+    theirs: uniqCommits(file.hunks.flatMap((h) => h.theirsCommits)).map(plain),
+  };
+}
 
 const highlightedMap = computed(() => {
   const map = new Map<string, (typeof highlighted.value)[0]>();
@@ -161,6 +214,12 @@ function initFromFiles(): void {
         const choice = fileStash.choices[hunk.id];
         if (choice) {
           hunk.action = choiceToAction(choice);
+          if (choice === "custom" && fileStash.customByHunk?.[hunk.id] != null) {
+            hunk.customLines = fileStash.customByHunk[hunk.id]!.split("\n");
+          }
+          if (fileStash.reasons?.[hunk.id]) {
+            hunk.aiReason = fileStash.reasons[hunk.id];
+          }
         }
       }
     }
@@ -200,7 +259,11 @@ function updateHunk(id: string, action: HunkAction): void {
   }
   const cur = list[idx]!;
   const updated = [...list];
-  updated[idx] = { ...cur, action };
+  updated[idx] = {
+    ...cur,
+    action,
+    customLines: action === "custom" ? cur.customLines : undefined,
+  };
   hunksByPath.value = { ...hunksByPath.value, [path]: updated };
   activeHunkId.value = id;
 }
@@ -319,16 +382,26 @@ function onMergeScroll(ev: Event): void {
 function buildStash(): StashedMergeResolve {
   const files: StashedMergeResolve["files"] = {};
   for (const [path, list] of Object.entries(hunksByPath.value)) {
-    const choices: Record<string, "ours" | "theirs"> = {};
+    const choices: StashedMergeResolve["files"][string]["choices"] = {};
+    const customByHunk: Record<string, string> = {};
+    const reasons: Record<string, string> = {};
     for (const h of list) {
       const c = actionToChoice(h.action);
       if (c) {
         choices[h.id] = c;
       }
+      if (h.action === "custom" && h.customLines) {
+        customByHunk[h.id] = h.customLines.join("\n");
+      }
+      if (h.aiReason) {
+        reasons[h.id] = h.aiReason;
+      }
     }
     files[path] = {
       path,
       choices,
+      customByHunk: Object.keys(customByHunk).length ? customByHunk : undefined,
+      reasons: Object.keys(reasons).length ? reasons : undefined,
       resolvedContent: applyHunkActions(list),
       updatedAt: Date.now(),
     };
@@ -342,17 +415,161 @@ function buildStash(): StashedMergeResolve {
   };
 }
 
-function stashNow(): void {
-  const stash = buildStash();
-  saveStash(stash);
-  stashNote.value = `已暂存 ${allStats.value.resolved}/${allStats.value.conflicts} 冲突 · ${new Date(stash.updatedAt).toLocaleString()}`;
+/** 仅重置界面选边，不清理 localStorage */
+function resetStash(): void {
+  const next: Record<string, ChangeHunk[]> = {};
+  for (const f of props.files) {
+    next[f.path] = buildChangeHunks(f);
+  }
+  hunksByPath.value = next;
+  activePath.value = props.files[0]?.path ?? "";
+  const first = next[activePath.value]?.find((h) => h.kind === "conflict");
+  activeHunkId.value = first?.id ?? next[activePath.value]?.[0]?.id ?? null;
+  stashNote.value = "已重置选边（未清除本地暂存缓存）";
 }
 
-function resetStash(): void {
-  clearStash(props.cwd, props.into, props.from);
-  initFromFiles();
-  stashNote.value = "已清除暂存";
+function openAiDialog(): void {
+  if (allStats.value.conflicts === 0) {
+    stashNote.value = "没有冲突可交给 AI";
+    return;
+  }
+  if (props.previewMode) {
+    stashNote.value = "预览模式不支持 AI 选边，请在扩展中使用";
+    return;
+  }
+  aiDialogOpen.value = true;
 }
+
+function closeAiDialog(): void {
+  if (props.aiBusy) {
+    return;
+  }
+  aiDialogOpen.value = false;
+  emit("clearAiError");
+}
+
+function onAiConfirm(payload: { rules: AiResolveRuleId[]; extraNotes: string }): void {
+  const hunks: AiResolveRequestPayload["hunks"] = [];
+  for (const [path, list] of Object.entries(hunksByPath.value)) {
+    const { ours, theirs } = commitsForFile(path);
+    for (const h of list) {
+      if (h.kind !== "conflict") {
+        continue;
+      }
+      hunks.push({
+        // 各文件本地 id 均从 h-0 起算；带 path 前缀避免 AI 回传/归一化时互相覆盖
+        id: `${path}::${h.id}`,
+        path,
+        leftText: h.leftLines.join("\n"),
+        rightText: h.rightLines.join("\n"),
+        baseText: h.baseLines.join("\n"),
+        oursCommits: ours,
+        theirsCommits: theirs,
+      });
+    }
+  }
+  if (!hunks.length) {
+    stashNote.value = "没有待解决的冲突块";
+    return;
+  }
+  stashNote.value = "AI 选边中…";
+  emit("aiResolve", {
+    into: props.into,
+    from: props.from,
+    rules: payload.rules,
+    extraNotes: payload.extraNotes,
+    hunks,
+  });
+}
+
+function applyAiResults(results: AiResolveHunkResult[]): void {
+  const norm = (p: string) => p.replace(/\\/g, "/");
+  const byKey = new Map(results.map((r) => [`${norm(r.path)}\0${r.id}`, r]));
+  const next: Record<string, ChangeHunk[]> = {};
+  let applied = 0;
+  let pending = 0;
+  let unmatched = 0;
+  for (const [path, list] of Object.entries(hunksByPath.value)) {
+    next[path] = list.map((h) => {
+      if (h.kind !== "conflict") {
+        return h;
+      }
+      const r = byKey.get(`${norm(path)}\0${h.id}`);
+      if (!r) {
+        unmatched += 1;
+        return h;
+      }
+      const copy: ChangeHunk = { ...h, aiReason: r.reason };
+      if (r.choice === "ours") {
+        copy.action = "accept-left";
+        copy.customLines = undefined;
+        applied += 1;
+      } else if (r.choice === "theirs") {
+        copy.action = "accept-right";
+        copy.customLines = undefined;
+        applied += 1;
+      } else if (r.choice === "merge" && r.mergedContent != null) {
+        copy.action = "custom";
+        copy.customLines = r.mergedContent.replace(/\r\n/g, "\n").split("\n");
+        applied += 1;
+      } else {
+        copy.action = "pending";
+        copy.customLines = undefined;
+        pending += 1;
+      }
+      return copy;
+    });
+  }
+  hunksByPath.value = next;
+  saveStash(buildStash());
+  const miss =
+    unmatched > 0 ? `，未匹配 ${unmatched}（请重试 AI 或手动选边）` : "";
+  stashNote.value = `AI 选边完成：已应用 ${applied}，仍待人工 ${pending}${miss}`;
+  aiDialogOpen.value = false;
+}
+
+watch(
+  () => props.aiResultToken,
+  (token) => {
+    if (!token || !props.aiResultHunks?.length) {
+      return;
+    }
+    applyAiResults(props.aiResultHunks);
+  },
+);
+
+watch(
+  () => props.aiError,
+  (err) => {
+    if (!err) {
+      return;
+    }
+    stashNote.value = err;
+    // 失败时保持弹层打开，方便看报错 / 复制
+    aiDialogOpen.value = true;
+  },
+);
+
+watch(
+  () => props.aiBusy,
+  (busy) => {
+    if (busy) {
+      stashNote.value = props.aiProgressLabel
+        ? `${props.aiProgressLabel} ${props.aiProgressPercent ?? 0}%`
+        : "AI 选边中…";
+    }
+  },
+);
+
+watch(
+  () => [props.aiProgressLabel, props.aiProgressPercent] as const,
+  ([label, pct]) => {
+    if (!props.aiBusy || !label) {
+      return;
+    }
+    stashNote.value = `${label} ${pct ?? 0}%`;
+  },
+);
 
 function canApplyResolve(): boolean {
   if (props.previewMode) {
@@ -436,6 +653,7 @@ function rowClass(h: ChangeHunk): Array<string | Record<string, boolean>> {
       "hunk-resolved": isConflictResolved(h),
       "hunk-chose-left": choseLeft(h),
       "hunk-chose-right": choseRight(h),
+      "hunk-chose-custom": h.action === "custom",
     },
   ];
 }
@@ -497,23 +715,24 @@ const resultLineStarts = computed(() => {
           </span>
         </div>
         <p class="muted resolve-tip">
-          左栏=线上目标，右栏=我的分支。选边后可暂存；「一键解决」在独立 worktree
-          中把我的变更合进线上并推送（不切换当前分支），再可申请 MR。
+          左栏=线上目标，右栏=我的分支。可用「AI 选边」或手动选边；「一键解决」在独立
+          worktree 中把我的变更合进线上并推送（不切换当前分支），再可申请 MR。
         </p>
         <div class="resolve-actions">
           <button
             type="button"
             class="btn"
-            :disabled="allStats.conflicts === 0"
-            @click="stashNow"
+            :disabled="allStats.conflicts === 0 || aiBusy || previewMode"
+            title="按规则调用模型选边，结果回填后仍需人工确认"
+            @click="openAiDialog"
           >
-            暂存结果
+            {{ aiBusy ? "AI 选边中…" : "AI 选边" }}
           </button>
           <button
             type="button"
             class="btn"
-            :disabled="!canApplyResolve()"
-            title="在独立 worktree 中创建临时分支并应用暂存后推送（不改当前分支）"
+            :disabled="!canApplyResolve() || aiBusy"
+            title="在独立 worktree 中创建临时分支并应用选边后推送（不改当前分支）"
             @click="applyResolveNow"
           >
             一键解决并推送
@@ -521,7 +740,7 @@ const resultLineStarts = computed(() => {
           <button
             type="button"
             class="btn"
-            :disabled="previewMode || !into || !from || !canCreateMr"
+            :disabled="previewMode || !into || !from || !canCreateMr || aiBusy"
             :title="
               createMrBlockReason ||
               '需先完成一键解决并推送，且在 Git 配置中选好可用方式'
@@ -536,11 +755,33 @@ const resultLineStarts = computed(() => {
           >
             一键申请 MR
           </button>
-          <button type="button" class="btn secondary" @click="resetStash">清除暂存</button>
+          <button
+            type="button"
+            class="btn secondary"
+            :disabled="aiBusy"
+            title="重置界面选边，不清理本地暂存缓存"
+            @click="resetStash"
+          >
+            清除暂存
+          </button>
           <span v-if="stashNote" class="stash-note">{{ stashNote }}</span>
         </div>
       </div>
     </div>
+
+    <AiResolveDialog
+      :open="aiDialogOpen || !!aiBusy"
+      :busy="!!aiBusy"
+      :progress-percent="aiProgressPercent"
+      :progress-label="aiProgressLabel || '准备发送冲突数据…'"
+      :error="aiError"
+      :bridge="aiBridge"
+      @close="closeAiDialog"
+      @confirm="onAiConfirm"
+      @copy-prompt="emit('aiCopyPrompt')"
+      @cancel-bridge="emit('aiCancelBridge')"
+      @submit-paste="(t) => emit('aiSubmitPaste', t)"
+    />
 
     <div class="resolve-layout">
       <aside class="resolve-files card">
@@ -652,6 +893,10 @@ const resultLineStarts = computed(() => {
                 重置本文件
               </button>
             </div>
+            <p v-if="activeHunk?.aiReason" class="ai-reason muted">
+              AI：{{ activeHunk.aiReason }}
+              <template v-if="activeHunk.action === 'custom'">（合并正文）</template>
+            </p>
           </div>
 
           <!-- WebStorm：左 | gutter | 结果 | gutter | 右 -->

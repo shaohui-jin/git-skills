@@ -57,6 +57,9 @@ export type WebviewRequest =
         mrMethod: MrMethod | null;
         githubToken?: string;
         gitlabToken?: string;
+        aiApiBaseUrl?: string;
+        aiApiKey?: string;
+        aiModel?: string;
       };
     }
   | {
@@ -74,7 +77,39 @@ export type WebviewRequest =
       /** system = PATH 中的 A；bundled = 扩展目录 B */
       scope: "system" | "bundled";
       kind: "gh" | "glab";
-    };
+    }
+  | { type: "ping"; nonce: string }
+  | {
+      type: "aiResolveConflicts";
+      into: string;
+      from: string;
+      rules: Array<"preferMine" | "preferOnline" | "newerWins" | "mergeWhenPossible">;
+      extraNotes: string;
+      hunks: Array<{
+        id: string;
+        path: string;
+        leftText: string;
+        rightText: string;
+        baseText: string;
+        oursCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+        theirsCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+      }>;
+    }
+  | { type: "aiResolveCancelBridge" }
+  | { type: "aiResolveSubmitPaste"; text: string }
+  | { type: "aiResolveCopyPrompt" };
 
 export interface CliStatusPayload {
   platformHint: "github" | "gitlab" | "unknown";
@@ -194,4 +229,30 @@ export type HostMessage =
       kind: "gh" | "glab";
       path: string;
       messages: string[];
+    }
+  | { type: "pong"; nonce: string; extensionVersion: string }
+  | {
+      type: "aiResolveBridgeReady";
+      port: number;
+      callbackUrl: string;
+      prompt: string;
+      promptFile: string;
+      openedChat: boolean;
+      copied: boolean;
+      pasted?: boolean;
+      submitted?: boolean;
+    }
+  | {
+      type: "aiResolveConflictsResult";
+      into: string;
+      from: string;
+      hunks: Array<{
+        id: string;
+        path: string;
+        choice: "ours" | "theirs" | "merge" | "pending";
+        mergedContent?: string;
+        reason?: string;
+      }>;
+      model?: string;
+      messages?: string[];
     };

@@ -42,6 +42,9 @@ function normalizeConfig(raw: Partial<GitInsightProjectConfig> | undefined): Git
     mrMethod: (raw.mrMethod as MrMethod | null | undefined) ?? null,
     githubToken: raw.githubToken ?? "",
     gitlabToken: raw.gitlabToken ?? "",
+    aiApiBaseUrl: raw.aiApiBaseUrl ?? base.aiApiBaseUrl ?? "",
+    aiApiKey: raw.aiApiKey ?? "",
+    aiModel: raw.aiModel ?? base.aiModel ?? "",
     updatedAt: raw.updatedAt ?? Date.now(),
   };
 }
@@ -50,7 +53,12 @@ function configHasUserData(c: Partial<GitInsightProjectConfig> | undefined): boo
   if (!c) {
     return false;
   }
-  return c.mrMethod != null || !!c.githubToken?.trim() || !!c.gitlabToken?.trim();
+  return (
+    c.mrMethod != null ||
+    !!c.githubToken?.trim() ||
+    !!c.gitlabToken?.trim() ||
+    !!c.aiApiKey?.trim()
+  );
 }
 
 async function tryLoadLegacyProject(repoRoot: string | null): Promise<GitInsightProjectConfig | null> {
@@ -148,6 +156,9 @@ export async function saveUserConfig(
     mrMethod: config.mrMethod,
     githubToken: config.githubToken ?? "",
     gitlabToken: config.gitlabToken ?? "",
+    aiApiBaseUrl: config.aiApiBaseUrl ?? "https://api.openai.com/v1",
+    aiApiKey: config.aiApiKey ?? "",
+    aiModel: config.aiModel ?? "gpt-4o-mini",
     updatedAt: Date.now(),
   };
   await memento.update(GLOBAL_CONFIG_KEY, next);

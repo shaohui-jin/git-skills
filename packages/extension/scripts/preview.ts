@@ -129,6 +129,24 @@ async function main(): Promise<void> {
           return;
         }
 
+        if (req.type === "ping") {
+          send({
+            type: "pong",
+            nonce: req.nonce,
+            extensionVersion: "preview",
+          });
+          return;
+        }
+
+        if (req.type === "aiResolveConflicts") {
+          send({
+            type: "error",
+            message: "浏览器预览不支持 AI 选边，请在 Cursor 扩展中使用",
+            code: "PREVIEW_READONLY",
+          });
+          return;
+        }
+
         const label =
           req.type === "setCwd" && looksLikeRemoteRepo(req.path)
             ? "正在 git clone / fetch…"

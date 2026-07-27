@@ -8,6 +8,14 @@ export interface GitInsightProjectConfig {
   /** 扩展 globalState 持久化（各仓库共用）；旧版曾写项目内 config.local.json */
   githubToken?: string;
   gitlabToken?: string;
+  /**
+   * AI 选边：OpenAI 兼容 API（Cursor 的 vscode.lm 常为空时使用）
+   * 例：https://api.openai.com/v1 或 http://127.0.0.1:11434/v1
+   */
+  aiApiBaseUrl?: string;
+  aiApiKey?: string;
+  /** 例：gpt-4o-mini / deepseek-chat / qwen2.5-coder */
+  aiModel?: string;
   updatedAt: number;
 }
 
@@ -20,6 +28,9 @@ export function defaultGitInsightConfig(): GitInsightProjectConfig {
     mrMethod: null,
     githubToken: "",
     gitlabToken: "",
+    aiApiBaseUrl: "https://api.openai.com/v1",
+    aiApiKey: "",
+    aiModel: "gpt-4o-mini",
     updatedAt: Date.now(),
   };
 }

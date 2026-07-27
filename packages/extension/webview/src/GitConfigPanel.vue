@@ -20,6 +20,9 @@ const emit = defineEmits<{
       mrMethod: GitInsightConfigView["mrMethod"];
       githubToken: string;
       gitlabToken: string;
+      aiApiBaseUrl: string;
+      aiApiKey: string;
+      aiModel: string;
     },
   ];
   validateToken: [
@@ -40,6 +43,9 @@ const emit = defineEmits<{
 const method = ref<GitInsightConfigView["mrMethod"]>(null);
 const githubToken = ref("");
 const gitlabToken = ref("");
+const aiApiBaseUrl = ref("https://api.openai.com/v1");
+const aiApiKey = ref("");
+const aiModel = ref("gpt-4o-mini");
 const githubChecking = ref(false);
 const gitlabChecking = ref(false);
 
@@ -71,6 +77,9 @@ watch(
     method.value = c.mrMethod ?? suggestDefaultMethod();
     githubToken.value = c.githubToken ?? "";
     gitlabToken.value = c.gitlabToken ?? "";
+    aiApiBaseUrl.value = c.aiApiBaseUrl ?? "https://api.openai.com/v1";
+    aiApiKey.value = c.aiApiKey ?? "";
+    aiModel.value = c.aiModel ?? "gpt-4o-mini";
   },
   { immediate: true },
 );
@@ -238,6 +247,9 @@ function persistConfig(): void {
     mrMethod: method.value,
     githubToken: githubToken.value,
     gitlabToken: gitlabToken.value,
+    aiApiBaseUrl: aiApiBaseUrl.value,
+    aiApiKey: aiApiKey.value,
+    aiModel: aiModel.value,
   });
 }
 
@@ -513,13 +525,56 @@ const gitlabTitleStatus = computed(() => {
             重新检测 CLI
           </button>
         </div>
+
+        <div class="card" style="margin-top: 12px">
+          <h3>AI 选边（模型）</h3>
+          <p class="muted">
+            Cursor 的 <code>vscode.lm</code> 经常拿不到模型。可配置 OpenAI 兼容接口作为回退（官方
+            API / 代理 / 本地 Ollama 等）。优先用宿主模型；没有时自动用下面配置。
+          </p>
+          <label>
+            Base URL
+            <input
+              v-model="aiApiBaseUrl"
+              type="text"
+              :disabled="busy || previewMode"
+              placeholder="https://api.openai.com/v1"
+              @change="persistConfig"
+            />
+          </label>
+          <label>
+            API Key（本地 Ollama 可留空）
+            <input
+              v-model="aiApiKey"
+              type="password"
+              autocomplete="off"
+              :disabled="busy || previewMode"
+              placeholder="sk-… 或留空"
+              @change="persistConfig"
+            />
+          </label>
+          <label>
+            模型名
+            <input
+              v-model="aiModel"
+              type="text"
+              :disabled="busy || previewMode"
+              placeholder="gpt-4o-mini"
+              @change="persistConfig"
+            />
+          </label>
+          <p class="muted" style="margin: 0">
+            示例 Ollama：Base URL = <code>http://127.0.0.1:11434/v1</code>，模型 =
+            <code>qwen2.5-coder</code>，Key 留空。
+          </p>
+        </div>
       </div>
 
       <aside class="card config-split-side">
         <h3>使用顺序</h3>
         <ol class="config-steps">
-          <li>在本页选好 MR 方式（自动保存）</li>
-          <li>「合并预演」选线上目标 + 我的分支，完成冲突选边</li>
+          <li>在本页选好 MR 方式（自动保存）；需要 AI 选边时填好上方模型接口</li>
+          <li>「合并预演」选线上目标 + 我的分支，完成冲突选边（可 AI）</li>
           <li>点击「一键解决并推送」（把我的合进线上并推送）</li>
           <li>成功后才可点击「一键申请 MR」</li>
         </ol>

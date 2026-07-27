@@ -514,7 +514,7 @@ export async function handleWebviewRequest(
           messages: [
             {
               type: "error",
-              message: "没有暂存的解决结果，请先完成冲突选择并「暂存结果」",
+              message: "没有解决结果，请先完成全部冲突选边",
               code: "NO_STASH",
             },
           ],
@@ -584,6 +584,9 @@ export async function handleWebviewRequest(
         mrMethod: req.config.mrMethod,
         githubToken: req.config.githubToken ?? "",
         gitlabToken: req.config.gitlabToken ?? "",
+        aiApiBaseUrl: req.config.aiApiBaseUrl ?? prev.aiApiBaseUrl ?? "",
+        aiApiKey: req.config.aiApiKey ?? prev.aiApiKey ?? "",
+        aiModel: req.config.aiModel ?? prev.aiModel ?? "",
       });
       const cliStatus = await buildCliStatus(cwd, cliStorageDir);
       const ready = isMrMethodReady(saved, cliStatus);

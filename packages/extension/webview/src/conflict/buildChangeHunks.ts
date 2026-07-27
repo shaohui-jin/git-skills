@@ -22,7 +22,9 @@ export type HunkAction =
   | "accept-left"
   | "accept-right"
   | "ignore-left"
-  | "ignore-right";
+  | "ignore-right"
+  /** AI / 自定义合并正文 */
+  | "custom";
 
 export interface ChangeHunk {
   id: string;
@@ -31,6 +33,10 @@ export interface ChangeHunk {
   rightLines: string[];
   baseLines: string[];
   action: HunkAction;
+  /** action === custom 时写入 Result 的行 */
+  customLines?: string[];
+  /** AI 选边说明 */
+  aiReason?: string;
 }
 
 /** 相对 base 的一段变更（含纯插入：start===end） */
@@ -594,6 +600,8 @@ export function resolveHunkLines(hunk: ChangeHunk): string[] | null {
     case "accept-right":
     case "ignore-left":
       return hunk.rightLines;
+    case "custom":
+      return hunk.customLines ?? [];
     case "pending":
       return null;
     default:
@@ -663,7 +671,7 @@ export function kindClass(kind: HunkKind): string {
 }
 
 export function choiceToAction(
-  choice: "ours" | "theirs" | "base" | string,
+  choice: "ours" | "theirs" | "base" | "custom" | string,
 ): HunkAction {
   if (choice === "ours") {
     return "accept-left";
@@ -671,15 +679,23 @@ export function choiceToAction(
   if (choice === "theirs") {
     return "accept-right";
   }
+  if (choice === "custom") {
+    return "custom";
+  }
   return "pending";
 }
 
-export function actionToChoice(action: HunkAction): "ours" | "theirs" | null {
+export function actionToChoice(
+  action: HunkAction,
+): "ours" | "theirs" | "custom" | null {
   if (action === "accept-left" || action === "ignore-right") {
     return "ours";
   }
   if (action === "accept-right" || action === "ignore-left") {
     return "theirs";
+  }
+  if (action === "custom") {
+    return "custom";
   }
   return null;
 }

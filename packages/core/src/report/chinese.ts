@@ -62,14 +62,18 @@ function appendConflictDetails(lines: string[], result: ConflictBlameResult): vo
       for (const hunk of hunks) {
         lines.push(`- 线上侧行 ${hunk.oursRange[0]}-${hunk.oursRange[1]}：`);
         for (const c of hunk.oursCommits) {
+          const when =
+            c.time != null ? ` · ${new Date(c.time * 1000).toLocaleString("zh-CN")}` : "";
           lines.push(
-            `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
+            `  - \`${short(c.sha)}\` ${c.author}${when}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
           );
         }
         lines.push(`- 我的分支侧行 ${hunk.theirsRange[0]}-${hunk.theirsRange[1]}：`);
         for (const c of hunk.theirsCommits) {
+          const when =
+            c.time != null ? ` · ${new Date(c.time * 1000).toLocaleString("zh-CN")}` : "";
           lines.push(
-            `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
+            `  - \`${short(c.sha)}\` ${c.author}${when}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
           );
         }
       }
