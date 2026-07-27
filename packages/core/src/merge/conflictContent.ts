@@ -56,11 +56,11 @@ export async function buildConflictContent(
   if (oursContent === null || theirsContent === null) {
     const parts = [
       `<<<<<<< ours (${intoSha.slice(0, 7)})`,
-      oursContent ?? "（目标侧无此文件 / 已删除）",
+      oursContent ?? "（线上侧无此文件 / 已删除）",
       "||||||| base",
       baseContent ?? "（base 无此文件）",
       "=======",
-      theirsContent ?? "（待合并侧无此文件 / 已删除）",
+      theirsContent ?? "（我的分支侧无此文件 / 已删除）",
       `>>>>>>> theirs (${fromSha.slice(0, 7)})`,
       "",
     ];

@@ -12,9 +12,9 @@ export interface StashFilePayload {
 
 export interface ApplyResolveOptions {
   cwd?: string;
-  /** 目标分支（预演 into / 左） */
+  /** 线上 / 合入目标（预演 into / 左栏） */
   into: string;
-  /** 待合并分支（预演 from / 右） */
+  /** 我的分支 / 待提交（预演 from / 右栏） */
   from: string;
   /** 暂存的已解决文件（需含 resolvedContent） */
   files: StashFilePayload[];

@@ -23,8 +23,8 @@ export function graphToMermaid(graph: BranchGraph): string {
       lines.push(`  first["首独有 ${short(b.sha)}<br/>${escapeLabel(b.message)}"]`);
       lines.push("  base --> first");
     }
-    lines.push(`  intoOnly["目标独有 ${graph.lineage.intoOnlyCount} commits"]`);
-    lines.push(`  fromOnly["待合并独有 ${graph.lineage.fromOnlyCount} commits"]`);
+    lines.push(`  intoOnly["线上独有 ${graph.lineage.intoOnlyCount} commits"]`);
+    lines.push(`  fromOnly["我的独有 ${graph.lineage.fromOnlyCount} commits"]`);
     lines.push("  base --> intoOnly");
     lines.push("  base --> fromOnly");
     return lines.join("\n");

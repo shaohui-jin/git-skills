@@ -154,7 +154,7 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
       {
         id: "into",
         data: {
-          label: "目标分支",
+          label: "线上（目标）",
           sub: `+${graph.lineage.intoOnlyCount} commits`,
           kind: "tip",
         },
@@ -162,7 +162,7 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
       {
         id: "from",
         data: {
-          label: "待合并分支",
+          label: "我的分支",
           sub: `+${graph.lineage.fromOnlyCount} commits`,
           kind: "tip",
         },

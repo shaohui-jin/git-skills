@@ -152,17 +152,20 @@ function lineagePathReport(graph: BranchGraph, selectedLabel: string): string {
     ``,
     `- 选中：${selectedLabel}`,
     `- merge-base：\`${short(L.mergeBase)}\``,
-    `- 目标独有提交：${L.intoOnlyCount}`,
-    `- 待合并独有提交：${L.fromOnlyCount}`,
+    `- 线上目标独有提交：${L.intoOnlyCount}`,
+    `- 我的分支独有提交：${L.fromOnlyCount}`,
   ];
   if (L.branchedFrom) {
     const b = L.branchedFrom;
     const when = formatTime(b.time);
     lines.push(
-      `- 待合并侧首个独有提交：\`${short(b.sha)}\` ${b.author}${when ? ` · ${when}` : ""} — ${b.message}`,
+      `- 我的分支侧首个独有提交：\`${short(b.sha)}\` ${b.author}${when ? ` · ${when}` : ""} — ${b.message}`,
     );
   }
-  lines.push(``, `> 此为 into/from 聚焦视图；完整仓库分支图请用无 into/from 的加载方式。`);
+  lines.push(
+    ``,
+    `> 此为「线上目标 / 我的分支」聚焦视图；完整仓库分支图请用不带双分支的加载方式。`,
+  );
   return lines.join("\n");
 }
 

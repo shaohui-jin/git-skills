@@ -519,8 +519,8 @@ const gitlabTitleStatus = computed(() => {
         <h3>使用顺序</h3>
         <ol class="config-steps">
           <li>在本页选好 MR 方式（自动保存）</li>
-          <li>「合并预演」中完成冲突选择</li>
-          <li>点击「一键解决并推送」</li>
+          <li>「合并预演」选线上目标 + 我的分支，完成冲突选边</li>
+          <li>点击「一键解决并推送」（把我的合进线上并推送）</li>
           <li>成功后才可点击「一键申请 MR」</li>
         </ol>
       </aside>

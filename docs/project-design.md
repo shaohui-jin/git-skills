@@ -1,6 +1,8 @@
 # Git Insight · 项目整体设计
 
-本文是仓库**唯一**的整体设计文档（Skill 说明见 [`skills/git-branch-insight/SKILL.md`](../skills/git-branch-insight/SKILL.md)）。
+本文是整体**设计与指令表**文档。使用操作见 [user-guide.md](./user-guide.md)；文档索引见 [README.md](./README.md)。
+
+Skill 正文：[skill.md](./skill.md)（Cursor 入口仍为 `skills/git-branch-insight/SKILL.md`，指向本文档集）。
 
 覆盖：包结构、业务流、各模块职责，以及**实现中实际调用的 git / gh / glab 指令**。
 
@@ -15,11 +17,12 @@
 | 一键解决并推送 | 扩展 → core `applyStashedResolve` | **是**（独立 **worktree**，主工作区不 checkout） |
 | 一键申请 MR/PR | 扩展 → core `createMergeRequest` | 否（调 gh/glab/API 或开浏览器） |
 
-约定：
+约定（业务称呼 ↔ 内部变量；逻辑不翻转）：
 
-- **目标分支** = `into` = 预演 UI **左** = merge 时 **ours**
-- **待合并分支** = `from` = 预演 UI **右** = merge 时 **theirs**
-- 一键落盘必须与预演同向：临时分支**基于 into**，再 `merge from`（避免 ours/theirs 翻转）
+- **线上 / 合入目标** = `into` = 预演 UI **左栏**
+- **我的分支 / 待提交** = `from` = 预演 UI **右栏**
+- 一键落盘与预演同向：临时分支**基于 into（线上）**，再 `merge from`（我的）
+- git 排错对照：站在 into 上 merge from 时，**ours=into（线上）**、**theirs=from（我的）**；界面文案用业务称呼，避免与口语「我的=ours」混淆
 
 ---
 
@@ -30,7 +33,7 @@ packages/core                 @git-insight/core   — 唯一 Git/MR 引擎 + CLI
 packages/extension            git-insight         — Cursor/VS Code 宿主
 packages/extension/webview    @git-insight/webview — Vue3 UI（G6 分支图）
 skills/git-branch-insight     Agent Skill（只读 CLI）
-docs/project-design.md        本文
+docs/                          全部说明文档（见 docs/README.md）
 ```
 
 | 包 | 职责 |
@@ -47,7 +50,7 @@ docs/project-design.md        本文
 
 ```mermaid
 flowchart TD
-  cfg[Git 配置 A/B/C/D] --> preview[合并预演 into / from]
+  cfg[Git 配置 A/B/C/D] --> preview[合并预演 线上into / 我的from]
   preview --> stash[三栏选边并暂存 localStorage]
   stash --> resolve[一键解决并推送 · 独立 worktree]
   resolve --> mr[一键申请 MR]
@@ -73,11 +76,11 @@ flowchart TD
 | 远程 URL | `git remote get-url <remote>` | 平台探测 / MR URL |
 | 当前分支 | `git branch --show-current` | applyResolve |
 
-底层：`packages/core/src/git/runner.ts`（`GIT_TERMINAL_PROMPT=0`）。
+底层：`packages/core/src/git/runner.ts`（默认非交互环境；`interactive: true` 时允许弹窗）。
 
 ---
 
-### 4.2 Fetch
+### 4.2 Fetch（含鉴权路径）
 
 | 用途 | 指令 | 代码 |
 |------|------|------|
@@ -85,6 +88,19 @@ flowchart TD
 
 CLI：`git-insight fetch [--remote origin]`  
 扩展 / CLI 的 `graph`、`preview-merge`：**默认 fetch**（`--no-fetch` 可关）。
+
+**扩展鉴权顺序**（`fetchRemote`，使用说明见 [user-guide.md §4](./user-guide.md)）：
+
+1. **本机凭据（非交互）** — 不弹窗；`gitNonInteractiveEnv`  
+2. **方案 C Token（非交互）** — `git -c http.extraHeader="Authorization: Basic <base64>"`  
+   - GitHub：`x-access-token:<PAT>`  
+   - GitLab：`oauth2:<glpat-…>`  
+3. **本机凭据（交互）** — 允许 GCM / Cursor「Connect to GitHub」弹窗；`gitInteractiveEnv`  
+
+Token 来源：扩展 `globalState` / `user-config.json` 中按 `origin` 平台选取的 `githubToken` / `gitlabToken`。  
+Fetch 失败时仍继续画图，并在 `BranchGraph.fetchOk` / UI 状态栏提示「可能与线上不一致」。
+
+相关：`packages/core/src/git/auth.ts`、`packages/extension/src/coreBridge.ts` → `resolveGitAuth`。
 
 ---
 
@@ -169,18 +185,23 @@ MR 浏览器链接会用到：`git remote get-url <remote>`。
 
 ### 4.8 Git / MR 配置（扩展）
 
-配置持久化在扩展 **`globalState`**（各仓库共用）。旧版项目内 `.git-insight/config.local.json` 会迁移一次。
+配置**双写**：扩展 **`globalState`**（键 `gitInsight.userConfig`）+ **`globalStorage/user-config.json`**（各仓库共用）。旧版项目内 `.git-insight/config.local.json` 会迁移一次。
 
 | 方式 | 就绪条件 | 相关指令 / 行为 |
 |------|----------|-----------------|
 | **A** 本机 CLI | PATH 中 `gh`/`glab` 已安装且 `auth status` 成功 | `gh\|glab --version`；`gh\|glab auth status`；终端 `gh\|glab auth login` |
 | **B** 下载 CLI | 扩展 globalStorage 内二进制已下载且已登录 | 同上，可执行文件为扩展目录路径；PowerShell 需 `& "path" auth login` |
-| **C** Token | 面板填写并保存 GitHub/GitLab Token | 无 CLI；走 REST API |
+| **C** Token | 对应平台 Token 格式正确且 API 校验通过 | REST 校验用 Bearer；**git fetch 注入用 Basic**（见 §4.2） |
 | **D** 浏览器 | 始终可用 | 只打开预填创建页 URL |
+
+- 按远程平台禁用另一侧 Token 输入；GitLab 强制 `glpat-` 前缀  
+- Token：`change` 时校验并保存；进页有 Token 则预校验  
+- 首次未配置：有本机 CLI → 默认 A，否则默认 D  
 
 检测与下载：`packages/extension/src/cliBundle.ts`  
 登录唤起：`GitInsightPanel` → 集成终端 `sendText`  
-UI：`GitConfigPanel.vue`
+UI：`GitConfigPanel.vue`  
+使用说明：[user-guide.md §3](./user-guide.md)
 
 解压下载包时可能调用（非 git）：Windows `Expand-Archive`；Unix `unzip` / `tar`。
 
@@ -226,7 +247,7 @@ UI：`GitConfigPanel.vue`
 ```text
 git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch]
 git-insight fetch [--cwd] [--remote]
-git-insight preview-merge --into <目标> --from <待合并> [--cwd] [--no-fetch]
+git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd] [--no-fetch]
 git-insight conflict-blame …   # 同 preview-merge
 ```
 
@@ -255,8 +276,8 @@ pnpm --filter @git-insight/core exec node dist/cli.js graph
 
 ## 7. 风险与约定
 
-1. **into / from 不可填反**（左右与 ours/theirs 绑定）。
-2. 临时分支必须基于 **into**；误从 feature 拉出再 merge 目标会左右对调。
+1. **into / from 不可填反**：左=线上(into)、右=我的(from)；与预演选边、一键落盘同向。
+2. 临时分支必须基于 **线上 into**；误从我的分支拉出再 merge 线上会左右对调。
 3. tip 变化后应重新预演再一键解决。
 4. 主工作区可有未提交改动（worktree 隔离）；若临时分支名已在主仓检出则拒绝。
 5. 冲突文件须全部有暂存，否则 worktree 内 `merge --abort`。
@@ -283,4 +304,4 @@ pnpm --filter @git-insight/core exec node dist/cli.js graph
 
 ---
 
-*文档与当前实现同步；旧分散文档（git-commands / merge-resolve-workflow / graph-engine / plan）已合并至此。*
+*设计与指令表见本文；操作与 Fetch 配置路径见 [user-guide.md](./user-guide.md)。*

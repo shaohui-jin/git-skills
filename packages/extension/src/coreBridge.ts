@@ -458,7 +458,7 @@ export async function handleWebviewRequest(
           messages: [
             {
               type: "error",
-              message: "请填写目标分支与待合并分支",
+              message: "请填写线上目标分支与我的分支",
               code: "USAGE",
             },
           ],
@@ -503,7 +503,7 @@ export async function handleWebviewRequest(
           messages: [
             {
               type: "error",
-              message: "请填写目标分支与待合并分支",
+              message: "请填写线上目标分支与我的分支",
               code: "USAGE",
             },
           ],

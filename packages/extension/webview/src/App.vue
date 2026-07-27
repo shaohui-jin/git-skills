@@ -673,24 +673,26 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
     <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
       <aside v-if="tab === 'preview'" class="sidebar">
         <label>
-          目标分支 (--into)
+          目标分支（线上 / 合入目标）
           <BranchTreeSelect
             v-model="into"
             :branches="branches"
             :disabled="busy || !cwd"
-            placeholder="选择目标分支…"
+            placeholder="选择线上目标分支，如 test…"
           />
         </label>
         <label>
-          待合并分支 (--from)
+          我的分支（待提交 / 待合入）
           <BranchTreeSelect
             v-model="from"
             :branches="branches"
             :disabled="busy || !cwd"
-            placeholder="选择待合并分支…"
+            placeholder="选择你要提交的功能分支…"
           />
         </label>
-        <p class="hint">选择两分支后点顶部「开始预演」：冲突文件、正文与来源溯源。</p>
+        <p class="hint">
+          业务含义：把「我的分支」合进「线上目标」。选好后点顶部「开始预演」。
+        </p>
       </aside>
 
       <section class="content">
@@ -760,9 +762,8 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   </span>
                 </h3>
                 <p class="mono">
-                  {{ preview.into }} ({{ short(preview.intoSha) }}) ← {{ preview.from }} ({{
-                    short(preview.fromSha)
-                  }})
+                  线上 {{ preview.into }} ({{ short(preview.intoSha) }}) ← 我的
+                  {{ preview.from }} ({{ short(preview.fromSha) }})
                 </p>
                 <p class="mono">
                   merge-base:
@@ -774,7 +775,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   两条分支没有共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
                 </p>
                 <p v-else-if="preview.clean">
-                  无冲突，可以将 <code>{{ preview.from }}</code> 合入
+                  无冲突，可以将我的分支 <code>{{ preview.from }}</code> 合入线上
                   <code>{{ preview.into }}</code>。
                 </p>
                 <p v-else>未检测到可解析的冲突文件内容。</p>
@@ -813,9 +814,8 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                     <span class="badge danger">{{ preview.conflictFiles.length }} 个冲突</span>
                   </h3>
                   <p class="mono">
-                    {{ preview.into }} ({{ short(preview.intoSha) }}) ← {{ preview.from }} ({{
-                      short(preview.fromSha)
-                    }})
+                    线上 {{ preview.into }} ({{ short(preview.intoSha) }}) ← 我的
+                    {{ preview.from }} ({{ short(preview.fromSha) }})
                   </p>
                   <p class="mono">
                     merge-base:
@@ -825,7 +825,9 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               </template>
             </ConflictResolvePanel>
           </div>
-          <div v-else class="empty empty--fill">选择目标 / 待合并分支后点击「开始预演」</div>
+          <div v-else class="empty empty--fill">
+            选择线上目标分支与我的分支后，点击「开始预演」
+          </div>
         </template>
       </section>
     </div>

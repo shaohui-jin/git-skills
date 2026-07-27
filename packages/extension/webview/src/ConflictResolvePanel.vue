@@ -497,8 +497,8 @@ const resultLineStarts = computed(() => {
           </span>
         </div>
         <p class="muted resolve-tip">
-          选边后可暂存；「一键解决」在独立 worktree 中完成推送（不切换当前分支）。推送后可用「一键申请
-          MR」通过本机 gh/glab 选人并创建合并请求。
+          左栏=线上目标，右栏=我的分支。选边后可暂存；「一键解决」在独立 worktree
+          中把我的变更合进线上并推送（不切换当前分支），再可申请 MR。
         </p>
         <div class="resolve-actions">
           <button
@@ -611,36 +611,38 @@ const resultLineStarts = computed(() => {
                 type="button"
                 class="btn tiny"
                 :disabled="!activeHunk || activeHunk.kind !== 'conflict'"
-                title="采用当前冲突的左侧"
+                title="采用线上目标侧（左栏）"
                 @click="activeHunk && acceptLeft(activeHunk)"
               >
-                Accept Left
+                采用线上
               </button>
               <button
                 type="button"
                 class="btn tiny"
                 :disabled="!activeHunk || activeHunk.kind !== 'conflict'"
-                title="采用当前冲突的右侧"
+                title="采用我的分支侧（右栏）"
                 @click="activeHunk && acceptRight(activeHunk)"
               >
-                Accept Right
+                采用我的
               </button>
               <span class="bar-sep" />
               <button
                 type="button"
                 class="btn secondary tiny"
                 :disabled="fileStats.conflicts === 0"
+                title="本文件全部冲突采用线上目标"
                 @click="acceptAll('left')"
               >
-                全部左侧
+                全部线上
               </button>
               <button
                 type="button"
                 class="btn secondary tiny"
                 :disabled="fileStats.conflicts === 0"
+                title="本文件全部冲突采用我的分支"
                 @click="acceptAll('right')"
               >
-                全部右侧
+                全部我的
               </button>
               <button
                 type="button"
@@ -656,15 +658,15 @@ const resultLineStarts = computed(() => {
           <div class="merge-ws">
             <header class="merge-ws-heads">
               <div class="merge-ws-head merge-ws-head--ours">
-                Changes from {{ into }}
+                线上（目标）{{ into }}
               </div>
               <div class="merge-ws-gutter-head" />
               <div class="merge-ws-head merge-ws-head--result">
-                Result [{{ activeFile.path.split("/").pop() }}]
+                结果 [{{ activeFile.path.split("/").pop() }}]
               </div>
               <div class="merge-ws-gutter-head" />
               <div class="merge-ws-head merge-ws-head--theirs">
-                Changes from {{ from }}
+                我的分支 {{ from }}
               </div>
             </header>
 
@@ -681,7 +683,7 @@ const resultLineStarts = computed(() => {
                 :data-hunk-id="h.id"
                 @click="selectHunk(h.id)"
               >
-                <!-- 左：目标 -->
+                <!-- 左：线上目标 -->
                 <div class="merge-ws-pane merge-ws-pane--ours">
                   <div class="merge-line-nos">
                     <span
@@ -716,7 +718,7 @@ const resultLineStarts = computed(() => {
                       type="button"
                       class="gutter-btn gutter-btn--accept"
                       :class="{ 'gutter-btn--done': choseLeft(h) }"
-                      title="接受左侧到结果"
+                      title="采用线上到结果"
                       @click.stop="acceptLeft(h)"
                     >
                       {{ choseLeft(h) ? "✓" : "≫" }}
@@ -725,7 +727,7 @@ const resultLineStarts = computed(() => {
                       v-if="!isConflictResolved(h)"
                       type="button"
                       class="gutter-btn gutter-btn--ignore"
-                      title="忽略左侧"
+                      title="忽略线上侧"
                       @click.stop="ignoreLeft(h)"
                     >
                       ×
@@ -762,7 +764,7 @@ const resultLineStarts = computed(() => {
                       v-if="!isConflictResolved(h)"
                       type="button"
                       class="gutter-btn gutter-btn--ignore"
-                      title="忽略右侧"
+                      title="忽略我的分支侧"
                       @click.stop="ignoreRight(h)"
                     >
                       ×
@@ -771,7 +773,7 @@ const resultLineStarts = computed(() => {
                       type="button"
                       class="gutter-btn gutter-btn--accept gutter-btn--from-right"
                       :class="{ 'gutter-btn--done': choseRight(h) }"
-                      title="接受右侧到结果"
+                      title="采用我的到结果"
                       @click.stop="acceptRight(h)"
                     >
                       {{ choseRight(h) ? "✓" : "≪" }}
@@ -779,7 +781,7 @@ const resultLineStarts = computed(() => {
                   </template>
                 </div>
 
-                <!-- 右：待合并 -->
+                <!-- 右：我的分支 -->
                 <div class="merge-ws-pane merge-ws-pane--theirs">
                   <div class="merge-line-nos">
                     <span

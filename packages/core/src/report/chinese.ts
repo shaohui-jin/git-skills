@@ -28,12 +28,12 @@ export function reportGraph(graph: BranchGraph): string {
   if (graph.lineage) {
     lines.push(``, `## 溯源（相对两分支）`);
     lines.push(`- merge-base：\`${short(graph.lineage.mergeBase)}\``);
-    lines.push(`- 目标分支独有提交：${graph.lineage.intoOnlyCount}`);
-    lines.push(`- 待合并分支独有提交：${graph.lineage.fromOnlyCount}`);
+    lines.push(`- 线上目标独有提交：${graph.lineage.intoOnlyCount}`);
+    lines.push(`- 我的分支独有提交：${graph.lineage.fromOnlyCount}`);
     if (graph.lineage.branchedFrom) {
       const b = graph.lineage.branchedFrom;
       lines.push(
-        `- 待合并侧首个独有提交：\`${short(b.sha)}\` ${b.author} — ${b.message}`,
+        `- 我的分支侧首个独有提交：\`${short(b.sha)}\` ${b.author} — ${b.message}`,
       );
     }
   }
@@ -60,13 +60,13 @@ function appendConflictDetails(lines: string[], result: ConflictBlameResult): vo
     if (hunks.length > 0) {
       lines.push(`#### 来源溯源`);
       for (const hunk of hunks) {
-        lines.push(`- 目标侧行 ${hunk.oursRange[0]}-${hunk.oursRange[1]}：`);
+        lines.push(`- 线上侧行 ${hunk.oursRange[0]}-${hunk.oursRange[1]}：`);
         for (const c of hunk.oursCommits) {
           lines.push(
             `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
           );
         }
-        lines.push(`- 待合并侧行 ${hunk.theirsRange[0]}-${hunk.theirsRange[1]}：`);
+        lines.push(`- 我的分支侧行 ${hunk.theirsRange[0]}-${hunk.theirsRange[1]}：`);
         for (const c of hunk.theirsCommits) {
           lines.push(
             `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
@@ -86,10 +86,10 @@ function appendConflictDetails(lines: string[], result: ConflictBlameResult): vo
       lines.push(``, `#### 冲突内容`);
       lines.push(`- （未能生成冲突标记文本）`);
       if (f.oursContent != null || f.theirsContent != null) {
-        lines.push(``, `<details><summary>目标侧原文</summary>`, ``, "```");
+        lines.push(``, `<details><summary>线上侧原文</summary>`, ``, "```");
         lines.push((f.oursContent ?? "（无）").slice(0, 8000));
         lines.push("```", `</details>`);
-        lines.push(``, `<details><summary>待合并侧原文</summary>`, ``, "```");
+        lines.push(``, `<details><summary>我的分支侧原文</summary>`, ``, "```");
         lines.push((f.theirsContent ?? "（无）").slice(0, 8000));
         lines.push("```", `</details>`);
       }
@@ -113,8 +113,8 @@ export function reportMergeRehearsal(result: ConflictBlameResult): string {
     `# 合并预演`,
     ``,
     `- 仓库：${result.repoRoot}`,
-    `- 目标分支 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
-    `- 待合并分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
+    `- 线上目标 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
+    `- 我的分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
     `- merge-base：${result.mergeBase ? `\`${short(result.mergeBase)}\`` : "（无共同祖先，无法计算）"}`,
     `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
     `- 结果：${outcomeLabel(result)}`,
@@ -138,7 +138,7 @@ export function reportMergeRehearsal(result: ConflictBlameResult): string {
   }
 
   if (result.clean) {
-    lines.push(``, `无冲突，可以将 \`${result.from}\` 合入 \`${result.into}\`。`);
+    lines.push(``, `无冲突，可以将我的分支 \`${result.from}\` 合入线上 \`${result.into}\`。`);
     return lines.join("\n");
   }
 
@@ -159,8 +159,8 @@ export function reportMerge(result: MergePreviewResult): string {
     `# 合并预演`,
     ``,
     `- 仓库：${result.repoRoot}`,
-    `- 目标分支 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
-    `- 待合并分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
+    `- 线上目标 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
+    `- 我的分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
     `- merge-base：\`${short(result.mergeBase)}\``,
     `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
     `- 结果：${result.clean ? "**可干净合并**" : `**存在冲突（${result.conflictFiles.length} 个文件）**`}`,

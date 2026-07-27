@@ -154,11 +154,11 @@ function submit(): void {
       </p>
 
       <label>
-        源分支（source）
+        我的分支 / 源（source）
         <input v-model="sourceBranch" type="text" :disabled="busy" />
       </label>
       <label>
-        目标分支（target）
+        线上目标 / 目标（target）
         <input v-model="targetBranch" type="text" :disabled="busy" />
       </label>
       <label>
