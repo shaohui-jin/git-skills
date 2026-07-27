@@ -29,13 +29,32 @@ const method = ref<GitInsightConfigView["mrMethod"]>(null);
 const githubToken = ref("");
 const gitlabToken = ref("");
 
+/** 与宿主一致：未选过时，有本机 gh/glab → A，否则 → D */
+function suggestDefaultMethod(): NonNullable<GitInsightConfigView["mrMethod"]> {
+  const s = props.cliStatus;
+  if (!s) {
+    return "browser";
+  }
+  const hint = s.platformHint;
+  if (hint === "github" && s.systemGh.installed) {
+    return "cli";
+  }
+  if (hint === "gitlab" && s.systemGlab.installed) {
+    return "cli";
+  }
+  if (hint === "unknown" && (s.systemGh.installed || s.systemGlab.installed)) {
+    return "cli";
+  }
+  return "browser";
+}
+
 watch(
-  () => props.config,
-  (c) => {
+  () => [props.config, props.cliStatus] as const,
+  ([c]) => {
     if (!c) {
       return;
     }
-    method.value = c.mrMethod;
+    method.value = c.mrMethod ?? suggestDefaultMethod();
     githubToken.value = c.githubToken ?? "";
     gitlabToken.value = c.gitlabToken ?? "";
   },
@@ -185,8 +204,8 @@ function save(): void {
     <div class="card config-header">
       <h3>Git / MR 配置</h3>
       <p class="muted">
-        选择「一键申请 MR」使用的方式。有本机 CLI 时会默认选中 A；未配置完整前无法申请
-        MR。存储位置：
+        选择「一键申请 MR」使用的方式。首次进入：本机有 gh/glab 默认选 A，否则默认选
+        D；未配置完整前无法申请 MR。存储位置：
         <code class="mono">{{ configPath || "扩展全局配置（各仓库共用）" }}</code>
       </p>
       <p v-if="previewMode" class="mr-warn">预览模式可查看选项，但不会写入扩展配置。</p>

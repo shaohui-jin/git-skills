@@ -27,6 +27,7 @@ import {
   type ConfigMemento,
   isMrMethodReady,
   loadUserConfig,
+  resolveDefaultMrMethod,
   saveUserConfig,
 } from "./gitConfigStore.js";
 import {
@@ -132,21 +133,6 @@ function cliPairOk(
   return (gh.installed && gh.loggedIn) || (glab.installed && glab.loggedIn);
 }
 
-/** 仅“已安装”（可不登录）——用于默认选中方案 A */
-function cliPairInstalled(
-  platformHint: "github" | "gitlab" | "unknown",
-  gh: { installed: boolean },
-  glab: { installed: boolean },
-): boolean {
-  if (platformHint === "github") {
-    return gh.installed;
-  }
-  if (platformHint === "gitlab") {
-    return glab.installed;
-  }
-  return gh.installed || glab.installed;
-}
-
 async function buildCliStatus(
   repoRoot: string,
   cliStorageDir: string | undefined,
@@ -210,13 +196,15 @@ export async function handleWebviewRequest(
       try {
         const config = await loadCfg();
         const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-        // 本机已安装 CLI（可不登录）且未选方式 → 默认选 A，便于展示登录按钮
+        // 从未选过 MR 方式：有本机 gh/glab → A，否则 → D
         let cfg = config;
-        if (
-          cfg.mrMethod == null &&
-          cliPairInstalled(cliStatus.platformHint, cliStatus.systemGh, cliStatus.systemGlab)
-        ) {
-          cfg = await saveCfg({ ...cfg, mrMethod: "cli" });
+        if (cfg.mrMethod == null) {
+          const mrMethod = resolveDefaultMrMethod({
+            platformHint: cliStatus.platformHint,
+            systemGhInstalled: cliStatus.systemGh.installed,
+            systemGlabInstalled: cliStatus.systemGlab.installed,
+          });
+          cfg = await saveCfg({ ...cfg, mrMethod });
         }
         const ready = isMrMethodReady(cfg, cliStatus);
         messages.push({
@@ -466,11 +454,13 @@ export async function handleWebviewRequest(
       const config = await loadCfg();
       let cfg = config;
       const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-      if (
-        cfg.mrMethod == null &&
-        cliPairInstalled(cliStatus.platformHint, cliStatus.systemGh, cliStatus.systemGlab)
-      ) {
-        cfg = await saveCfg({ ...cfg, mrMethod: "cli" });
+      if (cfg.mrMethod == null) {
+        const mrMethod = resolveDefaultMrMethod({
+          platformHint: cliStatus.platformHint,
+          systemGhInstalled: cliStatus.systemGh.installed,
+          systemGlabInstalled: cliStatus.systemGlab.installed,
+        });
+        cfg = await saveCfg({ ...cfg, mrMethod });
       }
       const ready = isMrMethodReady(cfg, cliStatus);
       return {

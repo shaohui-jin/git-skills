@@ -114,6 +114,29 @@ export function configPath(_repoRoot?: string): string {
   return configPathLabel();
 }
 
+/**
+ * 用户尚未选择 MR 方式时的默认项：
+ * - 本机存在对应 gh/glab → A（cli）
+ * - 否则 → D（browser）
+ */
+export function resolveDefaultMrMethod(ctx: {
+  platformHint: "github" | "gitlab" | "unknown";
+  systemGhInstalled: boolean;
+  systemGlabInstalled: boolean;
+}): MrMethod {
+  const { platformHint, systemGhInstalled, systemGlabInstalled } = ctx;
+  if (platformHint === "github" && systemGhInstalled) {
+    return "cli";
+  }
+  if (platformHint === "gitlab" && systemGlabInstalled) {
+    return "cli";
+  }
+  if (platformHint === "unknown" && (systemGhInstalled || systemGlabInstalled)) {
+    return "cli";
+  }
+  return "browser";
+}
+
 /** 方式是否已配置到可执行程度（不含「必须先一键推送」） */
 export function isMrMethodReady(
   config: GitInsightProjectConfig,
