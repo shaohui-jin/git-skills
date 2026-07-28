@@ -2,7 +2,7 @@
 
 Git 分支图、合并预演、冲突溯源、一键落盘与创建 MR 的引擎库。
 
-**完整说明：** [docs/guide.md](../../docs/guide.md)（CLI / API / 指令表见 §2、§3.2、§5.2）
+完整说明见仓库根目录 `docs/guide.md`。
 
 ```bash
 pnpm --filter @git-insight/core build

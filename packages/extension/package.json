@@ -20,7 +20,7 @@
     "commands": [
       {
         "command": "gitInsight.openWeb",
-        "title": "Git Insight: Open Web Visualization",
+        "title": "Git Insight: Open Web",
         "category": "Git Insight"
       },
       {
