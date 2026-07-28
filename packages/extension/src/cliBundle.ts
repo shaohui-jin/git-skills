@@ -52,6 +52,79 @@ async function downloadFile(url: string, dest: string): Promise<void> {
   await pipeline(nodeStream, createWriteStream(dest));
 }
 
+type GlabLink = { name?: string; url?: string; direct_asset_url?: string };
+
+/** 新旧命名都尝试：windows_amd64.zip / Windows_x86_64.zip 等 */
+function glabAssetNeedles(
+  os: "windows" | "macOS" | "linux",
+  arch: "amd64" | "arm64",
+): string[] {
+  if (os === "windows") {
+    if (arch === "arm64") {
+      return ["windows_arm64.zip", "Windows_arm64.zip"];
+    }
+    return ["windows_amd64.zip", "Windows_x86_64.zip", "windows_x86_64.zip"];
+  }
+  if (os === "macOS") {
+    if (arch === "arm64") {
+      return ["darwin_arm64.tar.gz", "macOS_arm64.tar.gz", "Darwin_arm64.tar.gz"];
+    }
+    return ["darwin_amd64.tar.gz", "macOS_x86_64.tar.gz", "Darwin_x86_64.tar.gz"];
+  }
+  if (arch === "arm64") {
+    return ["linux_arm64.tar.gz", "Linux_arm64.tar.gz"];
+  }
+  return ["linux_amd64.tar.gz", "Linux_x86_64.tar.gz"];
+}
+
+function pickGlabLink(links: GlabLink[], needles: string[]): GlabLink | undefined {
+  const named = links.filter((l) => (l.name || "").trim());
+  for (const needle of needles) {
+    const hit = named.find((l) => (l.name || "").toLowerCase().includes(needle.toLowerCase()));
+    if (hit) {
+      return hit;
+    }
+  }
+  return undefined;
+}
+
+async function fetchGlabLinksFromGitlab(): Promise<GlabLink[]> {
+  const api = await fetch(
+    "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases/permalink/latest",
+    { headers: { "User-Agent": "git-insight-extension" } },
+  );
+  if (!api.ok) {
+    throw new Error(`无法获取 glab release（GitLab）：HTTP ${api.status}`);
+  }
+  const json = (await api.json()) as {
+    assets?: { links?: GlabLink[] };
+    name?: string;
+    tag_name?: string;
+  };
+  return json.assets?.links ?? [];
+}
+
+async function resolveGlabAssetUrl(
+  os: "windows" | "macOS" | "linux",
+  arch: "amd64" | "arm64",
+): Promise<string> {
+  const needles = glabAssetNeedles(os, arch);
+  const links = await fetchGlabLinksFromGitlab();
+  const asset = pickGlabLink(links, needles);
+  const url = asset?.direct_asset_url || asset?.url;
+  if (url) {
+    return url;
+  }
+  const names = links
+    .map((l) => l.name)
+    .filter(Boolean)
+    .slice(0, 16)
+    .join(", ");
+  throw new Error(
+    `未找到匹配 glab 资源（尝试 ${needles.join(" | ")}）。可用资源示例：${names || "（空）"}`,
+  );
+}
+
 /**
  * 将官方 CLI 下载到扩展 globalStorage（按需、需用户确认后调用）。
  * gh: GitHub CLI releases；glab: GitLab CLI releases。
@@ -95,31 +168,8 @@ export async function downloadBundledCli(
     }
     assetUrl = asset.browser_download_url;
   } else {
-    const api = await fetch(
-      "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases/permalink/latest",
-      { headers: { "User-Agent": "git-insight-extension" } },
-    );
-    if (!api.ok) {
-      throw new Error(`无法获取 glab release：HTTP ${api.status}`);
-    }
-    const json = (await api.json()) as {
-      assets?: {
-        links?: Array<{ name?: string; url?: string; direct_asset_url?: string }>;
-      };
-    };
-    const links = json.assets?.links ?? [];
-    const needle =
-      os === "windows"
-        ? `Windows_${arch === "amd64" ? "x86_64" : "arm64"}.zip`
-        : os === "macOS"
-          ? `macOS_${arch === "amd64" ? "x86_64" : "arm64"}.tar.gz`
-          : `Linux_${arch === "amd64" ? "x86_64" : "arm64"}.tar.gz`;
-    const asset = links.find((l) => (l.name || "").includes(needle));
-    const url = asset?.direct_asset_url || asset?.url;
-    if (!url) {
-      throw new Error(`未找到匹配 glab 资源：*${needle}`);
-    }
-    assetUrl = url;
+    // glab 资源名曾用 Windows_x86_64.zip，现多为 windows_amd64.zip（goreleaser 常规命名）
+    assetUrl = await resolveGlabAssetUrl(os, arch);
   }
 
   const archiveName = assetUrl.split("/").pop() || `${kind}-archive`;
