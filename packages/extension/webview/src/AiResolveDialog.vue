@@ -270,10 +270,17 @@ function onSubmitPaste(): void {
         <ol v-if="showOps" class="config-steps" style="margin: 8px 0 0; padding-left: 18px">
           <li>若 Chat 未打开：手动打开 Cursor Chat / Agent（可用当前模型）。</li>
           <li>点「复制提示词」→ 在 Chat 输入框 Ctrl+V → 发送。</li>
-          <li>Agent 模式：先 Read 冲突数据 JSON 文件，再按提示词 curl 把结果 POST 到回调 URL。</li>
+          <li>Agent 模式：先 Read 冲突数据 JSON，再 curl POST 到回调 URL（必做）。</li>
+          <li>
+            若启用了 MCP feedback 等旁路工具：Agent 可能停在确认而不 curl——把最终 JSON
+            复制到下方「粘贴结果并应用」即可。
+          </li>
           <li>普通 Chat：把模型输出的 JSON 贴到下方 →「粘贴结果并应用」。</li>
           <li>仍无回传：输出面板选「Git Insight」看日志，或 Reload Window 后重试。</li>
         </ol>
+        <p class="muted" style="margin: 8px 0 0">
+          提示：有 MCP feedback 时优先用下方粘贴兜底，扩展只认 HTTP 回传或粘贴。
+        </p>
         <label style="margin-top: 8px">
           粘贴模型 JSON 结果（兜底）
           <textarea

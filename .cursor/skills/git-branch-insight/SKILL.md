@@ -1,14 +1,11 @@
 ---
 name: git-branch-insight
-description: >-
-  Analyzes Git branch lineage and runs merge rehearsal (conflicts + content +
-  provenance). Defaults to git fetch. Use for branch graphs and merge preview.
+description: Analyzes Git branch lineage and runs merge rehearsal (conflicts + content + provenance). Defaults to git fetch. Use for branch graphs and merge preview.
 ---
 
 # Git Branch Insight
 
-完整 Skill 见 [skills/git-branch-insight/SKILL.md](../../../skills/git-branch-insight/SKILL.md)。  
-项目整体设计（含扩展 / 指令表）见 [docs/project-design.md](../../../docs/project-design.md)。
+完整说明见 [docs/guide.md](../../../docs/guide.md)（§四 Skill；§2 指令表）。
 
 ```bash
 pnpm --filter @git-insight/core exec node dist/cli.js graph

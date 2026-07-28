@@ -351,21 +351,56 @@ body {
   z-index: 2;
   font-family: var(--mono);
   font-size: 11px;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   backdrop-filter: blur(4px);
-  white-space: nowrap;
+  white-space: normal;
+  max-height: 48px;
   overflow: hidden;
-  text-overflow: ellipsis;
   pointer-events: none;
 }
 
 .path-hint--idle {
   color: var(--muted);
+}
+
+.graph-search-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.graph-search {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(4px);
+  pointer-events: auto;
+}
+
+.graph-search-input {
+  width: min(220px, 40vw);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.graph-search-meta {
+  font-size: 11px;
+  min-width: 2.5em;
 }
 
 .card--report {
@@ -1332,6 +1367,12 @@ div.config-option {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.token-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .config-tokens label {

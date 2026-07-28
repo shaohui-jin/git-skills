@@ -38,6 +38,7 @@ const emit = defineEmits<{
   downloadCli: [kind: "gh" | "glab"];
   cliAuthLogin: [payload: { scope: "system" | "bundled"; kind: "gh" | "glab" }];
   refresh: [];
+  openUrl: [url: string];
 }>();
 
 const method = ref<GitInsightConfigView["mrMethod"]>(null);
@@ -181,6 +182,19 @@ const githubEnabled = computed(
 const gitlabEnabled = computed(
   () => platform.value === "gitlab" || platform.value === "unknown",
 );
+
+function githubTokenCreateUrl(): string {
+  return "https://github.com/settings/tokens/new?scopes=repo&description=Git%20Insight";
+}
+
+function gitlabTokenCreateUrl(): string {
+  const origin = props.cliStatus?.remoteWebOrigin?.trim() || "https://gitlab.com";
+  return `${origin.replace(/\/+$/, "")}/-/user_settings/personal_access_tokens`;
+}
+
+function openTokenCreatePage(which: "github" | "gitlab"): void {
+  emit("openUrl", which === "github" ? githubTokenCreateUrl() : gitlabTokenCreateUrl());
+}
 
 /** C 可用：对应平台 Token 校验通过（校验中不算就绪） */
 const tokenReady = computed(() => {
@@ -456,6 +470,16 @@ const gitlabTitleStatus = computed(() => {
               class="config-tokens config-inline"
               @click.stop
             >
+              <div class="token-create-row">
+                <button
+                  type="button"
+                  class="btn secondary tiny"
+                  :disabled="busy || previewMode || !githubEnabled"
+                  @click="openTokenCreatePage('github')"
+                >
+                  打开 GitHub 创建 Token 页面
+                </button>
+              </div>
               <label :class="{ 'token-disabled': !githubEnabled }">
                 <span class="token-label-row">
                   <span>GitHub Token（repo / pull request 权限）</span>
@@ -484,6 +508,16 @@ const gitlabTitleStatus = computed(() => {
                   @change="onTokenChange('github')"
                 />
               </label>
+              <div class="token-create-row">
+                <button
+                  type="button"
+                  class="btn secondary tiny"
+                  :disabled="busy || previewMode || !gitlabEnabled"
+                  @click="openTokenCreatePage('gitlab')"
+                >
+                  打开 GitLab 创建 Token 页面
+                </button>
+              </div>
               <label :class="{ 'token-disabled': !gitlabEnabled }">
                 <span class="token-label-row">
                   <span>GitLab Token（必须以 glpat- 开头）</span>

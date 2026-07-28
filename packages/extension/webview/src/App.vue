@@ -919,6 +919,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             @refresh="refreshGitConfig"
             @download-cli="downloadCli"
             @cli-auth-login="cliAuthLogin"
+            @open-url="openExternalUrl"
           />
         </template>
 

@@ -54,6 +54,7 @@ async function loadCommitMetaChunk(
   if (shas.length === 0) {
     return map;
   }
+  // 用 log --no-walk + 字段尾部分隔，避免 git show 多对象时按行切割丢 subject
   const { stdout } = await withSoftProgress(
     onProgress && softTo > softFrom ? onProgress : undefined,
     softFrom,
@@ -61,27 +62,35 @@ async function loadCommitMetaChunk(
     softLabel,
     () =>
       runGit(repoRoot, [
-        "show",
-        "-s",
-        "--format=%H%00%P%00%an%00%at%00%s",
+        "log",
+        "--no-walk=unsorted",
+        "--pretty=format:%H%x00%P%x00%an%x00%at%x00%s%x00",
         ...shas,
       ]),
   );
-  for (const line of stdout.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const [sha, parentsRaw, author, timeRaw, message] = line.split("\0");
+  const parts = stdout.split("\0");
+  let i = 0;
+  while (i < parts.length) {
+    const sha = (parts[i] ?? "").trim();
     if (!sha) {
+      i += 1;
       continue;
     }
+    if (i + 4 >= parts.length) {
+      break;
+    }
+    const parentsRaw = parts[i + 1] ?? "";
+    const author = (parts[i + 2] ?? "").trim();
+    const timeRaw = parts[i + 3] ?? "0";
+    const message = (parts[i + 4] ?? "").replace(/\r?\n/g, " ").trim();
     map.set(sha, {
       sha,
       parents: parentsRaw ? parentsRaw.split(" ").filter(Boolean) : [],
-      author: author ?? "",
-      time: Number(timeRaw ?? 0),
-      message: message ?? "",
+      author,
+      time: Number(timeRaw || 0),
+      message,
     });
+    i += 5;
   }
   return map;
 }

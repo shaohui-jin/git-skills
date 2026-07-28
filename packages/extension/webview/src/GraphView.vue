@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CanvasEvent, Graph, NodeEvent } from "@antv/g6";
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { pathToRoots } from "./graph/pathToRoot";
 import {
   branchGraphToG6,
@@ -21,12 +21,34 @@ const emit = defineEmits<{
 const stageRef = ref<HTMLDivElement | null>(null);
 const containerRef = ref<HTMLDivElement | null>(null);
 const graphInst = shallowRef<Graph | null>(null);
-const pathHint = ref("");
 let resizeObserver: ResizeObserver | null = null;
 let g6Data: G6GraphData | null = null;
 let renderSeq = 0;
-/** 底部 path-hint 预留 */
-const HINT_RESERVE = 44;
+/** 底部图例预留 */
+const HINT_RESERVE = 56;
+
+const searchOpen = ref(false);
+const searchQuery = ref("");
+const searchIndex = ref(0);
+
+const LEGEND_TEXT =
+  "点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 · " +
+  "绿色=本地分支 · 蓝色=远程跟踪分支 · 从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点";
+
+const searchHits = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q || !g6Data) {
+    return [] as string[];
+  }
+  return g6Data.nodes
+    .filter((n) => {
+      const name = (n.data.tipName || n.data.label || "").toLowerCase();
+      const sha = (n.data.sha || "").toLowerCase();
+      const sub = (n.data.sub || "").toLowerCase();
+      return name.includes(q) || sha.includes(q) || sub.includes(q);
+    })
+    .map((n) => n.id);
+});
 
 function nodeLabel(id: string): string {
   const n = g6Data?.nodes.find((x) => x.id === id);
@@ -76,7 +98,6 @@ async function clearHighlight(g: Graph): Promise<void> {
     states[e.id] = [];
   }
   await g.setElementState(states);
-  pathHint.value = "";
   emit("select", null);
 }
 
@@ -102,12 +123,6 @@ async function highlightPath(g: Graph, startId: string): Promise<void> {
 
   await g.setElementState(states);
 
-  const labels = [...chain].reverse().map(nodeLabel);
-  pathHint.value =
-    labels.length <= 1
-      ? `已选：${labels[0] ?? startId}（已是根源）`
-      : `到根源：${labels.join(" → ")}（高亮 ${nodeIds.size} 个分支）`;
-
   const tipName = tipNameFromNodeId(startId);
   if (tipName) {
     emit("select", { tipName, chain });
@@ -116,11 +131,76 @@ async function highlightPath(g: Graph, startId: string): Promise<void> {
   }
 }
 
+async function focusNode(id: string): Promise<void> {
+  const g = graphInst.value;
+  if (!g || !g6Data) {
+    return;
+  }
+  await highlightPath(g, id);
+  try {
+    // G6 v5：将元素移入视口中心
+    await g.focusElement(id, { duration: 300 });
+  } catch {
+    // ignore — 高亮已完成，视口平移失败可接受
+  }
+}
+
+function openSearch(): void {
+  searchOpen.value = true;
+  searchIndex.value = 0;
+  void nextTick(() => {
+    const el = stageRef.value?.querySelector<HTMLInputElement>(".graph-search-input");
+    el?.focus();
+    el?.select();
+  });
+}
+
+function closeSearch(): void {
+  searchOpen.value = false;
+  searchQuery.value = "";
+  searchIndex.value = 0;
+}
+
+async function goSearchHit(delta: number): Promise<void> {
+  const hits = searchHits.value;
+  if (!hits.length) {
+    return;
+  }
+  const next = (searchIndex.value + delta + hits.length * 50) % hits.length;
+  searchIndex.value = next;
+  await focusNode(hits[next]!);
+}
+
+async function onSearchEnter(): Promise<void> {
+  if (!searchHits.value.length) {
+    return;
+  }
+  if (searchHits.value.length === 1) {
+    searchIndex.value = 0;
+    await focusNode(searchHits.value[0]!);
+    return;
+  }
+  await goSearchHit(1);
+}
+
+function onStageKeydown(ev: KeyboardEvent): void {
+  const mod = ev.ctrlKey || ev.metaKey;
+  if (mod && ev.key.toLowerCase() === "f") {
+    ev.preventDefault();
+    ev.stopPropagation();
+    openSearch();
+    return;
+  }
+  if (ev.key === "Escape" && searchOpen.value) {
+    ev.preventDefault();
+    closeSearch();
+  }
+}
+
 async function destroyGraph(): Promise<void> {
   const g = graphInst.value;
   graphInst.value = null;
   g6Data = null;
-  pathHint.value = "";
   if (g) {
     try {
       g.destroy();
@@ -228,8 +308,9 @@ async function renderGraph(): Promise<void> {
     edge: {
       type: "cubic-horizontal",
       style: {
-        stroke: "rgba(200,200,200,0.4)",
-        lineWidth: 1.5,
+        // 未选中时也要和深色背景拉开对比
+        stroke: "rgba(180, 198, 220, 0.85)",
+        lineWidth: 2,
         endArrow: true,
         opacity: 1,
       },
@@ -241,7 +322,7 @@ async function renderGraph(): Promise<void> {
           endArrow: true,
         },
         inactive: {
-          opacity: 0.08,
+          opacity: 0.2,
         },
       },
     },
@@ -299,12 +380,24 @@ function bindResize(): void {
   resizeObserver.observe(stage);
 }
 
+function onWindowKeydown(ev: KeyboardEvent): void {
+  // webview 聚焦时拦截 Ctrl+F；宿主若已抢走快捷键可用右上角「搜索节点」
+  if (!stageRef.value?.isConnected) {
+    return;
+  }
+  onStageKeydown(ev);
+}
+
 onMounted(() => {
   void renderGraph().then(bindResize);
+  stageRef.value?.addEventListener("keydown", onStageKeydown);
+  window.addEventListener("keydown", onWindowKeydown);
 });
 
 onBeforeUnmount(() => {
   renderSeq += 1;
+  stageRef.value?.removeEventListener("keydown", onStageKeydown);
+  window.removeEventListener("keydown", onWindowKeydown);
   resizeObserver?.disconnect();
   resizeObserver = null;
   void destroyGraph();
@@ -313,17 +406,57 @@ onBeforeUnmount(() => {
 watch(
   () => props.graph,
   () => {
+    closeSearch();
     void renderGraph();
   },
 );
+
+watch(searchQuery, () => {
+  searchIndex.value = 0;
+});
 </script>
 
 <template>
-  <div ref="stageRef" class="graph-stage">
+  <div
+    ref="stageRef"
+    class="graph-stage"
+    tabindex="0"
+    title="在图上按 Ctrl+F 搜索分支节点"
+  >
     <div ref="containerRef" class="graph-scroll graph-g6" />
-    <div v-if="pathHint" class="path-hint" :title="pathHint">{{ pathHint }}</div>
-    <div v-else class="path-hint path-hint--idle">
-      点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览
+
+    <button
+      v-if="!searchOpen"
+      type="button"
+      class="btn secondary tiny graph-search-toggle"
+      title="Ctrl+F"
+      @click="openSearch"
+    >
+      搜索节点
+    </button>
+
+    <div v-if="searchOpen" class="graph-search" @mousedown.stop @click.stop>
+      <input
+        class="graph-search-input"
+        type="search"
+        :value="searchQuery"
+        placeholder="搜索分支名 / sha…"
+        @input="searchQuery = ($event.target as HTMLInputElement).value"
+        @keydown.enter.prevent="onSearchEnter"
+        @keydown.esc.prevent="closeSearch"
+      />
+      <span class="graph-search-meta muted">
+        {{ searchHits.length ? `${Math.min(searchIndex + 1, searchHits.length)}/${searchHits.length}` : "0" }}
+      </span>
+      <button type="button" class="btn secondary tiny" :disabled="!searchHits.length" @click="goSearchHit(-1)">
+        上一个
+      </button>
+      <button type="button" class="btn secondary tiny" :disabled="!searchHits.length" @click="goSearchHit(1)">
+        下一个
+      </button>
+      <button type="button" class="btn secondary tiny" @click="closeSearch">关闭</button>
     </div>
+
+    <div class="path-hint path-hint--idle" :title="LEGEND_TEXT">{{ LEGEND_TEXT }}</div>
   </div>
 </template>

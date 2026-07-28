@@ -113,6 +113,8 @@ export type WebviewRequest =
 
 export interface CliStatusPayload {
   platformHint: "github" | "gitlab" | "unknown";
+  /** origin 的 https 站点根，如 https://gitlab.example.com */
+  remoteWebOrigin?: string | null;
   systemGh: { installed: boolean; loggedIn: boolean };
   systemGlab: { installed: boolean; loggedIn: boolean };
   bundledGh: { installed: boolean; loggedIn: boolean };

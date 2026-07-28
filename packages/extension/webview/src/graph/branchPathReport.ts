@@ -211,11 +211,15 @@ export function pathReport(
     }
     const tipCommit = nodeBySha(graph).get(selectedTip.sha);
     if (tipCommit) {
-      lines.push(`- Tip 提交：${tipCommit.author} — ${tipCommit.message}`);
+      const tipMsg = tipCommit.message?.trim() || "（无提交说明）";
+      const tipAuthor = tipCommit.author?.trim() || "未知作者";
+      lines.push(`- Tip 提交：${tipAuthor} — ${tipMsg}`);
       const when = formatTime(tipCommit.time);
       if (when) {
         lines.push(`- 时间：${when}`);
       }
+    } else {
+      lines.push(`- Tip 提交元数据未加载（可重新加载分支图）`);
     }
     lines.push(``);
   }
@@ -250,8 +254,15 @@ export function pathReport(
     lines.push(`- 中间提交 **${middle.length}** 个${omitted > 0 ? `（显示前 ${shown.length}）` : ""}：`);
     for (const c of shown) {
       const when = formatTime(c.time);
+      const author = c.author?.trim() || "未知作者";
+      const msg = c.message?.trim();
+      const detail = msg
+        ? msg
+        : author === "未知作者" && !when
+          ? "（提交元数据缺失）"
+          : "（无提交说明）";
       lines.push(
-        `  - \`${short(c.sha)}\` ${c.author}${when ? ` · ${when}` : ""} — ${c.message || "(无说明)"}`,
+        `  - \`${short(c.sha)}\` ${author}${when ? ` · ${when}` : ""} — ${detail}`,
       );
     }
     if (omitted > 0) {

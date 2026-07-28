@@ -1,7 +1,10 @@
-# git-insight（扩展包）
+# Git Insight 扩展
 
-说明文档在仓库根目录的 **`docs/`**：
+Cursor / VS Code Webview 面板，引擎为 `@git-insight/core`。
 
-- 使用：`docs/user-guide.md`
-- 扩展安装 / 预览 / 打包：`docs/extension.md`
-- 文档索引：`docs/README.md`
+**完整说明：** [docs/guide.md](../../docs/guide.md)（安装 / 模块操作 / 实现见 §1.4、§2、§3.3）
+
+```bash
+pnpm package:vsix
+cursor --install-extension git-insight.vsix --force
+```

@@ -107,6 +107,8 @@ export interface GitInsightConfigView {
 
 export interface CliStatusPayload {
   platformHint: "github" | "gitlab" | "unknown";
+  /** origin 规范化后的 https 网页根（含路径前的 origin，如 https://gitlab.example.com） */
+  remoteWebOrigin?: string | null;
   systemGh: { installed: boolean; loggedIn: boolean };
   systemGlab: { installed: boolean; loggedIn: boolean };
   bundledGh: { installed: boolean; loggedIn: boolean };

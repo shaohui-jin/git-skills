@@ -146,7 +146,17 @@ async function buildCliStatus(
   const remote = await runGit(repoRoot, ["remote", "get-url", "origin"], {
     allowFail: true,
   });
-  const platformHint = detectMrPlatform(remote.stdout.trim());
+  const originUrl = remote.stdout.trim();
+  const platformHint = detectMrPlatform(originUrl);
+  const web = normalizeRemoteWebUrl(originUrl);
+  let remoteWebOrigin: string | null = null;
+  if (web) {
+    try {
+      remoteWebOrigin = new URL(web).origin;
+    } catch {
+      remoteWebOrigin = null;
+    }
+  }
   const systemGh = await checkSystemCli(repoRoot, "gh");
   const systemGlab = await checkSystemCli(repoRoot, "glab");
   const bundledGh = cliStorageDir
@@ -157,6 +167,7 @@ async function buildCliStatus(
     : { installed: false, loggedIn: false };
   return {
     platformHint,
+    remoteWebOrigin,
     systemGh,
     systemGlab,
     bundledGh,

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { writeFile } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
@@ -24,6 +24,17 @@ export interface AiBridgeSession {
   cancel: (reason?: string) => void;
   submitText: (text: string) => void;
   close: () => void;
+}
+
+async function safeUnlink(path: string | undefined): Promise<void> {
+  if (!path) {
+    return;
+  }
+  try {
+    await unlink(path);
+  } catch {
+    // ignore missing / busy
+  }
 }
 
 let active: {
@@ -126,6 +137,9 @@ export function buildCursorChatPrompt(
     ``,
     `## 完成后如何回传（二选一）`,
     ``,
+    `重要：必须以方式 A 的 HTTP POST 或方式 B 的粘贴把 JSON 交给 Git Insight。`,
+    `若环境配置了 MCP feedback / 其它旁路确认工具，不要只停在 feedback；仍须 curl POST 或让用户粘贴，否则扩展收不到结果。`,
+    ``,
     `### 方式 A（推荐，Agent / 可跑终端时）`,
     `把最终 JSON 保存后执行（端口勿改）：`,
     ``,
@@ -139,7 +153,7 @@ export function buildCursorChatPrompt(
     `也可先把完整 JSON 写入临时文件再：`,
     `curl -s -X POST "${callbackUrl}" -H "Content-Type: application/json" --data-binary @result.json`,
     ``,
-    `### 方式 B（普通 Chat）`,
+    `### 方式 B（普通 Chat / MCP feedback 兜底）`,
     `只输出一个 JSON 对象（不要其它废话）。然后回到 Git Insight 弹层，点「粘贴结果并应用」贴进去。`,
     ``,
     `回传地址：\`${callbackUrl}\``,
@@ -303,6 +317,12 @@ export async function startAiResolveBridge(
   const prompt = buildCursorChatPrompt(req, callbackUrl, conflictsFile, batch);
   await writeFile(promptFile, prompt, "utf8");
 
+  const cleanupTempFiles = (): void => {
+    void safeUnlink(conflictsFile);
+    void safeUnlink(promptFile);
+  };
+  void waitResult.finally(cleanupTempFiles);
+
   return {
     port,
     callbackUrl,
@@ -312,13 +332,17 @@ export async function startAiResolveBridge(
     waitResult,
     cancel: (reason) => {
       settleErr(new Error(reason ?? "已取消"));
+      cleanupTempFiles();
       closeAiBridgeServer();
     },
     submitText: (text) => {
       settleOk(text);
       setTimeout(() => closeAiBridgeServer(), 50);
     },
-    close: () => closeAiBridgeServer(),
+    close: () => {
+      cleanupTempFiles();
+      closeAiBridgeServer();
+    },
   };
 }
 

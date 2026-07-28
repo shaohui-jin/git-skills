@@ -1,5 +1,7 @@
 # CLI 速查
 
+完整说明见 [docs/guide.md](../docs/guide.md)。
+
 ```bash
 pnpm --filter @git-insight/core build
 
