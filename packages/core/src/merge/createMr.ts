@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { MrMethod } from "../config/gitInsightConfig.js";
 import { GitError, resolveRepoRoot, runGit } from "../git/runner.js";
 import { buildCreateMrUrl, defaultTempBranchName } from "./applyResolve.js";
+import { branchNameForMr } from "./branchName.js";
 
 export type MrPlatform = "github" | "gitlab" | "unknown";
 
@@ -146,14 +147,6 @@ export function detectMrPlatform(remoteUrl: string): MrPlatform {
   }
 }
 
-/** API / CLI 用的分支短名（去掉 refs、remote 前缀） */
-export function branchNameForMr(ref: string): string {
-  return ref
-    .replace(/^refs\/heads\//, "")
-    .replace(/^refs\/remotes\/[^/]+\//, "")
-    .trim();
-}
-
 function parseOwnerRepo(remoteUrl: string): { owner: string; repo: string; projectPath: string } | null {
   const web = normalizeRemoteWebUrl(remoteUrl);
   if (!web) {
@@ -278,10 +271,25 @@ async function listGithubCandidatesByToken(
   if (!res.ok) {
     return [];
   }
-  const arr = (await res.json()) as Array<{ login?: string; role_name?: string }>;
+  const arr = (await res.json()) as Array<{
+    login?: string;
+    role_name?: string;
+    permissions?: { admin?: boolean; maintain?: boolean; push?: boolean };
+  }>;
   return arr
     .filter((u) => u.login)
-    .map((u) => ({ username: u.login!, role: u.role_name }));
+    .map((u) => {
+      let role = u.role_name;
+      if (!role && u.permissions?.admin) {
+        role = "admin";
+      } else if (!role && u.permissions?.maintain) {
+        role = "maintain";
+      } else if (!role && u.permissions?.push) {
+        role = "write";
+      }
+      return { username: u.login!, role };
+    })
+    .filter((c) => isGithubMergeRole(c.role));
 }
 
 async function listGitlabCandidatesByToken(
@@ -313,7 +321,7 @@ async function listGitlabCandidatesByToken(
     access_level?: number;
   }>;
   return arr
-    .filter((u) => u.username)
+    .filter((u) => u.username && isGitlabMaintainerPlus(u.access_level))
     .map((u) => ({
       username: u.username!,
       name: u.name,
@@ -438,28 +446,14 @@ async function listGithubCandidates(
       "api",
       `repos/${owner}/${repo}/collaborators?per_page=100`,
       "--jq",
-      ".[] | {username: .login, name: (.name // .login), role: .role_name}",
+      '.[] | select(.permissions.admin == true or .permissions.maintain == true or .role_name == "admin" or .role_name == "maintain") | {username: .login, name: (.name // .login), role: (if .role_name then .role_name elif .permissions.admin then "admin" else "maintain" end)}',
     ],
     cwd,
   );
   if (api.code !== 0) {
-    // 回退：可指派用户
-    const alt = await runCmd(
-      cliPath,
-      [
-        "api",
-        `repos/${owner}/${repo}/assignable_users?per_page=100`,
-        "--jq",
-        ".[] | {username: .login, name: (.name // .login), role: \"assignable\"}",
-      ],
-      cwd,
-    );
-    if (alt.code !== 0) {
-      return [];
-    }
-    return parseJsonLinesOrArray(alt.stdout);
+    return [];
   }
-  return parseJsonLinesOrArray(api.stdout);
+  return parseJsonLinesOrArray(api.stdout).filter((c) => isGithubMergeRole(c.role));
 }
 
 async function listGitlabCandidates(
@@ -487,7 +481,7 @@ async function listGitlabCandidates(
       access_level?: number;
     }>;
     return arr
-      .filter((u) => u.username)
+      .filter((u) => u.username && isGitlabMaintainerPlus(u.access_level))
       .map((u) => ({
         username: u.username!,
         name: u.name,
@@ -503,8 +497,11 @@ function accessLevelLabel(level?: number): string | undefined {
   if (level == null) {
     return undefined;
   }
+  if (level >= 50) {
+    return "owner";
+  }
   if (level >= 40) {
-    return "maintainer+";
+    return "maintainer";
   }
   if (level >= 30) {
     return "developer";
@@ -513,6 +510,16 @@ function accessLevelLabel(level?: number): string | undefined {
     return "reporter";
   }
   return `level:${level}`;
+}
+
+/** GitLab：仅 Maintainer / Owner（可合保护分支的一层） */
+function isGitlabMaintainerPlus(level?: number): boolean {
+  return (level ?? 0) >= 40;
+}
+
+function isGithubMergeRole(role?: string): boolean {
+  const r = (role || "").toLowerCase();
+  return r === "admin" || r === "maintain";
 }
 
 function parseJsonLinesOrArray(text: string): MrCandidate[] {

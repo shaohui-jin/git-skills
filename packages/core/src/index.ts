@@ -73,8 +73,8 @@ export type {
   ApplyResolveResult,
   StashFilePayload,
 } from "./merge/applyResolve.js";
+export { branchNameForMr } from "./merge/branchName.js";
 export {
-  branchNameForMr,
   createMergeRequest,
   detectMrPlatform,
   normalizeRemoteWebUrl,

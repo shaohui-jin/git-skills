@@ -130,7 +130,12 @@ export type HostMessage =
   | {
       type: "workspace";
       cwd: string | null;
-      branches: Array<{ name: string; remote: boolean }>;
+      branches: Array<{
+        name: string;
+        remote: boolean;
+        remoteName?: string;
+        gitRef: string;
+      }>;
       error?: string;
       previewMode?: boolean;
     }

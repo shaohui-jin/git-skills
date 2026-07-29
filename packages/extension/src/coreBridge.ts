@@ -43,13 +43,19 @@ import {
 } from "./remoteRepo.js";
 
 export interface BranchOption {
+  /** 短名（无 remote 前缀）：main、feature/x */
   name: string;
+  /** 是否来自 refs/remotes */
   remote: boolean;
+  /** 远程名，仅 remote=true 时有值，如 origin */
+  remoteName?: string;
+  /** git 操作身份：本地为短名；远程为 origin/main */
+  gitRef: string;
 }
 
 /**
  * 列出全部本地/远程分支，不做数量截断。
- * 本地分支用 refs/heads 判定（名称可含 `/`，不能按 `/` 误判为远程）。
+ * 不改写磁盘 refs；UI 用 name 建树，ops 用 gitRef，MR 用 name。
  */
 export async function listBranchNames(cwd: string): Promise<BranchOption[]> {
   const { stdout } = await runGit(cwd, [
@@ -72,11 +78,24 @@ export async function listBranchNames(cwd: string): Promise<BranchOption[]> {
       continue;
     }
     if (refname.startsWith("refs/heads/")) {
-      names.push({ name: shortName, remote: false });
+      // short 即为本地短名（可含 /）
+      names.push({
+        name: shortName,
+        remote: false,
+        gitRef: shortName,
+      });
       continue;
     }
-    if (/^refs\/remotes\/[^/]+\/.+/.test(refname)) {
-      names.push({ name: shortName, remote: true });
+    const m = refname.match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+    if (m) {
+      const remoteName = m[1]!;
+      const branchPath = m[2]!;
+      names.push({
+        name: branchPath,
+        remote: true,
+        remoteName,
+        gitRef: `${remoteName}/${branchPath}`,
+      });
     }
   }
   return names;
@@ -257,7 +276,7 @@ export async function handleWebviewRequest(
   };
   const cfgPath = () => configPath(cliStorageDir);
 
-  /** 从扩展配置取当前仓库对应平台的 Token，供 fetch/clone 鉴权 */
+  /** 从扩展配置取当前仓库对应平台的 Token，供一键申请 MR */
   const resolveGitAuth = async (): Promise<{
     authToken?: string;
     authProvider: "github" | "gitlab" | "unknown";
@@ -423,11 +442,7 @@ export async function handleWebviewRequest(
 
   try {
     if (req.type === "fetch") {
-      const auth = await resolveGitAuth();
-      const data = await fetchRemote(cwd, req.remote ?? "origin", onProgress, {
-        token: auth.authToken,
-        provider: auth.authProvider,
-      });
+      const data = await fetchRemote(cwd, req.remote ?? "origin", onProgress);
       return {
         messages: [
           { type: "fetchResult", data, report: reportFetch(data) },
@@ -439,7 +454,6 @@ export async function handleWebviewRequest(
     if (req.type === "graph") {
       // 网页/扩展默认全量（maxNodes: 0）；CLI 仍默认 200
       const maxNodes = req.maxNodes === undefined ? 0 : req.maxNodes;
-      const auth = await resolveGitAuth();
       const data = await buildBranchGraph({
         cwd,
         into: req.into,
@@ -447,8 +461,6 @@ export async function handleWebviewRequest(
         fetch: !req.noFetch,
         maxNodes,
         onProgress,
-        authToken: auth.authToken,
-        authProvider: auth.authProvider,
       });
       return {
         messages: [
@@ -475,15 +487,12 @@ export async function handleWebviewRequest(
           ],
         };
       }
-      const auth = await resolveGitAuth();
       const data = await rehearseMerge({
         cwd,
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
         onProgress,
-        authToken: auth.authToken,
-        authProvider: auth.authProvider,
       });
       return {
         messages: [

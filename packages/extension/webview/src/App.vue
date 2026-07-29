@@ -417,20 +417,22 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       status.value = msg.cwd
         ? `仓库：${msg.cwd}（本地 ${localCount} / 远程 ${remoteCount}）`
         : "未检测到仓库，请选择或输入目录";
-      const names = msg.branches.map((b) => b.name);
-      if (into.value && !names.includes(into.value)) {
+      const refs = msg.branches.map((b) => b.gitRef);
+      if (into.value && !refs.includes(into.value)) {
         into.value = "";
       }
-      if (from.value && !names.includes(from.value)) {
+      if (from.value && !refs.includes(from.value)) {
         from.value = "";
       }
       if (!into.value) {
         into.value =
-          msg.branches.find((b) => !b.remote)?.name ?? msg.branches[0]?.name ?? "";
+          msg.branches.find((b) => !b.remote)?.gitRef ??
+          msg.branches[0]?.gitRef ??
+          "";
       }
       if (!from.value) {
         from.value =
-          msg.branches.find((b) => b.name !== into.value)?.name ?? "";
+          msg.branches.find((b) => b.gitRef !== into.value)?.gitRef ?? "";
       }
     }
     return;

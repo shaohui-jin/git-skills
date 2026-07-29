@@ -2,7 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   buildBranchTree,
+  branchDisplayLabel,
   filterPathTree,
+  findBranchByGitRef,
   flattenPathTree,
   type BranchOption,
 } from "./graph/branchTree";
@@ -33,6 +35,14 @@ const panelStyle = ref<Record<string, string>>({});
 const activeIndex = ref(-1);
 
 const tree = computed(() => buildBranchTree(props.branches));
+
+const triggerLabel = computed(() => {
+  if (!props.modelValue) {
+    return "";
+  }
+  const hit = findBranchByGitRef(props.branches, props.modelValue);
+  return hit ? branchDisplayLabel(hit) : props.modelValue;
+});
 
 const filtered = computed(() => {
   const q = filter.value.trim();
@@ -316,7 +326,7 @@ onBeforeUnmount(() => {
       @click="toggle"
     >
       <span class="tree-select-value" :class="{ placeholder: !modelValue }">
-        {{ modelValue || placeholder || "选择分支…" }}
+        {{ triggerLabel || placeholder || "选择分支…" }}
       </span>
       <span class="tree-select-arrow">▾</span>
     </button>

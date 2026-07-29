@@ -67,51 +67,23 @@ export async function resolveFetchAuth(
 }
 
 /**
- * 鉴权顺序：
- * 1. 本机 Git 凭据（非交互，不弹窗）
- * 2. 方案 C Token（非交互）
- * 3. 本机 Git 凭据 + 允许弹窗登录（接近 WebStorm）
+ * 使用本机 Git 凭据 fetch（允许弹窗登录）。
+ * Token 仅用于一键申请 MR，不参与 fetch。
  */
 export async function fetchRemote(
   cwd?: string,
   remote = "origin",
   onProgress?: ProgressReporter,
-  auth?: GitAuthOptions,
+  _auth?: GitAuthOptions,
 ): Promise<FetchResult> {
   const repoRoot = await resolveRepoRoot(cwd);
-  const token = auth?.token?.trim();
-  const tokenAuth: GitAuthOptions | undefined = token
-    ? { token, provider: auth?.provider ?? "unknown" }
-    : undefined;
 
   await reportProgress(onProgress, 1, "Fetch 远程分支…");
 
-  // 1) 本机凭据（已登录缓存 / SSH），不弹窗
-  let result = await runFetchOnce(repoRoot, remote, onProgress, {
-    label: `Fetch ${remote}（本机凭据）…`,
+  const result = await runFetchOnce(repoRoot, remote, onProgress, {
+    interactive: true,
+    label: `Fetch ${remote}…`,
   });
-
-  // 2) 方案 C Token
-  if (result.code !== 0 && tokenAuth) {
-    await reportProgress(onProgress, 2, "本机凭据不可用，尝试配置 Token…");
-    result = await runFetchOnce(repoRoot, remote, onProgress, {
-      auth: tokenAuth,
-      label: `Fetch ${remote}（配置 Token）…`,
-    });
-  }
-
-  // 3) 再走 Git 凭据，允许弹窗登录
-  if (result.code !== 0) {
-    await reportProgress(
-      onProgress,
-      3,
-      "Token 不可用，请在弹窗中完成 Git 登录…",
-    );
-    result = await runFetchOnce(repoRoot, remote, onProgress, {
-      interactive: true,
-      label: `Fetch ${remote}（交互登录）…`,
-    });
-  }
 
   const ok = result.code === 0;
   await reportProgress(

@@ -198,10 +198,6 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
       repoRoot,
       options.remote ?? "origin",
       (u) => mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
-      {
-        token: options.authToken,
-        provider: options.authProvider,
-      },
     );
     fetchOk = fr.ok;
     if (!fr.ok) {

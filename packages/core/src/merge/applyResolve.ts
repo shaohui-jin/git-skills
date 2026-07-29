@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { reportProgress } from "../progress.js";
 import type { ProgressReporter } from "../types.js";
 import { GitError, ensureRev, resolveRepoRoot, runGit } from "../git/runner.js";
+import { branchNameForMr } from "./branchName.js";
 
 export interface StashFilePayload {
   path: string;
@@ -47,9 +48,7 @@ export interface ApplyResolveResult {
 }
 
 function slugRef(ref: string): string {
-  return ref
-    .replace(/^refs\/heads\//, "")
-    .replace(/^refs\/remotes\/[^/]+\//, "")
+  return branchNameForMr(ref)
     .replace(/[^a-zA-Z0-9._/-]+/g, "-")
     .replace(/\/+/g, "-")
     .replace(/^-+|-+$/g, "");

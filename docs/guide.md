@@ -140,48 +140,41 @@ cursor --install-extension git-insight.vsix --force
 git fetch --prune --progress origin
 ```
 
-**三步鉴权顺序（扩展）**
+**鉴权（仅本机 Git，不用方案 C Token）**
 
-```mermaid
-flowchart TD
-  A["① 本机 Git 凭据<br/>非交互 · 不弹窗"] -->|成功| OK[Fetch 完成]
-  A -->|失败| B["② 方案 C Token<br/>非交互 · Basic 注入"]
-  B -->|成功| OK
-  B -->|失败或未配置| C["③ 本机 Git 凭据<br/>允许弹窗登录"]
-  C -->|成功| OK
-  C -->|失败| FAIL["Fetch 失败<br/>仍用本地 refs 并提示"]
-```
+Token **不参与** fetch（不能替代本机 Git 登录拉代码）；仅用于一键申请 MR。
 
-| 步骤 | 环境要点 |
-|------|----------|
-| ① 本机凭据 | `GIT_TERMINAL_PROMPT=0`，`GCM_INTERACTIVE=never`，清空 askpass |
-| ② Token | 同上 + `git -c http.extraHeader="Authorization: Basic <base64>"` |
-| ③ 交互登录 | `GIT_TERMINAL_PROMPT=1`，`GCM_INTERACTIVE=always`，保留 askpass |
-
-Token 注入（与 REST 校验的 Bearer **不同**，此处为 HTTP Basic）：
-
-| 平台 | username | password |
-|------|----------|----------|
-| GitHub | `x-access-token` | PAT |
-| GitLab | `oauth2` | `glpat-…` |
-
-等价示例：
-
-```bash
-git -c "http.extraHeader=Authorization: Basic <base64(user:token)>" \
-  fetch --prune --progress origin
-```
+直接走本机 Git 凭据，**允许弹窗登录**（与 WebStorm 类似；已有缓存凭据时通常不会弹窗）。
 
 | UI 状态 | 含义 |
 |---------|------|
 | `（已 fetch）` | 本次成功，远程跟踪分支已刷新 |
-| `（fetch 失败，可能与线上不一致）` | 三步都失败，图来自本地旧 refs |
+| `（fetch 失败，可能与线上不一致）` | fetch 失败，图来自本地旧 refs |
 | `（未 fetch）` | 请求带了 `noFetch` / CLI `--no-fetch` |
 
-代码：`packages/core/src/git/fetch.ts`、`git/auth.ts`；扩展 `resolveGitAuth`。
+代码：`packages/core/src/git/fetch.ts`；扩展侧不再把 Token 传入 fetch。
 
 ---
 
+### 2.2.1 分支协议（短名 + gitRef）
+
+宿主列出分支时**不改写**磁盘 refs，只发结构化字段：
+
+| 字段 | 含义 | 示例（本地 `main`） | 示例（远程） |
+|------|------|---------------------|--------------|
+| `name` | 短名（无 remote 前缀） | `main` | `feature/x` |
+| `remote` | 是否 `refs/remotes` | `false` | `true` |
+| `remoteName` | 远程名（仅远程） | — | `origin` |
+| `gitRef` | git 操作身份 | `main` | `origin/feature/x` |
+
+- **UI 树**：本地 / 远程分组，路径按短名 `name` 分层（远程叶子挂在 `origin` 下显示 `feature/x`）
+- **预演 / 一键解决**：请求里的 `into` / `from` 传 **`gitRef`**
+- **申请 MR**：API 的 source/target 用短名（`branchNameForMr(gitRef)` 去掉 `origin/` 等前缀；实现见 `packages/core/src/merge/branchName.ts`）
+- 同名本地与 `origin/同名` 靠 `gitRef` + `remote` 区分，不再把 `origin/xxx` 当作唯一协议形态
+
+代码：`packages/extension/src/coreBridge.ts`（`listBranchNames`）、`webview/.../branchTree.ts`、`packages/core/src/merge/branchName.ts`。
+
+---
 ### 2.3 分支图
 
 **操作要点**
@@ -307,13 +300,22 @@ git-insight conflict-blame --into <线上> --from <我的>
 | 失败回滚 | `git merge --abort` |
 | 清理 | `git worktree remove --force <wtPath>` + `git worktree prune` |
 
-默认临时分支名：`merge/<from-slug>-into-<into>`。  
+默认临时分支名：`merge/<from短名>-into-<into短名>`（slug 已去掉 `origin/` 等前缀）。  
 方向：临时分支**基于线上 into**，再 merge **我的 from**。
+
+**`worktree add -B` 说明**
+
+`-B` 会把已存在的同名临时分支**重置**到当前 into tip，再挂到独立 worktree。注意：
+
+| 风险 | 说明 |
+|------|------|
+| 同名临时分支已有提交 | 会被重置；设计上临时分支可重建，勿当长期分支用 |
+| 同名分支已在**其他** worktree 检出 | `worktree add` 失败（扩展会提示） |
+| 同名分支已在**主工作区**检出 | 同样拒绝，避免抢检出 |
 
 代码：`packages/core/src/merge/applyResolve.ts`。
 
 ---
-
 ### 2.7 一键申请 MR
 
 **操作要点**
@@ -335,8 +337,7 @@ git-insight conflict-blame --into <线上> --from <我的>
 | 用途 | 指令 |
 |------|------|
 | 版本 / 登录 | `gh --version`；`gh auth status` |
-| 协作者 | `gh api repos/<owner>/<repo>/collaborators?per_page=100 --jq '…'` |
-| fallback | `gh api repos/…/assignable_users?per_page=100 --jq '…'` |
+| 协作者（审阅人） | `gh api repos/<owner>/<repo>/collaborators?per_page=100`，仅保留 **admin / maintain**（不含 write；write 无法合保护分支） |
 | 建 PR | `gh pr create --base <tgt> --head <src> --title … --body … [--reviewer a,b]` |
 
 **GitLab · glab**
@@ -344,16 +345,17 @@ git-insight conflict-blame --into <线上> --from <我的>
 | 用途 | 指令 |
 |------|------|
 | 版本 / 登录 | `glab --version`；`glab auth status` |
-| 成员 | `glab api projects/<encoded>/members/all?per_page=100` |
+| 成员（审阅人） | `glab api projects/<encoded>/members/all?per_page=100`，仅 **Maintainer+**（`access_level >= 40`，含 Owner） |
 | 建 MR | `glab mr create --source-branch … --target-branch … --title … --description … --yes [--reviewer x]…` |
 
-**Token（C）**：GitHub REST `collaborators` / `pulls`；GitLab `members/all` + `merge_requests`。  
+**Token（C）**：GitHub REST `collaborators` / `pulls`（审阅人同样仅 admin/maintain）；GitLab `members/all` + `merge_requests`（审阅人同样 Maintainer+）。  
 **浏览器（D）**：拼创建页 URL → `openExternal`。
+
+源/目标分支名提交给平台前都会经 `branchNameForMr` 去掉 remote 前缀（实现：`packages/core/src/merge/branchName.ts`）。
 
 代码：`packages/core/src/merge/createMr.ts`；UI：`CreateMrDialog.vue`。
 
 ---
-
 ### 2.8 打开远程仓库（扩展）
 
 | 用途 | 指令 |
@@ -459,7 +461,7 @@ pnpm --filter git-insight build
 | 分支图 | `packages/core/src/graph/builder.ts` |
 | 合并预演 | `packages/core/src/merge/preview.ts`、`rehearsal.ts` |
 | 一键落盘 | `packages/core/src/merge/applyResolve.ts` |
-| 创建 MR | `packages/core/src/merge/createMr.ts` |
+| 创建 MR | `packages/core/src/merge/createMr.ts`、`branchName.ts` |
 | CLI | `packages/core/src/cli.ts` |
 | 宿主桥接 | `packages/extension/src/coreBridge.ts` |
 | AI 选边 | `packages/extension/src/aiResolveBridge.ts`、`aiResolveLm.ts`、`aiResolveBatch.ts` |
@@ -559,13 +561,10 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 ### 5.1 FAQ
 
 **Fetch 失败，但 WebStorm 可以**  
-按 §2.2 三步排查：静默凭据 → 方案 C Token → 交互弹窗登录。
-
-**方案 C 校验通过，fetch 步骤 ② 仍失败**  
-确认 Token 有仓库读权限（GitHub classic `repo` 或 fine-grained Contents 读）；注入为 Basic 而非 Bearer。
+确认本机 Git / Credential Manager 能对同一仓库 `git fetch`；方案 C Token **不参与** fetch。若弹窗未出现，检查是否被策略禁用了交互凭据。
 
 **分支图和线上不一致**  
-看是否「已 fetch」。成功后本地分支 tip 仍可能旧，请对照 `origin/分支名`。
+看是否「已 fetch」。成功后本地分支 tip 仍可能旧，请对照远程分组下的同名短分支（`gitRef` 形如 `origin/分支名`）。
 
 **链路报告「无提交说明」**  
 重新加载分支图（提交元数据已改为 `git log --no-walk` 解析）。
@@ -574,7 +573,7 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 浏览器 preview 禁止写仓库；请在 Cursor 扩展面板操作。
 
 **GitLab Token 格式**  
-必须 `glpat-`；不要把 `ghp_` 填进 GitLab 框。
+必须 `glpat-`；不要把 `ghp_` 填进 GitLab 框。Token 仅用于申请 MR，不能代替 fetch 登录。
 
 **AI 选边一直等不到结果**  
 检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。
@@ -590,7 +589,7 @@ git-insight conflict-blame …   # 同 preview-merge
 
 ### 5.3 与 WebStorm 的差异（Fetch）
 
-WebStorm 默认允许交互取凭据。本扩展为减少无意义弹窗：先静默本机凭据 → 再 Token → **最后才弹窗**。
+WebStorm 默认允许交互取凭据。本扩展 fetch 同样直接允许弹窗登录（已有本机凭据时通常不弹）。方案 C Token 不参与 fetch。
 
 ---
 
