@@ -51,7 +51,7 @@ export interface CreateMergeRequestOptions {
   targetBranch: string;
   title?: string;
   body?: string;
-  /** reviewer / assignee 用户名 */
+  /** 指派人 + 审核人（同一批用户名，两种角色同时设置） */
   reviewers?: string[];
   remote?: string;
   method?: MrMethod | null;
@@ -336,22 +336,24 @@ async function createGithubPrByToken(options: {
   targetBranch: string;
   title: string;
   body: string;
+  /** 同一批人：指派人 + 审核人 */
   reviewers: string[];
 }): Promise<string | null> {
   const parsed = parseOwnerRepo(options.remoteUrl);
   if (!parsed) {
     throw new GitError("无法解析 GitHub 仓库路径", { code: "BAD_REMOTE" });
   }
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${options.token}`,
+    "User-Agent": "git-insight",
+    "Content-Type": "application/json",
+  };
   const res = await fetch(
     `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls`,
     {
       method: "POST",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${options.token}`,
-        "User-Agent": "git-insight",
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         title: options.title,
         body: options.body,
@@ -371,17 +373,55 @@ async function createGithubPrByToken(options: {
       `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls/${json.number}/requested_reviewers`,
       {
         method: "POST",
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${options.token}`,
-          "User-Agent": "git-insight",
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({ reviewers: options.reviewers }),
+      },
+    );
+    // PR 与 Issue 共用 assignees 接口
+    await fetch(
+      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${json.number}/assignees`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ assignees: options.reviewers }),
       },
     );
   }
   return json.html_url ?? null;
+}
+
+/** GitLab username → user id；查不到的记入 missing */
+async function resolveGitlabUserIds(
+  origin: string,
+  token: string,
+  usernames: string[],
+): Promise<{ ids: number[]; missing: string[] }> {
+  const ids: number[] = [];
+  const missing: string[] = [];
+  for (const username of usernames) {
+    const res = await fetch(
+      `${origin}/api/v4/users?username=${encodeURIComponent(username)}`,
+      {
+        headers: {
+          "PRIVATE-TOKEN": token,
+          "User-Agent": "git-insight",
+        },
+      },
+    );
+    if (!res.ok) {
+      missing.push(username);
+      continue;
+    }
+    const arr = (await res.json()) as Array<{ id?: number; username?: string }>;
+    const hit =
+      arr.find((u) => u.username?.toLowerCase() === username.toLowerCase()) ?? arr[0];
+    if (hit?.id != null) {
+      ids.push(hit.id);
+    } else {
+      missing.push(username);
+    }
+  }
+  return { ids, missing };
 }
 
 async function createGitlabMrByToken(options: {
@@ -391,8 +431,9 @@ async function createGitlabMrByToken(options: {
   targetBranch: string;
   title: string;
   body: string;
+  /** 同一批人：指派人 + 审核人 */
   reviewers: string[];
-}): Promise<string | null> {
+}): Promise<{ url: string | null; warnings: string[] }> {
   const parsed = parseOwnerRepo(options.remoteUrl);
   const web = normalizeRemoteWebUrl(options.remoteUrl);
   if (!parsed || !web) {
@@ -400,6 +441,15 @@ async function createGitlabMrByToken(options: {
   }
   const origin = new URL(web).origin;
   const project = encodeURIComponent(parsed.projectPath);
+  const warnings: string[] = [];
+  let userIds: number[] = [];
+  if (options.reviewers.length) {
+    const resolved = await resolveGitlabUserIds(origin, options.token, options.reviewers);
+    userIds = resolved.ids;
+    if (resolved.missing.length) {
+      warnings.push(`未能解析用户 id，已跳过：${resolved.missing.join(", ")}`);
+    }
+  }
   const res = await fetch(`${origin}/api/v4/projects/${project}/merge_requests`, {
     method: "POST",
     headers: {
@@ -412,7 +462,8 @@ async function createGitlabMrByToken(options: {
       target_branch: options.targetBranch,
       title: options.title,
       description: options.body,
-      reviewer_ids: [], // 用户名需再查 id；先创建 MR
+      assignee_ids: userIds,
+      reviewer_ids: userIds,
     }),
   });
   const json = (await res.json()) as {
@@ -425,9 +476,7 @@ async function createGitlabMrByToken(options: {
       code: "CREATE_MR_FAILED",
     });
   }
-  // 可选：按 username 查 id 再更新 reviewers（略，标题已创建成功）
-  void options.reviewers;
-  return json.web_url ?? null;
+  return { url: json.web_url ?? null, warnings };
 }
 
 async function listGithubCandidates(
@@ -730,7 +779,7 @@ export async function createMergeRequest(
       };
     }
     if (platform === "gitlab") {
-      const mrUrl = await createGitlabMrByToken({
+      const created = await createGitlabMrByToken({
         remoteUrl: url,
         token,
         sourceBranch,
@@ -740,10 +789,11 @@ export async function createMergeRequest(
         reviewers,
       });
       messages.push("已用 GitLab Token API 创建 MR");
+      messages.push(...created.warnings);
       return {
         platform,
         via: "token",
-        url: mrUrl,
+        url: created.url,
         sourceBranch,
         targetBranch,
         messages,
@@ -772,6 +822,8 @@ export async function createMergeRequest(
       body,
     ];
     if (reviewers.length > 0) {
+      // 同一批人：指派人（邮件提醒）+ 审核人
+      args.push("--assignee", reviewers.join(","));
       args.push("--reviewer", reviewers.join(","));
     }
     const run = await runCmd(bin, args, repoRoot);
@@ -813,6 +865,8 @@ export async function createMergeRequest(
       "--yes",
     ];
     for (const r of reviewers) {
+      // 同一批人：指派人（邮件提醒）+ 审核人
+      args.push("--assignee", r);
       args.push("--reviewer", r);
     }
     const run = await runCmd(bin, args, repoRoot);

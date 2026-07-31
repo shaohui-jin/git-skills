@@ -149,7 +149,7 @@ function submit(): void {
         <template v-if="draft.method === 'browser'">将打开预填分支的创建页，请在浏览器中提交。</template>
         <template v-else-if="draft.method === 'token'">将使用扩展全局 Token 调用 API 创建。</template>
         <template v-else>
-          使用 <code>{{ draft.cli || "CLI" }}</code> 创建。可多选评审人后提交。
+          使用 <code>{{ draft.cli || "CLI" }}</code> 创建。可多选指派人 / 审核人（同一批人同时设置两种角色）后提交。
         </template>
       </p>
 
@@ -168,7 +168,7 @@ function submit(): void {
 
       <div class="mr-reviewers">
         <div class="mr-reviewers-head">
-          <span>评审人 / 有合并相关权限的成员（{{ selected.length }} 已选）</span>
+          <span>指派人 / 审核人（有合并相关权限，{{ selected.length }} 已选）</span>
           <input
             v-model="filter"
             class="mr-filter"

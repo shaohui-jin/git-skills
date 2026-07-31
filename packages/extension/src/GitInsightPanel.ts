@@ -386,11 +386,13 @@ export class GitInsightPanel {
     }
 
     if (req.type === "createMr") {
-      const reviewers =
-        req.reviewers?.length ? `\n评审人：${req.reviewers.join(", ")}` : "\n评审人：（未指定）";
+      const people =
+        req.reviewers?.length
+          ? `\n指派人 / 审核人：${req.reviewers.join(", ")}`
+          : "\n指派人 / 审核人：（未指定）";
       const pick = await vscode.window.showWarningMessage(
         `将按「Git 配置」中的方式创建 ${req.sourceBranch} → ${req.targetBranch} 的 MR/PR。` +
-          reviewers,
+          people,
         { modal: true },
         "创建",
       );

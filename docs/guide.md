@@ -117,12 +117,16 @@ cursor --install-extension git-insight.vsix --force
 
 | 用途 | 指令 / 行为 |
 |------|-------------|
-| 探测平台 | `git remote get-url origin` → 解析 GitHub / GitLab |
-| 检测 CLI | `gh --version` / `glab --version` |
-| 登录状态 | `gh auth status` / `glab auth status` |
-| 唤起登录 | 集成终端：`gh auth login` 或 `glab auth login`（扩展内二进制用 PowerShell `& "path" auth login`） |
-| Token 校验（C） | GitHub `GET https://api.github.com/user`（Bearer）；GitLab `GET <origin>/api/v4/user` + `personal_access_tokens/self` |
-| 浏览器（D） | 根据 remote URL 拼创建页 → `openExternal` |
+| 探测平台 | `git remote get-url origin` → 解析主机名（含 `github` / `gitlab` / `git.`） |
+| 检测系统 CLI | `gh --version`；`glab --version` |
+| 检测扩展内 CLI | 同上，可执行文件路径为扩展 `globalStorage` 下下载的 `gh` / `glab` |
+| 登录状态 | `gh auth status`；`glab auth status` |
+| 唤起登录 | 集成终端 `sendText`：`gh auth login` / `glab auth login`；扩展内二进制用 PowerShell：`& "<path>\gh.exe" auth login`（或 glab） |
+| 下载 gh（B） | `GET https://api.github.com/repos/cli/cli/releases/latest` → 按 OS/arch 下 zip/tar |
+| 下载 glab（B） | `GET https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases/permalink/latest` → 匹配 `windows_amd64.zip` 等 |
+| Token 校验（C）·GitHub | `GET https://api.github.com/user`（`Authorization: Bearer <token>`） |
+| Token 校验（C）·GitLab | `GET <origin>/api/v4/user`（`PRIVATE-TOKEN`）+ `GET …/personal_access_tokens/self`（读过期时间） |
+| 浏览器创建页（D） | 见 §2.7 拼 URL → `openExternal`（无 CLI） |
 
 代码：`packages/extension/src/gitConfigStore.ts`、`cliBundle.ts`、`webview/.../GitConfigPanel.vue`。
 
@@ -132,19 +136,25 @@ cursor --install-extension git-insight.vsix --force
 
 **操作要点**
 
-加载分支图、合并预演默认会先 fetch；顶栏也可点「Fetch」。
+加载分支图、合并预演默认会先 fetch；顶栏也可点「Fetch」。  
+**工作区 fetch**（分支图 / 预演 / 手动）：只用本机 Git 凭据，**允许弹窗**；方案 C Token **不参与**。
 
-**核心指令**
+**实际指令**
 
-```bash
-git fetch --prune --progress origin
-```
+| 用途 | 指令 |
+|------|------|
+| Fetch | `git fetch --prune --progress <remote>`（默认 `origin`） |
+| 探测可达（可选） | `git ls-remote --exit-code <remote> HEAD`（`probeRemoteAccess`） |
 
-**鉴权（仅本机 Git，不用方案 C Token）**
+**环境变量（`interactive: true`）**
 
-Token **不参与** fetch（不能替代本机 Git 登录拉代码）；仅用于一键申请 MR。
+| 变量 | 值 | 含义 |
+|------|-----|------|
+| `GIT_TERMINAL_PROMPT` | `1` | 允许终端提示 |
+| `GCM_INTERACTIVE` | `always` | 允许 GCM 弹窗 |
+| askpass | 保留 Cursor/VS Code 注入 | 允许 IDE 登录弹窗 |
 
-直接走本机 Git 凭据，**允许弹窗登录**（与 WebStorm 类似；已有缓存凭据时通常不会弹窗）。
+（对比：非交互默认 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`、清空 askpass——用于其它仍需静默的调用。）
 
 | UI 状态 | 含义 |
 |---------|------|
@@ -152,13 +162,23 @@ Token **不参与** fetch（不能替代本机 Git 登录拉代码）；仅用�
 | `（fetch 失败，可能与线上不一致）` | fetch 失败，图来自本地旧 refs |
 | `（未 fetch）` | 请求带了 `noFetch` / CLI `--no-fetch` |
 
-代码：`packages/core/src/git/fetch.ts`；扩展侧不再把 Token 传入 fetch。
+CLI：`git-insight fetch [--cwd] [--remote]`
+
+代码：`packages/core/src/git/fetch.ts`、`git/runner.ts`、`git/auth.ts`。
 
 ---
 
 ### 2.2.1 分支协议（短名 + gitRef）
 
-宿主列出分支时**不改写**磁盘 refs，只发结构化字段：
+宿主列出分支时**不改写**磁盘 refs，只发结构化字段。
+
+**实际指令**
+
+```bash
+git for-each-ref --format=%(refname)%00%(refname:short) refs/heads refs/remotes
+```
+
+跳过 `refs/remotes/*/HEAD`；本地 → `gitRef = short`；远程 `refs/remotes/<remote>/<path>` → `name=path`，`gitRef=<remote>/<path>`。
 
 | 字段 | 含义 | 示例（本地 `main`） | 示例（远程） |
 |------|------|---------------------|--------------|
@@ -167,12 +187,11 @@ Token **不参与** fetch（不能替代本机 Git 登录拉代码）；仅用�
 | `remoteName` | 远程名（仅远程） | — | `origin` |
 | `gitRef` | git 操作身份 | `main` | `origin/feature/x` |
 
-- **UI 树**：本地 / 远程分组，路径按短名 `name` 分层（远程叶子挂在 `origin` 下显示 `feature/x`）
-- **预演 / 一键解决**：请求里的 `into` / `from` 传 **`gitRef`**
-- **申请 MR**：API 的 source/target 用短名（`branchNameForMr(gitRef)` 去掉 `origin/` 等前缀；实现见 `packages/core/src/merge/branchName.ts`）
-- 同名本地与 `origin/同名` 靠 `gitRef` + `remote` 区分，不再把 `origin/xxx` 当作唯一协议形态
+- **UI 树**：本地 / 远程分组，路径按短名 `name` 分层
+- **预演 / 一键解决**：`into` / `from` 传 **`gitRef`**
+- **申请 MR**：source/target 用短名（`branchNameForMr`，见 `merge/branchName.ts`）
 
-代码：`packages/extension/src/coreBridge.ts`（`listBranchNames`）、`webview/.../branchTree.ts`、`packages/core/src/merge/branchName.ts`。
+代码：`packages/extension/src/coreBridge.ts`（`listBranchNames`）、`webview/.../branchTree.ts`。
 
 ---
 ### 2.3 分支图
@@ -220,20 +239,23 @@ git-insight graph --no-fetch
 3. 「一键解决并推送」前会写入 localStorage 暂存（键含 cwd + into + from）
 4. 预演本身**不改工作区**
 
-**实际指令**
+**实际指令（预演前通常先 §2.2 fetch）**
 
 | 用途 | 指令 |
 |------|------|
+| 解析 tip | `git rev-parse --verify <into\|from>^{commit}` |
+| 共同祖先 | `git merge-base <intoSha> <fromSha>`（无则走无关历史） |
 | 预演合并树 | `git merge-tree --write-tree -z --messages --name-only [--allow-unrelated-histories] <intoSha> <fromSha>` |
-| 旧版 fallback | `git merge-tree <base> <intoSha> <fromSha>` |
+| 旧版 fallback | `git merge-tree <baseSha> <intoSha> <fromSha>` |
 | 读一侧文件 | `git show <rev>:<path>` |
-| 合成冲突标记 | `git merge-file -p --diff3 -L ours:… -L base -L theirs:…` |
+| 合成冲突标记 | `git merge-file -p --diff3 -L ours:<path> -L base -L theirs:<path> <oursFile> <baseFile> <theirsFile>`（临时文件） |
 | 路径是否存在 | `git cat-file -e <rev>:<path>` |
 | 差异范围 | `git diff -U0 <base>...<tip> -- <path>` |
 | 行级溯源 | `git blame -l -w -L<start>,<end> --line-porcelain <rev> -- <path>` |
-| （可选）关联 PR | `gh pr list --search <sha7> --state all --json number --limit 1`（失败静默） |
+| （可选）关联 PR | `gh pr list --search <sha7> --state all --json number --limit 1`（`GH_PROMPT_DISABLED=1`，失败静默） |
 
-空 tree 常量：`4b825dc642cb6eb9a060e54bf8d0927f6fb5fb496`（不现场 `hash-object`）。
+空 tree 常量：`4b825dc642cb6eb9a060e54bf8d0927f6fb5fb496`（不现场 `hash-object`）。  
+前置：`git --version` ≥ 2.38（`merge-tree --write-tree`）。
 
 CLI：
 
@@ -276,6 +298,8 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 若配置了 **MCP feedback** 等旁路：Agent 可能停在确认而不 curl——扩展**只认** HTTP 回传或粘贴，请用方式 B。临时 `conflicts` / `prompt` 文件在回传或取消后删除。
 
+**实际指令：** 本功能**不调用** `git` / `gh` / `glab`（只读预演结果 + 本地模型/HTTP）。
+
 代码：`packages/extension/src/aiResolve*.ts`、`webview/.../AiResolveDialog.vue`。
 
 ---
@@ -290,15 +314,18 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 | 步骤 | 指令 |
 |------|------|
+| 当前分支（主仓） | `git branch --show-current` |
+| 解析 tip | `git rev-parse --verify <into\|from>^{commit}` |
 | 建 worktree + 临时分支 | `git worktree add -B <tempBranch> <wtPath> <intoSha>` |
-| 同向 merge（停在冲突） | `git merge --no-ff --no-commit <fromSha>` |
+| 同向 merge（停在冲突） | `git merge --no-ff --no-commit <fromSha>`（在 worktree cwd） |
 | 列出未合并 | `git diff --name-only --diff-filter=U` |
-| 写入选边正文 | 写文件 + `git add -- <path>` |
-| 提交 | `git commit -m <msg>` |
+| 写入选边正文 | 写文件 + `git add -- <path>`（每个暂存文件） |
+| 提交 | `git commit -m "resolve: merge <from> into <into> via <tempBranch>\n\n…"` |
 | 读 SHA | `git rev-parse HEAD` |
 | 推送 | `git push -u <remote> HEAD:refs/heads/<tempBranch>` |
+| 拼浏览器 MR 链 | `git remote get-url <remote>` → `buildCreateMrUrl`（不调 API） |
 | 失败回滚 | `git merge --abort` |
-| 清理 | `git worktree remove --force <wtPath>` + `git worktree prune` |
+| 清理 | `git worktree remove --force <wtPath>`；`git worktree prune` |
 
 默认临时分支名：`merge/<from短名>-into-<into短名>`（slug 已去掉 `origin/` 等前缀）。  
 方向：临时分支**基于线上 into**，再 merge **我的 from**。
@@ -323,45 +350,187 @@ git-insight conflict-blame --into <线上> --from <我的>
 1. 依赖配置就绪（A/B 已登录，或 C Token 有效，或 D）
 2. 有冲突须先推送成功；干净合并可直接申请
 3. MR 方向：临时分支（或我的分支）→ **线上目标（into）**
+4. 对话框多选 = **指派人 + 审核人**（同一批人两种角色；指派有邮件提醒）
 
-**公共 git**
+源/目标分支名经 `branchNameForMr` 去掉 `origin/` 等前缀（`merge/branchName.ts`）。
+
+**公共 git（prepare / 探测）**
 
 | 用途 | 指令 |
 |------|------|
 | 远程 URL | `git remote get-url <remote>` |
 | 本地分支是否存在 | `git show-ref --verify --quiet refs/heads/<name>` |
-| 远程分支 | `git show-ref --verify --quiet refs/remotes/<remote>/<name>` |
+| 远程跟踪是否存在 | `git show-ref --verify --quiet refs/remotes/<remote>/<name>` |
 
-**GitHub · gh**
+**GitHub · gh（A / B）**
 
-| 用途 | 指令 |
+| 用途 | 完整指令 |
+|------|----------|
+| 版本 | `gh --version` |
+| 登录 | `gh auth status` |
+| 候选（指派/审核） | `gh api repos/<owner>/<repo>/collaborators?per_page=100 --jq '<仅 admin/maintain>'` |
+| 建 PR | `gh pr create --base <tgt> --head <src> --title <t> --body <b> [--assignee a,b] [--reviewer a,b]` |
+
+候选过滤：仅 **admin / maintain**（不含 write）。
+
+**GitLab · glab（A / B）**
+
+| 用途 | 完整指令 |
+|------|----------|
+| 版本 | `glab --version` |
+| 登录 | `glab auth status` |
+| 候选（指派/审核） | `glab api projects/<urlencoded-path>/members/all?per_page=100`，再滤 `access_level >= 40` |
+| 建 MR | `glab mr create --source-branch <src> --target-branch <tgt> --title <t> --description <b> --yes [--assignee u]… [--reviewer u]…` |
+
+**Token（C）· GitHub REST**
+
+| 步骤 | 请求 |
 |------|------|
-| 版本 / 登录 | `gh --version`；`gh auth status` |
-| 协作者（审阅人） | `gh api repos/<owner>/<repo>/collaborators?per_page=100`，仅保留 **admin / maintain**（不含 write；write 无法合保护分支） |
-| 建 PR | `gh pr create --base <tgt> --head <src> --title … --body … [--reviewer a,b]` |
+| 候选 | `GET https://api.github.com/repos/<owner>/<repo>/collaborators?per_page=100`（Bearer；滤 admin/maintain） |
+| 建 PR | `POST https://api.github.com/repos/<owner>/<repo>/pulls`（`title/body/head/base`） |
+| 审核人 | `POST …/pulls/<n>/requested_reviewers`（`{ reviewers: [...] }`） |
+| 指派人 | `POST …/issues/<n>/assignees`（`{ assignees: [...] }`） |
 
-**GitLab · glab**
+**Token（C）· GitLab REST**
 
-| 用途 | 指令 |
+| 步骤 | 请求 |
 |------|------|
-| 版本 / 登录 | `glab --version`；`glab auth status` |
-| 成员（审阅人） | `glab api projects/<encoded>/members/all?per_page=100`，仅 **Maintainer+**（`access_level >= 40`，含 Owner） |
-| 建 MR | `glab mr create --source-branch … --target-branch … --title … --description … --yes [--reviewer x]…` |
+| 候选 | `GET <origin>/api/v4/projects/<urlencoded>/members/all?per_page=100`（`PRIVATE-TOKEN`；滤 ≥40） |
+| 用户 id | `GET <origin>/api/v4/users?username=<u>`（每人一次） |
+| 建 MR | `POST <origin>/api/v4/projects/<urlencoded>/merge_requests`（`source_branch/target_branch/title/description` + `assignee_ids` + `reviewer_ids`） |
 
-**Token（C）**：GitHub REST `collaborators` / `pulls`（审阅人同样仅 admin/maintain）；GitLab `members/all` + `merge_requests`（审阅人同样 Maintainer+）。  
-**浏览器（D）**：拼创建页 URL → `openExternal`。
+**浏览器（D）· 拼 URL（无 CLI）**
 
-源/目标分支名提交给平台前都会经 `branchNameForMr` 去掉 remote 前缀（实现：`packages/core/src/merge/branchName.ts`）。
+| 平台 | URL 形态 |
+|------|----------|
+| GitHub | `<origin>/<path>/compare/<tgt>...<src>?expand=1` |
+| GitLab | `<origin>/<path>/-/merge_requests/new?merge_request[source_branch]=…&merge_request[target_branch]=…` |
 
-代码：`packages/core/src/merge/createMr.ts`；UI：`CreateMrDialog.vue`。
+**接口请求 mock（方案 C Token，与代码 `fetch` 一致）**
+
+下列可本地用 curl 复现；占位符：`OWNER`/`REPO`、`ORIGIN`（如 `https://gitlab.example.com`）、`TOKEN`、分支名、用户名。响应只列代码会读的字段。
+
+<details>
+<summary>GitHub · 校验 Token / 列候选 / 建 PR + 指派 + 审核</summary>
+
+```bash
+# 1) 校验 Token（配置页）
+curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "User-Agent: git-insight" \
+  https://api.github.com/user
+# 关注：login、（可选）过期相关字段由后续接口补
+
+# 2) 指派人/审核人候选
+curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "User-Agent: git-insight" \
+  "https://api.github.com/repos/$OWNER/$REPO/collaborators?per_page=100"
+# 响应元素字段（代码读取）：login, role_name, permissions.admin|maintain|push
+# 过滤后仅保留 admin / maintain
+
+# 3) 创建 PR
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "User-Agent: git-insight" -H "Content-Type: application/json" \
+  "https://api.github.com/repos/$OWNER/$REPO/pulls" \
+  -d '{
+    "title": "Merge feature/x into develop",
+    "body": "Created via Git Insight.",
+    "head": "feature/x",
+    "base": "develop"
+  }'
+# 关注响应：number, html_url
+
+# 4) 请求审核（与对话框同一批人）
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "User-Agent: git-insight" -H "Content-Type: application/json" \
+  "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+  -d '{ "reviewers": ["alice", "bob"] }'
+
+# 5) 指派（邮件提醒；PR 走 issues assignees）
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -H "User-Agent: git-insight" -H "Content-Type: application/json" \
+  "https://api.github.com/repos/$OWNER/$REPO/issues/$PR_NUMBER/assignees" \
+  -d '{ "assignees": ["alice", "bob"] }'
+```
+
+</details>
+
+<details>
+<summary>GitLab · 校验 Token / 列候选 / 查 id / 建 MR</summary>
+
+```bash
+# 1) 校验 Token（配置页）
+curl -sS -H "PRIVATE-TOKEN: $TOKEN" -H "User-Agent: git-insight" \
+  "$ORIGIN/api/v4/user"
+curl -sS -H "PRIVATE-TOKEN: $TOKEN" -H "User-Agent: git-insight" \
+  "$ORIGIN/api/v4/personal_access_tokens/self"
+# 关注：expires_at 等（用于 UI 展示有效期）
+
+# 2) 指派人/审核人候选（PROJECT 为 URL 编码后的 path，如 group%2Frepo）
+curl -sS -H "PRIVATE-TOKEN: $TOKEN" -H "User-Agent: git-insight" \
+  "$ORIGIN/api/v4/projects/$PROJECT/members/all?per_page=100"
+# 响应元素：username, name, access_level；过滤 access_level >= 40（Maintainer+）
+
+# 3) username → id（每个选中用户一次）
+curl -sS -H "PRIVATE-TOKEN: $TOKEN" -H "User-Agent: git-insight" \
+  "$ORIGIN/api/v4/users?username=alice"
+# 响应数组元素：id, username
+
+# 4) 创建 MR（assignee_ids 与 reviewer_ids 同一批 id）
+curl -sS -X POST -H "PRIVATE-TOKEN: $TOKEN" -H "Content-Type: application/json" \
+  -H "User-Agent: git-insight" \
+  "$ORIGIN/api/v4/projects/$PROJECT/merge_requests" \
+  -d '{
+    "source_branch": "feature/x",
+    "target_branch": "develop",
+    "title": "Merge feature/x into develop",
+    "description": "Created via Git Insight.",
+    "assignee_ids": [101, 102],
+    "reviewer_ids": [101, 102]
+  }'
+# 关注响应：web_url
+```
+
+</details>
+
+<details>
+<summary>方案 A/B · gh / glab 等价命令（非 HTTP mock，便于对照）</summary>
+
+```bash
+# GitHub 候选（与代码 --jq 过滤 admin/maintain 一致）
+gh api "repos/$OWNER/$REPO/collaborators?per_page=100" --jq \
+  '.[] | select(.permissions.admin == true or .permissions.maintain == true or .role_name == "admin" or .role_name == "maintain") | {username: .login, name: (.name // .login), role: (if .role_name then .role_name elif .permissions.admin then "admin" else "maintain" end)}'
+
+# 建 PR + 指派 + 审核
+gh pr create --base develop --head feature/x \
+  --title "Merge feature/x into develop" --body "Created via Git Insight." \
+  --assignee alice,bob --reviewer alice,bob
+
+# GitLab 候选
+glab api "projects/$PROJECT/members/all?per_page=100"
+
+# 建 MR + 指派 + 审核
+glab mr create --source-branch feature/x --target-branch develop \
+  --title "Merge feature/x into develop" --description "Created via Git Insight." \
+  --yes --assignee alice --reviewer alice --assignee bob --reviewer bob
+```
+
+</details>
+
+代码：`packages/core/src/merge/createMr.ts`、`config/validateToken.ts`；UI：`CreateMrDialog.vue`。
 
 ---
+
 ### 2.8 打开远程仓库（扩展）
 
-| 用途 | 指令 |
-|------|------|
-| 克隆 | `git clone -- <url> <dir>` |
-| 已有缓存更新 | `git fetch --all --prune` |
+面板输入 `owner/repo` 时：克隆到扩展数据目录，或对已有缓存 fetch。  
+**注意：** 此路径仍可能走 Token（与工作区 §2.2 fetch 不同）。
+
+| 步骤 | 指令 / 行为 |
+|------|-------------|
+| 首次克隆 ① | `git clone -- <httpsUrl> <dir>`（本机凭据，非交互） |
+| 首次克隆 ② | `git clone -- <httpsUrl带token> <dir>` + 可选 `git -c http.extraHeader=Authorization: Basic …`（有 GitHub Token 时） |
+| 首次克隆 ③ | `git clone -- <httpsUrl> <dir>`（`interactive: true` 允许弹窗） |
+| 已有缓存 ①②③ | `git fetch --all --prune`（同样：静默 → Token → 交互） |
 
 代码：`packages/extension/src/remoteRepo.ts`。
 
@@ -376,8 +545,9 @@ git-insight conflict-blame --into <线上> --from <我的>
 | 解析 tip | `git rev-parse --verify <rev>^{commit}` | 多处 |
 | 共同祖先 | `git merge-base <a> <b>` | graph / merge |
 | 当前分支 | `git branch --show-current` | applyResolve |
+| HTTPS Token 注入（仅仍需要时，如 remoteRepo） | `git -c http.extraHeader=Authorization: Basic <base64(user:token)> …`；GitHub user=`x-access-token`，GitLab user=`oauth2` | `git/auth.ts` |
 
-底层：`packages/core/src/git/runner.ts`（默认非交互；`interactive: true` 时允许弹窗）。
+底层：`packages/core/src/git/runner.ts` — `spawn("git", args)`；默认非交互环境；`interactive: true` 时见 §2.2。
 
 ---
 
@@ -578,7 +748,7 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 **AI 选边一直等不到结果**  
 检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。
 
-### 5.2 CLI 速查
+### 5.2 CLI 速查（git-insight 封装）
 
 ```text
 git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch]
@@ -587,9 +757,27 @@ git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd] [-
 git-insight conflict-blame …   # 同 preview-merge
 ```
 
-### 5.3 与 WebStorm 的差异（Fetch）
+一键 resolve / create MR **无** CLI 子命令，仅扩展调库。
 
-WebStorm 默认允许交互取凭据。本扩展 fetch 同样直接允许弹窗登录（已有本机凭据时通常不弹）。方案 C Token 不参与 fetch。
+### 5.3 底层指令速查（按功能）
+
+| 功能 | 核心命令（详见 §二） |
+|------|----------------------|
+| 配置 / CLI | `gh\|glab --version` · `auth status` · 终端 `auth login` · 下载 release API |
+| 工作区 Fetch | `git fetch --prune --progress <remote>`（可弹窗） |
+| 分支列表 | `git for-each-ref … refs/heads refs/remotes` |
+| 分支图 | `for-each-ref` · `rev-list --parents` · `log --no-walk` · `merge-base` · `rev-list --count` |
+| 合并预演 | `merge-tree --write-tree` · `show` · `merge-file` · `diff -U0` · `blame` · 可选 `gh pr list` |
+| AI 选边 | 无 git/gh/glab |
+| 一键解决推送 | `worktree add -B` · `merge --no-ff --no-commit` · `add` · `commit` · `push -u` · `worktree remove` |
+| 申请 MR · gh | `gh api …/collaborators` · `gh pr create --assignee --reviewer` |
+| 申请 MR · glab | `glab api …/members/all` · `glab mr create --assignee --reviewer` |
+| 申请 MR · Token | GitHub `pulls` + `requested_reviewers` + `issues/…/assignees`；GitLab `users?username` + `merge_requests` |
+| 打开远程仓 | `git clone --` / `git fetch --all --prune`（可 Token / 弹窗） |
+
+### 5.4 与 WebStorm 的差异（Fetch）
+
+WebStorm 默认允许交互取凭据。本扩展**工作区** fetch 同样直接允许弹窗（已有本机凭据时通常不弹）；方案 C Token **不**用于工作区 fetch。打开 `owner/repo` 远程缓存时仍可能注入 Token（§2.8）。
 
 ---
 

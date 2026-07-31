@@ -46,6 +46,7 @@ export type WebviewRequest =
       targetBranch: string;
       title?: string;
       body?: string;
+      /** 指派人 + 审核人（同一批用户名） */
       reviewers?: string[];
       remote?: string;
     }
