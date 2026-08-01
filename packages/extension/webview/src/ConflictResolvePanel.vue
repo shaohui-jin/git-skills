@@ -68,6 +68,8 @@ const hunksByPath = ref<Record<string, ChangeHunk[]>>({});
 const stashNote = ref("");
 const aiDialogOpen = ref(false);
 const activeHunkId = ref<string | null>(null);
+/** 「仅自动合并」分组是否展开 */
+const autoOnlyExpanded = ref(false);
 /** 导航时短暂闪烁，强化「跳到了这里」的感知 */
 const flashHunkId = ref<string | null>(null);
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,8 +79,29 @@ let syncingScroll = false;
 
 const filePaths = computed(() => props.files.map((f) => f.path));
 
+/** 有冲突红块的文件（左侧主列表 / 上下文件跳转范围） */
+const conflictFilePaths = computed(() =>
+  filePaths.value.filter(
+    (p) => countHunkStats(hunksByPath.value[p] ?? []).conflicts > 0,
+  ),
+);
+
+/** 无冲突、仅绿/蓝自动变更（或空统计）的文件 */
+const autoOnlyFilePaths = computed(() =>
+  filePaths.value.filter(
+    (p) => countHunkStats(hunksByPath.value[p] ?? []).conflicts === 0,
+  ),
+);
+
+const conflictFileIndex = computed(() =>
+  conflictFilePaths.value.indexOf(activePath.value),
+);
+
 const activeFile = computed(
-  () => props.files.find((f) => f.path === activePath.value) ?? props.files[0],
+  () =>
+    props.files.find((f) => f.path === activePath.value) ??
+    props.files.find((f) => conflictFilePaths.value.includes(f.path)) ??
+    props.files[0],
 );
 
 const hunks = computed(() => {
@@ -228,9 +251,16 @@ function initFromFiles(): void {
     stashNote.value = "";
   }
   hunksByPath.value = next;
-  activePath.value = props.files[0]?.path ?? "";
+  const firstConflictPath =
+    props.files.find((f) =>
+      (next[f.path] ?? []).some((h) => h.kind === "conflict"),
+    )?.path ??
+    props.files[0]?.path ??
+    "";
+  activePath.value = firstConflictPath;
   const first = next[activePath.value]?.find((h) => h.kind === "conflict");
   activeHunkId.value = first?.id ?? next[activePath.value]?.[0]?.id ?? null;
+  autoOnlyExpanded.value = false;
 }
 
 watch(
@@ -361,6 +391,25 @@ function goConflict(delta: number): void {
   void nextTick(() => scrollToActive());
 }
 
+/** 仅在有冲突红块的文件间跳转（循环） */
+function goConflictFile(delta: number): void {
+  const list = conflictFilePaths.value;
+  if (list.length === 0) {
+    return;
+  }
+  let idx = conflictFileIndex.value;
+  if (idx < 0) {
+    idx = delta > 0 ? -1 : 0;
+  }
+  let next = idx + delta;
+  if (next < 0) {
+    next = list.length - 1;
+  } else if (next >= list.length) {
+    next = 0;
+  }
+  activePath.value = list[next]!;
+}
+
 function scrollToActive(): void {
   const id = activeHunkId.value;
   if (!id || !scrollRootRef.value) {
@@ -422,7 +471,13 @@ function resetStash(): void {
     next[f.path] = buildChangeHunks(f);
   }
   hunksByPath.value = next;
-  activePath.value = props.files[0]?.path ?? "";
+  const firstConflictPath =
+    props.files.find((f) =>
+      (next[f.path] ?? []).some((h) => h.kind === "conflict"),
+    )?.path ??
+    props.files[0]?.path ??
+    "";
+  activePath.value = firstConflictPath;
   const first = next[activePath.value]?.find((h) => h.kind === "conflict");
   activeHunkId.value = first?.id ?? next[activePath.value]?.[0]?.id ?? null;
   stashNote.value = "已重置选边（未清除本地暂存缓存）";
@@ -610,6 +665,7 @@ function applyResolveNow(): void {
 function fileResolvedCount(path: string): string {
   const s = countHunkStats(hunksByPath.value[path] ?? []);
   if (s.conflicts === 0) {
+    // Δ = 仅绿/蓝自动合并变更，无需手选
     return s.changes ? `${s.changes}Δ` : "—";
   }
   return `${s.resolved}/${s.conflicts}`;
@@ -785,14 +841,39 @@ const resultLineStarts = computed(() => {
 
     <div class="resolve-layout">
       <aside class="resolve-files card">
-        <h4>文件</h4>
-        <ul>
+        <h4>冲突文件（{{ conflictFilePaths.length }}）</h4>
+        <ul v-if="conflictFilePaths.length">
           <li
-            v-for="path in filePaths"
+            v-for="path in conflictFilePaths"
             :key="path"
             class="resolve-file"
             :class="{ active: path === activePath }"
             :title="path"
+            @click="activePath = path"
+          >
+            <span class="mono path">{{ path.split("/").pop() }}</span>
+            <span class="count">{{ fileResolvedCount(path) }}</span>
+          </li>
+        </ul>
+        <p v-else class="resolve-files-empty muted">无待手选冲突</p>
+
+        <button
+          v-if="autoOnlyFilePaths.length"
+          type="button"
+          class="resolve-auto-toggle"
+          :title="'这些文件无冲突红块，仅绿/蓝自动合并变更；一键解决仍会写入'"
+          @click="autoOnlyExpanded = !autoOnlyExpanded"
+        >
+          <span class="tree-caret">{{ autoOnlyExpanded ? "▾" : "▸" }}</span>
+          仅自动合并（{{ autoOnlyFilePaths.length }}）
+        </button>
+        <ul v-if="autoOnlyExpanded && autoOnlyFilePaths.length">
+          <li
+            v-for="path in autoOnlyFilePaths"
+            :key="path"
+            class="resolve-file resolve-file--auto"
+            :class="{ active: path === activePath }"
+            :title="`${path}（无冲突，仅自动变更）`"
             @click="activePath = path"
           >
             <span class="mono path">{{ path.split("/").pop() }}</span>
@@ -817,6 +898,34 @@ const resultLineStarts = computed(() => {
               </span>
             </div>
             <div class="resolve-main-bar-right">
+              <div class="nav-conflict-group">
+                <button
+                  type="button"
+                  class="btn nav-conflict-btn"
+                  :disabled="conflictFilePaths.length < 2"
+                  title="上一冲突文件（仅有红块的文件间跳转）"
+                  @click="goConflictFile(-1)"
+                >
+                  ← 上一文件
+                </button>
+                <span class="nav-conflict-pos" title="当前冲突文件序号">
+                  {{
+                    conflictFileIndex >= 0
+                      ? `${conflictFileIndex + 1} / ${conflictFilePaths.length}`
+                      : `0 / ${conflictFilePaths.length}`
+                  }}
+                </span>
+                <button
+                  type="button"
+                  class="btn nav-conflict-btn"
+                  :disabled="conflictFilePaths.length < 2"
+                  title="下一冲突文件（仅有红块的文件间跳转）"
+                  @click="goConflictFile(1)"
+                >
+                  下一文件 →
+                </button>
+              </div>
+              <span class="bar-sep" />
               <div class="nav-conflict-group">
                 <button
                   type="button"

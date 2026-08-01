@@ -243,6 +243,19 @@ git-insight graph --no-fetch
 3. 「一键解决并推送」前会写入 localStorage 暂存（键含 cwd + into + from）
 4. 预演本身**不改工作区**
 
+**冲突解决面板（Webview）**
+
+| 项 | 说明 |
+|----|------|
+| 三栏含义 | 左=线上目标（into）、中=结果、右=我的分支（from） |
+| 左侧「冲突文件」 | **仅列出有红块（需手选）的文件**；角标 `已解决/冲突数`（如 `9/9`） |
+| 「仅自动合并（N）」 | 折叠分组：无冲突红块、只有绿/蓝自动变更的文件；角标 `NΔ`（Δ=自动变更数）。默认折叠，可展开查看 |
+| 为何还有 `NΔ` 文件 | `merge-tree` 可能仍报该路径，但三方 diff 后无需手选；**一键解决仍会写入这些文件**，并非目录错误 |
+| 文件内导航 | 「↑ 上一处 / ↓ 下一处」：在当前文件的冲突块间跳转（优先未解决） |
+| 文件间导航 | 「← 上一文件 / 下一文件 →」：**只在有冲突红块的文件间**循环跳转（不进入「仅自动合并」列表） |
+| 整文件选边 | 「全部线上」/「全部我的」：当前文件全部冲突块采用对应侧（不改名） |
+| 代码 | `webview/src/ConflictResolvePanel.vue`、`conflict/buildChangeHunks.ts` |
+
 **实际指令（预演前通常先 §2.2 fetch）**
 
 | 用途 | 指令 |
@@ -270,7 +283,7 @@ git-insight preview-merge --into develop --from origin/feature/x --no-fetch
 git-insight conflict-blame --into <线上> --from <我的>
 ```
 
-代码：`merge/preview.ts`、`merge/rehearsal.ts`、`merge/blame.ts`、`merge/conflictContent.ts`。
+代码：`merge/preview.ts`、`merge/rehearsal.ts`、`merge/blame.ts`、`merge/conflictContent.ts`；面板 UI 见上表与 `ConflictResolvePanel.vue`。
 
 **冲突暂存（无 git）**
 
@@ -869,6 +882,9 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 
 **AI 选边一直等不到结果**  
 检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。
+
+**左侧文件角标是 `8Δ`、没有 `x/y`？**  
+表示该文件**无冲突红块**，只有绿/蓝自动变更（Δ=变更数）。主列表只显示有冲突的文件；这类文件在折叠分组「仅自动合并」里，一键解决仍会写入。详见 §2.4「冲突解决面板」。
 
 **发布 Cursor 市场失败 / 找不到扩展**  
 见 **§3.6**：按 ①→④ 配好后，日常只改 `version` 推 master。市场搜不到时先看 open-vsx.org。

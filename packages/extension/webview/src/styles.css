@@ -1538,10 +1538,42 @@ button.btn.tiny {
   font-weight: 600;
 }
 
+.resolve-files-empty {
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
 .resolve-files ul {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.resolve-auto-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.resolve-auto-toggle:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+.resolve-auto-toggle .tree-caret {
+  width: 1em;
+  flex: 0 0 auto;
 }
 
 .resolve-file {
@@ -1560,6 +1592,10 @@ button.btn.tiny {
 
 .resolve-file.active {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.resolve-file--auto .count {
+  opacity: 0.85;
 }
 
 .resolve-file .path {
