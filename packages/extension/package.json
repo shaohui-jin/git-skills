@@ -1,10 +1,29 @@
 {
   "name": "git-insight",
   "displayName": "Git Insight",
-  "description": "Branch graph, merge conflict preview, and conflict provenance — powered by @git-insight/core",
+  "description": "Branch graph, merge conflict preview, one-click resolve & push, and create MR/PR — powered by @git-insight/core",
   "version": "0.1.6",
-  "publisher": "git-skill",
+  "publisher": "jinshaohui",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shaohui-jin/git-skills.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shaohui-jin/git-skills/issues"
+  },
+  "homepage": "https://github.com/shaohui-jin/git-skills#readme",
+  "keywords": [
+    "git",
+    "merge",
+    "conflict",
+    "branch",
+    "github",
+    "gitlab",
+    "mr",
+    "pr",
+    "cursor"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -42,7 +61,8 @@
     "build": "pnpm run build:webview && pnpm run build:ext",
     "preview": "tsx scripts/preview.ts",
     "preview:prod": "tsx scripts/preview-prod.ts",
-    "package:vsix": "pnpm run build && vsce package --no-dependencies --skip-license --allow-missing-repository --out ../../git-insight.vsix"
+    "package:vsix": "pnpm run build && vsce package --no-dependencies --out ../../git-insight.vsix",
+    "publish:ovsx": "pnpm run package:vsix && ovsx publish ../../git-insight.vsix"
   },
   "devDependencies": {
     "@git-insight/core": "workspace:*",
@@ -51,6 +71,7 @@
     "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.3.2",
     "esbuild": "^0.25.5",
+    "ovsx": "^0.10.5",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",

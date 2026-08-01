@@ -8,7 +8,7 @@
 
 1. [主流程梳理](#一主流程梳理)
 2. [各模块操作与实际指令](#二各模块操作与实际指令技术分享)
-3. [核心模块实现说明](#三核心模块实现说明)
+3. [核心模块实现说明](#三核心模块实现说明)（含 [发布到 Cursor 市场](#36-发布到-cursor-市场open-vsx)）
 4. [Skill 说明](#四skill-说明)
 5. [附录：FAQ 与命令速查](#五附录faq-与命令速查)
 
@@ -72,9 +72,13 @@ pnpm package:vsix
 cursor --install-extension git-insight.vsix --force
 ```
 
+扩展 ID：`jinshaohui.git-insight`。  
+- 本地安装：见上方 VSIX 命令  
+- Cursor 扩展市场：搜 `Git Insight` / `jinshaohui.git-insight`（上游为 Open VSX；**维护者上架流程见 [§3.6](#36-发布到-cursor-市场open-vsx)**）
+
 安装后 **Reload Window**，命令面板：
 
-- `Git Insight: Open Web Visualization` — 打开面板（默认 **Git 配置**）
+- `Git Insight: Open Web` — 打开面板（默认 **Git 配置**）
 - `Git Insight: 合并预演` — 打开并切到合并预演
 
 面板顶部输入本机仓库路径或 GitHub `owner/repo`，点「打开」。
@@ -620,7 +624,8 @@ pnpm --filter git-insight build
 # 浏览器只读预览：pnpm preview
 ```
 
-打包：`pnpm package:vsix` → `git-insight.vsix`。
+打包：`pnpm package:vsix` → 仓库根目录 `git-insight.vsix`。  
+发布到 Cursor 市场：见下方 **§3.6**。
 
 ### 3.4 关键代码索引
 
@@ -648,6 +653,106 @@ pnpm --filter git-insight build
 4. 主工作区可有未提交改动（worktree 隔离）；临时分支名已在主仓检出则拒绝。
 5. 冲突文件须全部有选边，否则 worktree 内 `merge --abort`。
 6. PowerShell 执行扩展内 CLI：`& "…\gh.exe" auth login`（不可省略 `&`）。
+
+### 3.6 发布到 Cursor 市场（Open VSX）
+
+Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**，不是 Microsoft VS Code Marketplace。要在 Cursor 扩展面板搜到本插件，必须发布到 Open VSX。
+
+| 项 | 值 |
+|----|-----|
+| 扩展 ID | `jinshaohui.git-insight` |
+| `package.json` → `publisher` | `jinshaohui`（即 Open VSX **namespace**） |
+| `package.json` → `name` | `git-insight` |
+| 仓库脚本 | 根目录 `pnpm publish:ovsx` → 打包 VSIX + `ovsx publish` |
+
+> **Open VSX Token ≠ 扩展「Git 配置」里的 GitHub/GitLab Token。**  
+> 前者只给维护者本机/CI **发版**用；不要写进代码、不要提交 git、不要填进面板 Token 框。
+
+#### 3.6.1 一次性准备（账号与 Token）
+
+1. 打开 [https://open-vsx.org](https://open-vsx.org)，右上角用 **GitHub** 登录授权。  
+2. 注册 / 登录 [eclipse.org](https://accounts.eclipse.org)（填写的 **GitHub Username** 必须与上一步一致）。  
+3. 回到 open-vsx.org → 头像 → **Settings** → **Log in with Eclipse** → 授权。  
+4. 同一页出现 **Show Publisher Agreement** → 读完点 **Agree**（未签署则无法发布）。  
+5. **Settings → Access Tokens**（或 [tokens 页](https://open-vsx.org/user-settings/tokens)）→ **Generate New Token** → 填描述（如 `git-insight-local`）→ 生成后**立刻复制保存**（关闭后不再显示明文）。
+
+Token 使用方式（二选一，推荐环境变量）：
+
+```powershell
+# PowerShell：只对当前终端窗口有效；换窗口需重设
+$env:OVSX_PAT="粘贴刚才生成的 token"
+```
+
+或在命令里用 `-p`：`npx ovsx … -p 你的token`。
+
+也可在 Windows「环境变量」里长期新建用户变量 `OVSX_PAT`（设完需重开终端）。
+
+#### 3.6.2 发布流程（同一 PowerShell，按顺序 1→2→3→4）
+
+在仓库根目录 `d:\_myproject\git-skill`（或你的 clone 路径）打开 **同一个** PowerShell，依次执行：
+
+**① 设置 Token**
+
+```powershell
+$env:OVSX_PAT="你的 Open VSX token"
+```
+
+**② 创建 namespace（仅第一次；与 publisher 同名）**
+
+```powershell
+npx ovsx create-namespace jinshaohui -p $env:OVSX_PAT
+```
+
+- 成功：namespace `jinshaohui` 已存在，可继续。  
+- 若提示 already exists：说明建过了，**跳过本步**，直接做 ③④。  
+- 若 404 / 未授权：回到 §3.6.1 检查 Eclipse 登录与 Publisher Agreement。
+
+**③ 验证 Token 能向该 namespace 发版（建议每次新 Token 都跑）**
+
+```powershell
+npx ovsx verify-pat jinshaohui -p $env:OVSX_PAT
+```
+
+应提示 token 可用于该 namespace；失败则重新生成 Token 或检查是否签协议。
+
+**④ 打包并发布**
+
+```powershell
+cd d:\_myproject\git-skill
+pnpm publish:ovsx
+```
+
+等价于：`pnpm package:vsix`（产出根目录 `git-insight.vsix`）→ `ovsx publish git-insight.vsix`（会读取 `OVSX_PAT`）。
+
+成功后在浏览器打开：
+
+- Namespace：https://open-vsx.org/namespace/jinshaohui  
+- 扩展页：https://open-vsx.org/extension/jinshaohui/git-insight  
+
+#### 3.6.3 之后版本更新（namespace 已存在时）
+
+1. 改 `packages/extension/package.json` 的 `version`（须高于已发布版本）  
+2. 同一终端设好 `$env:OVSX_PAT`（或系统环境变量）  
+3. **只需执行 ④**：`pnpm publish:ovsx`（不必再 `create-namespace`）
+
+#### 3.6.4 在 Cursor 里确认
+
+1. Open VSX 网页已能打开本扩展后，Cursor 一般 **数小时内**同步（偶发更久）。  
+2. Cursor → 扩展面板搜 `Git Insight` 或 `jinshaohui.git-insight` → 安装 → Reload Window。  
+3. 若市场暂未搜到：命令面板 `Extensions: Install from VSIX…` 选本地 `git-insight.vsix`。
+
+#### 3.6.5 常见报错
+
+| 现象 | 原因与处理 |
+|------|------------|
+| `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` / `publish:ovsx` Exit 1 | 只是 pnpm 包装错误；往上翻看 **`ovsx` 的英文原文** |
+| Namespace / publisher 不存在、404 | 未做 **② create-namespace**，先建 `jinshaohui` |
+| 401 / Unauthorized / invalid token | Token 错、过期，或当前终端未设 `OVSX_PAT`；重设后再 ③ |
+| Publisher Agreement / Eclipse | 未完成 §3.6.1 第 2～4 步 |
+| version already exists | 提高 `package.json` 的 `version` 再发 |
+| 市场搜不到但 Open VSX 有 | 等同步；或用 VSIX 本地安装；检查 `engines.vscode` 是否高于当前 Cursor 内置 VS Code 版本 |
+
+官方说明：[Open VSX · Publishing Extensions](https://github.com/eclipse/openvsx/wiki/Publishing-Extensions)。
 
 ---
 
@@ -747,6 +852,9 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 
 **AI 选边一直等不到结果**  
 检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。
+
+**发布 Cursor 市场失败 / 找不到扩展**  
+见 **§3.6**：先 Open VSX 签协议并生成 Token → 同一终端 `OVSX_PAT` → `create-namespace jinshaohui` → `verify-pat` → `pnpm publish:ovsx`。市场搜不到时先确认 open-vsx.org 上已有页面，再等同步或用 VSIX。
 
 ### 5.2 CLI 速查（git-insight 封装）
 

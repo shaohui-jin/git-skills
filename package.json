@@ -10,6 +10,7 @@
     "preview": "pnpm --filter @git-insight/core build && pnpm --filter git-insight preview",
     "preview:repo": "pnpm --filter @git-insight/core build && pnpm --filter git-insight preview --",
     "package:vsix": "pnpm --filter @git-insight/core build && pnpm --filter git-insight package:vsix",
+    "publish:ovsx": "pnpm --filter @git-insight/core build && pnpm --filter git-insight publish:ovsx",
     "git-insight": "pnpm --filter @git-insight/core exec node dist/cli.js",
     "test": "pnpm --filter @git-insight/core run test"
   },

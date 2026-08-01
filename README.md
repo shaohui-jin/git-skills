@@ -14,3 +14,5 @@ pnpm --filter @git-insight/core build
 pnpm package:vsix
 cursor --install-extension git-insight.vsix --force
 ```
+
+扩展 ID：`jinshaohui.git-insight`。发布到 Cursor 市场（Open VSX）：见 **[docs/guide.md §3.6](docs/guide.md#36-发布到-cursor-市场open-vsx)**。
