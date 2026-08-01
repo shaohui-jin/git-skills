@@ -1,0 +1,113 @@
+# 唯一发版流程：改 packages/extension/package.json 的 version 并推到 master/main 后
+# → 检测 version 相对上一提交有变化 → 打 tag v{version} 并推送 → 同 Job 发布 Open VSX
+#
+# 需 Secret：OVSX_PAT（open-vsx.org Access Token）
+# 文档：docs/guide.md §3.6（现行唯一发版流程）
+
+name: Release on version bump
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "packages/extension/package.json"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect version bump
+        id: bump
+        run: |
+          PKG="packages/extension/package.json"
+          NEW="$(jq -r .version "$PKG")"
+          if [ -z "$NEW" ] || [ "$NEW" = "null" ]; then
+            echo "::error::无法读取 $PKG 的 version"
+            exit 1
+          fi
+
+          OLD=""
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            if git cat-file -e "HEAD^:$PKG" 2>/dev/null; then
+              OLD="$(git show "HEAD^:$PKG" | jq -r .version)"
+            fi
+          fi
+
+          echo "old_version=${OLD}"
+          echo "new_version=${NEW}"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
+
+          if [ "$OLD" = "$NEW" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "version 未变化（${NEW}），跳过打 tag / 发布"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "检测到 version 变更：'${OLD}' → '${NEW}'"
+          fi
+
+      - name: Setup pnpm
+        if: steps.bump.outputs.changed == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+
+      - name: Setup Node.js
+        if: steps.bump.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.bump.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Package VSIX
+        if: steps.bump.outputs.changed == 'true'
+        run: pnpm package:vsix
+
+      - name: Create and push tag
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::远程已存在 ${TAG}。请提高 package.json version 后再推，或先删除误打的远程 tag。"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "已推送 tag ${TAG}"
+
+      - name: Upload VSIX artifact
+        if: steps.bump.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-insight-vsix
+          path: git-insight.vsix
+          if-no-files-found: error
+
+      - name: Publish to Open VSX
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if [ -z "${OVSX_PAT}" ]; then
+            echo "::error::未配置 GitHub Secret OVSX_PAT。见 docs/guide.md §3.6.1"
+            exit 1
+          fi
+          npx --yes ovsx@0.10.5 publish git-insight.vsix -p "${OVSX_PAT}"
+          echo "已发布 ${TAG} → Open VSX（jinshaohui.git-insight）"
