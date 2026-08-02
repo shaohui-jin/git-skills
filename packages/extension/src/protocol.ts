@@ -28,6 +28,7 @@ export type WebviewRequest =
       type: "applyResolve";
       into: string;
       from: string;
+      /** 干净合并可传空数组（仅临时分支 merge + push） */
       files: Array<{ path: string; resolvedContent: string }>;
       remote?: string;
       push?: boolean;

@@ -29,21 +29,25 @@
 
 ### 1.2 业务角色（勿填反）
 
-业务上是把**我的分支**合进**线上目标**（再提 MR）。
+业务上是把**我的分支**合进**线上目标**（再提 MR）。本工具面向 **MR/PR 流程**，不是本地 `pull` / `merge` 替代品。
 
-| 业务称呼 | UI | 变量 | 预演三栏 |
-|----------|-----|------|----------|
-| **线上 / 合入目标**（如 `test`） | 目标分支 | `into` | **左栏** |
-| **我的分支 / 待提交**（如 `feature/xxx`） | 我的分支 | `from` | **右栏** |
+| 业务称呼 | UI | 变量 | 预演三栏 | 可选范围 |
+|----------|-----|------|----------|----------|
+| **线上 / 合入目标**（如 `origin/test`） | 目标分支 | `into` | **左栏** | **仅远程**跟踪分支 |
+| **我的分支 / 待合入**（如 `feature/xxx`） | 我的分支 | `from` | **右栏** | 本地或远程均可 |
 
 排错对照：站在线上分支上 `merge` 我的分支时，git 的 **ours = 线上(into)**、**theirs = 我的(from)**。口语「我的=ours」容易和 git 叫反，界面只用「线上 / 我的」。
+
+**同名分支不处理**
+
+规范化短名相同（`branchNameForMr` / `isSameBranchForMr`）时——例如本地 `master` 与 `origin/master`——**不预演、不推临时分支、不申请 MR**。这类同步请自行 `git push` / `git pull`。
 
 ### 1.3 推荐使用顺序
 
 ```text
 ① Git 配置（选 A / B / C / D）
 ② 分支图（默认先 fetch，与线上对齐）
-③ 合并预演（选「线上目标」+「我的分支」→ 冲突选边 / AI 选边）
+③ 合并预演（远程「线上目标」+「我的分支」→ 冲突选边 / AI 选边）
 ④ 有冲突 →「一键解决并推送」
 ⑤ 「一键申请 MR」
 ```
@@ -51,17 +55,20 @@
 ```mermaid
 flowchart TD
   cfg[Git 配置 A/B/C/D] --> graph[分支图 · 默认 fetch]
-  graph --> preview[合并预演 线上into / 我的from]
+  graph --> preview[合并预演 远程into / 我的from]
+  preview -->|同名分支| skip[自行 push / pull]
   preview --> stash[三栏选边 / AI 选边]
   stash --> resolve[一键解决并推送 · 独立 worktree]
   resolve --> mr[一键申请 MR]
-  preview -->|干净合并| mr
+  preview -->|干净合并且不同名| mr
 ```
 
-| 场景 | 能否直接申请 MR |
-|------|----------------|
+| 场景 | 能否申请 MR |
+|------|-------------|
+| 目标不是远程分支 | 否（选择器已过滤本地） |
+| 源/目标规范化后同名 | 否（自行 push / pull） |
 | 预演有冲突 | 须先「一键解决并推送」成功 |
-| 预演可干净合并 | 可直接申请（源一般为已推送的我的分支） |
+| 预演可干净合并且不同名 | 可直接申请（源一般为已推送的我的分支） |
 
 ### 1.4 安装与打开面板
 
@@ -192,10 +199,11 @@ git for-each-ref --format=%(refname)%00%(refname:short) refs/heads refs/remotes
 | `gitRef` | git 操作身份 | `main` | `origin/feature/x` |
 
 - **UI 树**：本地 / 远程分组，路径按短名 `name` 分层
+- **合并预演 · 目标分支**：仅远程（`BranchTreeSelect` 的 `remoteOnly`）；待合并分支可选本地或远程
 - **预演 / 一键解决**：`into` / `from` 传 **`gitRef`**
-- **申请 MR**：source/target 用短名（`branchNameForMr`，见 `merge/branchName.ts`）
+- **申请 MR**：source/target 用短名（`branchNameForMr`）；同名判定见 `isSameBranchForMr`（`merge/branchName.ts`）
 
-代码：`packages/extension/src/coreBridge.ts`（`listBranchNames`）、`webview/.../branchTree.ts`。
+代码：`packages/extension/src/coreBridge.ts`（`listBranchNames`）、`webview/.../branchTree.ts`、`BranchTreeSelect.vue`。
 
 ---
 ### 2.3 分支图
@@ -365,11 +373,12 @@ git-insight conflict-blame --into <线上> --from <我的>
 **操作要点**
 
 1. 依赖配置就绪（A/B 已登录，或 C Token 有效，或 D）
-2. 有冲突须先推送成功；干净合并可直接申请
-3. MR 方向：临时分支（或我的分支）→ **线上目标（into）**
-4. 对话框多选 = **指派人 + 审核人**（同一批人两种角色；指派有邮件提醒）
+2. **into 须为远程**；`branchNameForMr(into) === branchNameForMr(from)` 时拒绝（提示自行 push / pull）
+3. 有冲突须先「一键解决并推送」成功；干净合并且不同名可直接申请
+4. MR 方向：临时分支（或我的分支）→ **线上目标（into 短名）**
+5. 对话框多选 = **指派人 + 审核人**（同一批人两种角色；指派有邮件提醒）
 
-源/目标分支名经 `branchNameForMr` 去掉 `origin/` 等前缀（`merge/branchName.ts`）。
+源/目标分支名经 `branchNameForMr` 去掉 `origin/` 等前缀；同名拦截见 `isSameBranchForMr`（`merge/branchName.ts`）。GitHub Token 建 PR 失败时会附带 API `errors[]` 详情。
 
 **公共 git（prepare / 探测）**
 
@@ -660,12 +669,14 @@ pnpm --filter git-insight build
 
 ### 3.5 风险与约定
 
-1. **into / from 不可填反**：左=线上、右=我的；与预演选边、一键落盘同向。
-2. 临时分支必须基于 **线上 into**；误从我的分支拉出再 merge 线上会左右对调。
-3. tip 变化后应重新预演再一键解决。
-4. 主工作区可有未提交改动（worktree 隔离）；临时分支名已在主仓检出则拒绝。
-5. 冲突文件须全部有选边，否则 worktree 内 `merge --abort`。
-6. PowerShell 执行扩展内 CLI：`& "…\gh.exe" auth login`（不可省略 `&`）。
+1. **into / from 不可填反**：左=线上（远程）、右=我的；与预演选边、一键落盘同向。
+2. **目标分支仅远程**；本地互合同步不在本工具范围内。
+3. **同名分支**（如 `master` ↔ `origin/master`）不预演、不申请 MR，请自行 push / pull。
+4. 临时分支必须基于 **线上 into**；误从我的分支拉出再 merge 线上会左右对调。
+5. tip 变化后应重新预演再一键解决。
+6. 主工作区可有未提交改动（worktree 隔离）；临时分支名已在主仓检出则拒绝。
+7. 冲突文件须全部有选边，否则 worktree 内 `merge --abort`。
+8. PowerShell 执行扩展内 CLI：`& "…\gh.exe" auth login`（不可省略 `&`）。
 
 ### 3.6 发布到 Cursor 市场（Open VSX）
 
@@ -876,6 +887,12 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 
 **预览模式下一键按钮是灰的**  
 浏览器 preview 禁止写仓库；请在 Cursor 扩展面板操作。
+
+**目标分支选不到本地分支？**  
+设计如此：目标（`into`）只列远程跟踪分支。本地 ↔ 本地或本地 ↔ 其远程同名分支，请自行 `git merge` / `push` / `pull`。
+
+**提示「源/目标是同一分支」**  
+短名相同（如 `master` 与 `origin/master`）。本工具不做同名同步与 MR；请在终端 push / pull。
 
 **GitLab Token 格式**  
 必须 `glpat-`；不要把 `ghp_` 填进 GitLab 框。Token 仅用于申请 MR，不能代替 fetch 登录。

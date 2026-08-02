@@ -10,12 +10,17 @@ import {
 } from "./graph/branchTree";
 import PathTreeNodes from "./PathTreeNodes.vue";
 
-const props = defineProps<{
-  modelValue: string;
-  branches: BranchOption[];
-  placeholder?: string;
-  disabled?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    branches: BranchOption[];
+    placeholder?: string;
+    disabled?: boolean;
+    /** 只展示远程跟踪分支（目标分支用） */
+    remoteOnly?: boolean;
+  }>(),
+  { remoteOnly: false },
+);
 
 const emit = defineEmits<{
   "update:modelValue": [value: string];
@@ -34,23 +39,30 @@ const expandedFolders = ref<Record<string, boolean>>({});
 const panelStyle = ref<Record<string, string>>({});
 const activeIndex = ref(-1);
 
-const tree = computed(() => buildBranchTree(props.branches));
+const effectiveBranches = computed(() =>
+  props.remoteOnly ? props.branches.filter((b) => b.remote) : props.branches,
+);
+
+const tree = computed(() => buildBranchTree(effectiveBranches.value));
 
 const triggerLabel = computed(() => {
   if (!props.modelValue) {
     return "";
   }
-  const hit = findBranchByGitRef(props.branches, props.modelValue);
+  const hit = findBranchByGitRef(effectiveBranches.value, props.modelValue);
   return hit ? branchDisplayLabel(hit) : props.modelValue;
 });
 
 const filtered = computed(() => {
   const q = filter.value.trim();
+  const base = props.remoteOnly
+    ? { ...tree.value, local: [] as typeof tree.value.local, localLeafCount: 0 }
+    : tree.value;
   if (!q) {
-    return tree.value;
+    return base;
   }
-  const local = filterPathTree(tree.value.local, q);
-  const remotes = tree.value.remotes
+  const local = props.remoteOnly ? [] : filterPathTree(base.local, q);
+  const remotes = base.remotes
     .map((g) => {
       const t = filterPathTree(g.tree, q);
       return {

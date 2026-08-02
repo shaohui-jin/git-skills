@@ -16,3 +16,20 @@ export function branchNameForMr(ref: string, remotes: string[] = ["origin"]): st
   }
   return s;
 }
+
+/**
+ * 规范化后源/目标同名（如 master 与 origin/master）。
+ * 此类同步请用户自行 push/pull，本工具不建临时分支、不申请 MR。
+ */
+export function isSameBranchForMr(
+  into: string,
+  from: string,
+  remotes: string[] = ["origin"],
+): boolean {
+  const a = branchNameForMr(into, remotes);
+  const b = branchNameForMr(from, remotes);
+  return !!a && !!b && a === b;
+}
+
+/** @deprecated 使用 isSameBranchForMr */
+export const needsTempBranchForMr = isSameBranchForMr;

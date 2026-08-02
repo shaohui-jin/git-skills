@@ -28,12 +28,46 @@ function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
+/** 与 core branchNameForMr 对齐：去掉 refs / origin 前缀 */
+function branchNameForMr(ref: string): string {
+  let s = ref
+    .trim()
+    .replace(/^refs\/heads\//, "")
+    .replace(/^refs\/remotes\/[^/]+\//, "");
+  if (s.startsWith("origin/")) {
+    s = s.slice("origin/".length);
+  }
+  return s;
+}
+
+/** 规范化后同名（master ↔ origin/master）：不走本工具，自行 push/pull */
+function isSameBranchForMr(intoRef: string, fromRef: string): boolean {
+  const a = branchNameForMr(intoRef);
+  const b = branchNameForMr(fromRef);
+  return !!a && !!b && a === b;
+}
+
+function preferRemoteInto(list: BranchOption[]): string {
+  const remotes = list.filter((b) => b.remote);
+  const prefer =
+    remotes.find((b) => b.name === "master") ??
+    remotes.find((b) => b.name === "main") ??
+    remotes.find((b) => b.name === "develop") ??
+    remotes[0];
+  return prefer?.gitRef ?? "";
+}
+
 function onApplyResolve(payload: {
   into: string;
   from: string;
   files: Array<{ path: string; resolvedContent: string }>;
   push: boolean;
 }): void {
+  if (isSameBranchForMr(payload.into, payload.from)) {
+    error.value = "源/目标是同一分支，请自行 git push / pull，此处不处理";
+    status.value = error.value;
+    return;
+  }
   loadingAction.value = "preview";
   vscode.postMessage({
     type: "applyResolve",
@@ -153,6 +187,11 @@ async function onAiResolve(payload: AiResolveRequestPayload): Promise<void> {
 }
 
 function onRequestCreateMr(payload: { into: string; from: string }): void {
+  if (isSameBranchForMr(payload.into, payload.from)) {
+    error.value = "源/目标是同一分支，请自行 git push / pull，此处不申请 MR";
+    status.value = error.value;
+    return;
+  }
   if (!canCreateMr.value) {
     error.value = createMrBlockReason.value;
     status.value = createMrBlockReason.value;
@@ -244,26 +283,49 @@ const gitlabTokenStatus = ref<TokenValidateView | null>(null);
 /** 进入页面后对已有 Token 的预校验去重键 */
 let lastTokenPrecheckKey = "";
 
+const sameBranchForMr = computed(() =>
+  isSameBranchForMr(into.value, from.value),
+);
+
+const tempPushDoneForPair = computed(() => {
+  return (
+    !!resolvePushDone.value &&
+    resolvePushDone.value.into === into.value &&
+    resolvePushDone.value.from === from.value &&
+    !!resolvePushDone.value.tempBranch
+  );
+});
+
+const previewBlockReason = computed(() => {
+  if (!into.value || !from.value) {
+    return "请选择目标分支与待合并分支";
+  }
+  const intoOpt = branches.value.find((b) => b.gitRef === into.value);
+  if (intoOpt && !intoOpt.remote) {
+    return "目标分支须为远程分支（本地请自行 pull / merge）";
+  }
+  if (sameBranchForMr.value) {
+    return "源/目标是同一分支，请自行 git push / pull，此处不处理";
+  }
+  return "";
+});
+
 const createMrBlockReason = computed(() => {
   if (previewMode.value) {
     return "预览模式不支持申请 MR";
   }
+  if (sameBranchForMr.value) {
+    return "源/目标是同一分支，请自行 git push / pull";
+  }
   if (!methodReady.value) {
     return methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
   }
-  // 有冲突时：必须先一键解决并推送；干净合并可直接申请（源=from）
   const hasConflicts =
     !!preview.value &&
     !preview.value.clean &&
     (preview.value.conflictFiles?.length ?? 0) > 0;
-  if (hasConflicts) {
-    if (
-      !resolvePushDone.value ||
-      resolvePushDone.value.into !== into.value ||
-      resolvePushDone.value.from !== from.value
-    ) {
-      return "请先完成「一键解决并推送」后再申请 MR";
-    }
+  if (hasConflicts && !tempPushDoneForPair.value) {
+    return "请先「一键解决并推送」";
   }
   return "";
 });
@@ -417,22 +479,26 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       status.value = msg.cwd
         ? `仓库：${msg.cwd}（本地 ${localCount} / 远程 ${remoteCount}）`
         : "未检测到仓库，请选择或输入目录";
-      const refs = msg.branches.map((b) => b.gitRef);
-      if (into.value && !refs.includes(into.value)) {
+      const normalized = normalizeBranches(msg.branches);
+      const refs = normalized.map((b) => b.gitRef);
+      const remoteRefs = new Set(
+        normalized.filter((b) => b.remote).map((b) => b.gitRef),
+      );
+      // 目标分支只允许远程
+      if (into.value && !remoteRefs.has(into.value)) {
         into.value = "";
       }
       if (from.value && !refs.includes(from.value)) {
         from.value = "";
       }
       if (!into.value) {
-        into.value =
-          msg.branches.find((b) => !b.remote)?.gitRef ??
-          msg.branches[0]?.gitRef ??
-          "";
+        into.value = preferRemoteInto(normalized);
       }
       if (!from.value) {
         from.value =
-          msg.branches.find((b) => b.gitRef !== into.value)?.gitRef ?? "";
+          normalized.find((b) => !b.remote && b.gitRef !== into.value)?.gitRef ??
+          normalized.find((b) => b.gitRef !== into.value)?.gitRef ??
+          "";
       }
     }
     return;
@@ -480,19 +546,21 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       from.value = msg.from;
     }
     status.value = [
-      `一键解决完成：${msg.tempBranch}`,
+      `已处理临时分支 ${msg.tempBranch}`,
       `commit ${short(msg.commitSha)}`,
       msg.pushed ? "已推送" : "未推送",
       msg.usedWorktree
         ? msg.previousBranch
-          ? `主分支仍为 ${msg.previousBranch}`
-          : "主工作区未切换"
+          ? `当前仍在 ${msg.previousBranch}`
+          : "工作区未切换"
         : null,
-      msg.pushed ? "现在可以「一键申请 MR」" : "未推送成功，暂不可申请 MR",
+      msg.pushed ? "可继续「一键申请 MR」" : "推送未成功，暂不可申请 MR",
     ]
       .filter(Boolean)
       .join(" · ");
     error.value = null;
+    loadingAction.value = "";
+    busyPercent.value = null;
     return;
   }
   if (msg.type === "gitConfigResult") {
@@ -653,6 +721,11 @@ function loadGraph() {
 }
 
 function runPreview() {
+  if (previewBlockReason.value) {
+    error.value = previewBlockReason.value;
+    status.value = previewBlockReason.value;
+    return;
+  }
   busy.value = true;
   busyLabel.value = "合并预演中…";
   busyPercent.value = 0;
@@ -845,8 +918,11 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
           v-else
           class="btn"
           :class="{ loading: loadingAction === 'preview' }"
-          :disabled="busy || !cwd || !into || !from"
-          :title="loadingAction === 'preview' ? busyLabel : undefined"
+          :disabled="busy || !cwd || !into || !from || !!previewBlockReason"
+          :title="
+            previewBlockReason ||
+            (loadingAction === 'preview' ? busyLabel : undefined)
+          "
           @click="runPreview"
         >
           <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
@@ -881,25 +957,30 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
     <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
       <aside v-if="tab === 'preview'" class="sidebar">
         <label>
-          目标分支（线上 / 合入目标）
+          目标分支（线上 / 仅远程）
           <BranchTreeSelect
             v-model="into"
             :branches="branches"
+            remote-only
             :disabled="busy || !cwd"
-            placeholder="选择线上目标分支，如 test…"
+            placeholder="选择远程目标，如 origin/test…"
           />
         </label>
         <label>
-          我的分支（待提交 / 待合入）
+          我的分支（待合入，可本地）
           <BranchTreeSelect
             v-model="from"
             :branches="branches"
             :disabled="busy || !cwd"
-            placeholder="选择你要提交的功能分支…"
+            placeholder="选择功能分支（本地或远程）…"
           />
         </label>
         <p class="hint">
-          业务含义：把「我的分支」合进「线上目标」。选好后点顶部「开始预演」。
+          把「我的分支」合进「线上目标」并申请 MR。目标须为远程分支；若两边是同一分支（如
+          master ↔ origin/master），请自行 push / pull，此处不处理。
+        </p>
+        <p v-if="previewBlockReason" class="hint" style="color: var(--danger, #c44)">
+          {{ previewBlockReason }}
         </p>
       </aside>
 
@@ -984,11 +1065,15 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   两条分支没有共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
                 </p>
                 <p v-else-if="preview.clean">
-                  无冲突，可以将我的分支 <code>{{ preview.from }}</code> 合入线上
+                  无冲突，可将 <code>{{ preview.from }}</code> 合入
                   <code>{{ preview.into }}</code>。
                 </p>
                 <p v-else>未检测到可解析的冲突文件内容。</p>
-                <div v-if="preview.clean && !previewMode" class="btn-row" style="margin-top: 10px">
+                <div
+                  v-if="preview.clean && !previewMode && !sameBranchForMr"
+                  class="btn-row"
+                  style="margin-top: 10px"
+                >
                   <button
                     type="button"
                     class="btn"
@@ -1000,6 +1085,9 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   </button>
                   <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
                 </div>
+                <p v-else-if="preview.clean && sameBranchForMr" class="muted" style="margin-top: 10px">
+                  源/目标是同一分支，请自行 <code>git push</code> / <code>git pull</code>，此处不申请 MR。
+                </p>
               </div>
             </div>
 

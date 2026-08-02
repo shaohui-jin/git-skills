@@ -771,8 +771,7 @@ const resultLineStarts = computed(() => {
           </span>
         </div>
         <p class="muted resolve-tip">
-          左栏=线上目标，右栏=我的分支。可用「AI 选边」或手动选边；「一键解决」在独立
-          worktree 中把我的变更合进线上并推送（不切换当前分支），再可申请 MR。
+          左栏=线上目标（远程），右栏=我的分支。选边后用「一键解决并推送」写入临时分支（不切换当前分支），再申请 MR。
         </p>
         <div class="resolve-actions">
           <button

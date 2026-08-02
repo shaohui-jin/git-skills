@@ -17,7 +17,10 @@ export interface ApplyResolveOptions {
   into: string;
   /** 我的分支 / 待提交（预演 from / 右栏） */
   from: string;
-  /** 暂存的已解决文件（需含 resolvedContent） */
+  /**
+   * 暂存的已解决文件（需含 resolvedContent）。
+   * 干净合并可传空数组：仅临时分支 + merge + push。
+   */
   files: StashFilePayload[];
   /** 远程名，默认 origin */
   remote?: string;
@@ -167,12 +170,8 @@ export async function applyStashedResolve(
   if (!into || !from) {
     throw new GitError("into / from 不能为空", { code: "USAGE" });
   }
-  if (!options.files.length) {
-    throw new GitError("没有可应用的暂存文件（需要 resolvedContent）", {
-      code: "NO_STASH_FILES",
-    });
-  }
-  for (const f of options.files) {
+  const files = options.files ?? [];
+  for (const f of files) {
     if (!f.path || f.resolvedContent == null) {
       throw new GitError(`暂存文件缺少 path 或 resolvedContent：${f.path}`, {
         code: "INVALID_STASH",
@@ -225,11 +224,18 @@ export async function applyStashedResolve(
     );
 
     const unmerged = await listUnmerged(wtPath);
-    const stashPaths = new Set(options.files.map((f) => f.path.replace(/\\/g, "/")));
+    const stashPaths = new Set(files.map((f) => f.path.replace(/\\/g, "/")));
 
     if (mergeRun.code !== 0 || unmerged.length > 0) {
-      reportProgress(onProgress, 50, `写入暂存解决结果（${options.files.length} 文件）…`);
-      await writeStashFiles(wtPath, options.files);
+      if (files.length === 0) {
+        await runGit(wtPath, ["merge", "--abort"], { allowFail: true });
+        throw new GitError(
+          "合并存在冲突，请先在预演中完成选边，再使用「一键解决并推送」",
+          { code: "HAS_CONFLICTS" },
+        );
+      }
+      reportProgress(onProgress, 50, `写入暂存解决结果（${files.length} 文件）…`);
+      await writeStashFiles(wtPath, files);
 
       const still = await listUnmerged(wtPath);
       const missing = still.filter((p) => !stashPaths.has(p.replace(/\\/g, "/")));
@@ -240,27 +246,51 @@ export async function applyStashedResolve(
           { code: "UNRESOLVED_LEFT", args: missing },
         );
       }
-      messages.push(`已按暂存覆盖 ${options.files.length} 个冲突文件`);
-    } else {
+      messages.push(`已按暂存覆盖 ${files.length} 个冲突文件`);
+    } else if (files.length > 0) {
       reportProgress(onProgress, 50, "合并无冲突，同步写入暂存文件…");
-      await writeStashFiles(wtPath, options.files);
+      await writeStashFiles(wtPath, files);
       messages.push("git merge 无冲突；已按暂存内容对齐文件");
+    } else {
+      reportProgress(onProgress, 50, "合并无冲突（干净合并）…");
+      messages.push("git merge 无冲突；将提交合并结果到临时分支");
     }
 
-    reportProgress(onProgress, 70, "提交解决冲突…");
-    const commitMsg = [
-      `resolve: merge ${from} into ${into} via ${tempBranch}`,
-      "",
-      "Applied stash choices from Git Insight merge preview (scheme A, worktree).",
-    ].join("\n");
+    reportProgress(onProgress, 70, files.length ? "提交解决冲突…" : "提交合并…");
+    const commitMsg = files.length
+      ? [
+          `resolve: merge ${from} into ${into} via ${tempBranch}`,
+          "",
+          "Applied stash choices from Git Insight merge preview (scheme A, worktree).",
+        ].join("\n")
+      : [
+          `merge: ${from} into ${into} via ${tempBranch}`,
+          "",
+          "Clean merge via Git Insight temp branch (scheme A, worktree).",
+        ].join("\n");
 
     const commitRun = await runGit(wtPath, ["commit", "-m", commitMsg], {
       allowFail: true,
     });
     if (commitRun.code !== 0) {
       await runGit(wtPath, ["merge", "--abort"], { allowFail: true });
+      const detail = (commitRun.stderr || commitRun.stdout).trim();
+      if (/nothing to commit|no changes added|did not stash/i.test(detail) ||
+          /nothing to commit/i.test(mergeRun.stdout + mergeRun.stderr)) {
+        throw new GitError(
+          `没有可合并的新提交（${from} → ${into}），无需推送临时分支`,
+          { code: "NOTHING_TO_MERGE" },
+        );
+      }
+      // merge 已是 "Already up to date" 时往往没有 MERGE_HEAD，commit 也会失败
+      if (/Already up to date/i.test(mergeRun.stdout + mergeRun.stderr)) {
+        throw new GitError(
+          `没有可合并的新提交（${from} → ${into}），无需推送临时分支`,
+          { code: "NOTHING_TO_MERGE" },
+        );
+      }
       throw new GitError(
-        `提交失败（主工作区未改动）：${(commitRun.stderr || commitRun.stdout).trim()}`,
+        `提交失败（主工作区未改动）：${detail}`,
         { code: "COMMIT_FAILED" },
       );
     }
@@ -289,7 +319,11 @@ export async function applyStashedResolve(
 
     reportProgress(onProgress, 95, "生成创建 MR 链接…");
     const remoteUrl = await remoteHttpsOrSsh(repoRoot, remote);
-    const createMrUrl = buildCreateMrUrl(remoteUrl, tempBranch, into);
+    const createMrUrl = buildCreateMrUrl(
+      remoteUrl,
+      tempBranch,
+      branchNameForMr(into),
+    );
 
     reportProgress(onProgress, 100, "完成");
     return {

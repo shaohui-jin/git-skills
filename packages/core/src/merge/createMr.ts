@@ -362,9 +362,20 @@ async function createGithubPrByToken(options: {
       }),
     },
   );
-  const json = (await res.json()) as { html_url?: string; number?: number; message?: string };
+  const json = (await res.json()) as {
+    html_url?: string;
+    number?: number;
+    message?: string;
+    errors?: Array<{ message?: string; field?: string; code?: string }>;
+  };
   if (!res.ok) {
-    throw new GitError(`GitHub API 创建 PR 失败：${json.message || res.status}`, {
+    const detail = (json.errors ?? [])
+      .map((e) => e.message || [e.field, e.code].filter(Boolean).join(": "))
+      .filter(Boolean)
+      .join("; ");
+    const hint =
+      detail || json.message || String(res.status);
+    throw new GitError(`GitHub API 创建 PR 失败：${hint}`, {
       code: "CREATE_MR_FAILED",
     });
   }
@@ -626,6 +637,12 @@ export async function prepareCreateMr(
     remote,
     options.sourceBranch,
   );
+  if (sourceBranch === targetBranch) {
+    throw new GitError(
+      `源/目标是同一分支（${targetBranch}），请用 git push / pull 自行同步，此处不申请 MR。`,
+      { code: "SAME_BRANCH_MR" },
+    );
+  }
   const title = `Merge ${sourceBranch} into ${targetBranch}`;
   const createMrUrl = buildCreateMrUrl(url, sourceBranch, targetBranch);
   const messages: string[] = [];
@@ -731,6 +748,15 @@ export async function createMergeRequest(
   const platform = detectMrPlatform(url);
   const sourceBranch = branchNameForMr(options.sourceBranch);
   const targetBranch = branchNameForMr(options.targetBranch);
+  if (!sourceBranch || !targetBranch) {
+    throw new GitError("sourceBranch / targetBranch 不能为空", { code: "USAGE" });
+  }
+  if (sourceBranch === targetBranch) {
+    throw new GitError(
+      `源/目标是同一分支（${targetBranch}），请用 git push / pull 自行同步，此处不申请 MR。`,
+      { code: "SAME_BRANCH_MR" },
+    );
+  }
   const title =
     options.title?.trim() || `Merge ${sourceBranch} into ${targetBranch}`;
   const body = options.body?.trim() || "Created via Git Insight.";

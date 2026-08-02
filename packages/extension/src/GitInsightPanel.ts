@@ -370,17 +370,28 @@ export class GitInsightPanel {
 
     if (req.type === "applyResolve") {
       const push = req.push !== false;
+      const cleanTemp = !req.files?.length;
       const pick = await vscode.window.showWarningMessage(
-        `将在独立 git worktree 中${push ? "解决并推送" : "解决并提交"}（不切换你当前分支）：\n` +
-          `1) 基于「${req.into}」创建临时分支\n` +
-          `2) merge「${req.from}」并应用暂存后 commit\n` +
-          (push ? `3) push 到 origin\n` : "") +
-          `\n主工作区文件与 HEAD 保持不变。创建 MR 请用面板「一键申请 MR」。`,
+        cleanTemp
+          ? `将推送临时分支（独立 worktree，不切换当前分支）：\n` +
+              `1) 基于「${req.into}」新建临时分支\n` +
+              `2) 合并「${req.from}」并提交\n` +
+              (push ? `3) 推送到 origin\n` : "") +
+              `\n完成后可在面板「一键申请 MR」。`
+          : `将解决冲突并${push ? "推送" : "提交"}（独立 worktree，不切换当前分支）：\n` +
+              `1) 基于「${req.into}」新建临时分支\n` +
+              `2) 合并「${req.from}」并写入选边结果\n` +
+              (push ? `3) 推送到 origin\n` : "") +
+              `\n完成后可在面板「一键申请 MR」。`,
         { modal: true },
         "继续",
       );
       if (pick !== "继续") {
-        await this.post({ type: "error", message: "已取消一键解决冲突", code: "CANCELLED" });
+        await this.post({
+          type: "error",
+          message: cleanTemp ? "已取消推送临时分支" : "已取消一键解决",
+          code: "CANCELLED",
+        });
         return;
       }
     }
@@ -410,7 +421,9 @@ export class GitInsightPanel {
           : req.type === "preview" || req.type === "blame"
             ? "合并预演中…"
             : req.type === "applyResolve"
-              ? "一键解决冲突（独立 worktree，不改当前分支）…"
+              ? !req.files?.length
+                ? "正在推送临时分支…"
+                : "一键解决并推送…"
               : req.type === "prepareCreateMr"
                 ? "准备申请 MR（识别平台 / 拉取成员）…"
                 : req.type === "createMr"
@@ -465,10 +478,10 @@ export class GitInsightPanel {
               ? `\n当前工作区仍在「${msg.previousBranch}」（独立 worktree 已清理）`
               : "\n主工作区未切换分支（独立 worktree 已清理）";
           await vscode.window.showInformationMessage(
-            `已完成：${msg.tempBranch} @ ${msg.commitSha.slice(0, 7)}` +
+            `临时分支已就绪：${msg.tempBranch} @ ${msg.commitSha.slice(0, 7)}` +
               (msg.pushed ? "（已推送）" : "（未推送）") +
               stay +
-              "\n可在面板点击「一键申请 MR」用 gh/glab 创建合并请求。",
+              "\n可在面板点击「一键申请 MR」。",
           );
         }
         if (msg.type === "createMrResult" && msg.url) {

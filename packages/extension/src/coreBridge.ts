@@ -529,22 +529,12 @@ export async function handleWebviewRequest(
           ],
         };
       }
-      if (!req.files?.length) {
-        return {
-          messages: [
-            {
-              type: "error",
-              message: "没有解决结果，请先完成全部冲突选边",
-              code: "NO_STASH",
-            },
-          ],
-        };
-      }
+      // files 可为空：干净合并（如同名 master→origin/master）仅推临时分支
       const data = await applyStashedResolve({
         cwd,
         into: req.into,
         from: req.from,
-        files: req.files,
+        files: req.files ?? [],
         remote: req.remote,
         push: req.push,
         tempBranch: req.tempBranch,
