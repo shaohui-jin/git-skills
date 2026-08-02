@@ -32,10 +32,11 @@ cursor --install-extension git-insight.vsix --force
 - **目标分支**仅远程（如 `origin/test`）；**我的分支**可选本地或远程
 - 源/目标短名相同（如 `master` ↔ `origin/master`）不处理，请自行 `git push` / `pull`
 
-完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)。
+完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)。  
+变更记录：[CHANGELOG.md](./CHANGELOG.md)（随 VSIX 发布，Cursor / Open VSX 市场可见）。
 
 ## 发布到 Cursor 市场（维护者）
 
-现行流程（唯一）：一次性配置 Open VSX + GitHub Secret `OVSX_PAT` → 日常只改本包 `package.json` 的 `version` 并 push 到 `master`/`main`，CI 自动打 tag 并发布。
+现行流程（唯一）：一次性配置 Open VSX + GitHub Secret `OVSX_PAT` → 日常升高本包 `package.json` 的 `version` **并更新 `CHANGELOG.md`**，再 push 到 `master`/`main`，CI 自动打 tag 并发布。
 
 → **[docs/guide.md §3.6](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md#36-发布到-cursor-市场open-vsx)**

@@ -681,19 +681,21 @@ pnpm --filter git-insight build
 ### 3.6 发布到 Cursor 市场（Open VSX）
 
 Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**（不是 Microsoft VS Code Marketplace）。  
-**现行唯一发版流程**：改扩展 `version` → push 到 `master`/`main` → GitHub Actions 自动打 tag 并发布到 Open VSX → Cursor 市场稍后同步。
+**现行唯一发版流程**：改扩展 `version` → 更新 `CHANGELOG.md` → push 到 `master`/`main` → GitHub Actions 自动打 tag 并发布到 Open VSX → Cursor 市场稍后同步。
 
 | 项 | 值 |
 |----|-----|
 | 扩展 ID | `jinshaohui.git-insight` |
 | publisher / namespace | `jinshaohui` |
 | name | `git-insight` |
+| 变更记录 | [`packages/extension/CHANGELOG.md`](../packages/extension/CHANGELOG.md)（打进 VSIX，市场「Changelog」页展示） |
 | 工作流 | [`.github/workflows/release-on-version.yml`](../.github/workflows/release-on-version.yml) |
 
 ```text
 【一次性】Open VSX 账号 + Token + create-namespace + GitHub Secret OVSX_PAT
                               ↓
 【日常】改 packages/extension/package.json 的 version（升高）
+        并在 CHANGELOG.md 顶部追加该版本说明
                               ↓
               git commit && git push origin master
                               ↓
@@ -705,6 +707,9 @@ Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**（不是 Micro
                     ↓
          Open VSX 有新版本 → Cursor 扩展市场同步（数小时内）
 ```
+
+> **市场变更记录**：`vsce package` 会收录扩展目录下的 `CHANGELOG.md`（包内为 `changelog.md`）。  
+> 每次升 `version` 务必同步写 changelog，否则 Cursor / Open VSX 详情页没有可读的版本说明。
 
 > **Open VSX Token（`OVSX_PAT`）≠ 扩展面板里的 GitHub/GitLab Token。**  
 > 只用于发版；不要写进代码、不要提交 git、不要填进「Git 配置」。
