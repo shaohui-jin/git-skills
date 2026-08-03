@@ -16,7 +16,7 @@ export class GitInsightPanel {
   private readonly output: vscode.OutputChannel;
   private disposables: vscode.Disposable[] = [];
   /** Override when user picks a folder; otherwise use workspace folder. */
-  private overrideCwd: string | null = null;
+  overrideCwd: string | null = null;
   /** 当前 Chat 回传桥会话（粘贴 / 取消） */
   private aiBridgeSession: AiBridgeSession | null = null;
   private lastAiPrompt = "";
@@ -94,18 +94,35 @@ export class GitInsightPanel {
   public static createOrShow(
     context: vscode.ExtensionContext,
     focusTab?: "config" | "graph" | "preview",
+    seed?: { into?: string; from?: string; autoPreview?: boolean; cwd?: string },
   ): void {
     const extensionUri = context.extensionUri;
     const cliStorageDir = context.globalStorageUri.fsPath;
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
+    const postSeed = (panel: GitInsightPanel): void => {
+      if (seed?.cwd?.trim()) {
+        panel.overrideCwd = seed.cwd.trim();
+      }
+      const tab = focusTab ?? (seed?.into || seed?.from ? "preview" : undefined);
+      if (tab) {
+        void panel.panel.webview.postMessage({ type: "focusTab", tab });
+      }
+      if (seed?.into || seed?.from) {
+        void panel.panel.webview.postMessage({
+          type: "seedPreview",
+          into: seed.into,
+          from: seed.from,
+          autoPreview: seed.autoPreview !== false,
+        });
+      }
+    };
+
     if (GitInsightPanel.current) {
       GitInsightPanel.current.panel.reveal(column);
-      if (focusTab) {
-        void GitInsightPanel.current.panel.webview.postMessage({
-          type: "focusTab",
-          tab: focusTab,
-        });
+      postSeed(GitInsightPanel.current);
+      if (seed?.cwd?.trim()) {
+        void GitInsightPanel.current.refreshWorkspaceAfterSeed();
       }
       return;
     }
@@ -127,13 +144,35 @@ export class GitInsightPanel {
       cliStorageDir,
       context.globalState,
     );
-    if (focusTab) {
-      setTimeout(() => {
-        void GitInsightPanel.current?.panel.webview.postMessage({
-          type: "focusTab",
-          tab: focusTab,
-        });
-      }, 300);
+    setTimeout(() => {
+      if (GitInsightPanel.current) {
+        postSeed(GitInsightPanel.current);
+        if (seed?.cwd?.trim()) {
+          void GitInsightPanel.current.refreshWorkspaceAfterSeed();
+        }
+      }
+    }, 350);
+  }
+
+  /** seed 指定 cwd 后刷新工作区分支列表 */
+  async refreshWorkspaceAfterSeed(): Promise<void> {
+    try {
+      const cwd = await this.getCwd();
+      const result = await handleWebviewRequest(
+        { type: "refreshWorkspace" },
+        cwd,
+        {
+          previewMode: false,
+          cliStorageDir: this.cliStorageDir,
+          configMemento: this.configMemento,
+        },
+      );
+      for (const msg of result.messages) {
+        await this.post(msg);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`seed refresh 失败: ${message}`);
     }
   }
 
@@ -145,7 +184,17 @@ export class GitInsightPanel {
     return resolveWorkspaceCwd(folder);
   }
 
-  private async post(msg: HostMessage | { type: "focusTab"; tab: string }): Promise<void> {
+  private async post(
+    msg:
+      | HostMessage
+      | { type: "focusTab"; tab: string }
+      | {
+          type: "seedPreview";
+          into?: string;
+          from?: string;
+          autoPreview?: boolean;
+        },
+  ): Promise<void> {
     await this.panel.webview.postMessage(msg);
   }
 

@@ -357,6 +357,24 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       msg.tab === "preview" ? "preview" : msg.tab === "config" ? "config" : "graph";
     return;
   }
+  if (msg.type === "seedPreview") {
+    tab.value = "preview";
+    if (msg.into?.trim()) {
+      into.value = msg.into.trim();
+    }
+    if (msg.from?.trim()) {
+      from.value = msg.from.trim();
+    }
+    status.value = `已从外部种入分支：${into.value || "?"} ← ${from.value || "?"}`;
+    if (msg.autoPreview !== false && into.value && from.value && !previewBlockReason.value) {
+      setTimeout(() => {
+        if (!busy.value && into.value && from.value && !previewBlockReason.value) {
+          runPreview();
+        }
+      }, 400);
+    }
+    return;
+  }
   if (msg.type === "busy") {
     busy.value = msg.busy;
     busyLabel.value = msg.label ?? "";

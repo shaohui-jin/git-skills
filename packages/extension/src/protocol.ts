@@ -159,6 +159,13 @@ export type HostMessage =
   | { type: "progress"; percent: number; label: string }
   | { type: "focusTab"; tab: "config" | "graph" | "preview" }
   | {
+      type: "seedPreview";
+      into?: string;
+      from?: string;
+      /** 默认 true：种入分支后自动开始预演 */
+      autoPreview?: boolean;
+    }
+  | {
       type: "applyResolveResult";
       tempBranch: string;
       commitSha: string;

@@ -276,30 +276,6 @@ export async function handleWebviewRequest(
   };
   const cfgPath = () => configPath(cliStorageDir);
 
-  /** 从扩展配置取当前仓库对应平台的 Token，供一键申请 MR */
-  const resolveGitAuth = async (): Promise<{
-    authToken?: string;
-    authProvider: "github" | "gitlab" | "unknown";
-  }> => {
-    if (!cwd || !configMemento) {
-      return { authProvider: "unknown" };
-    }
-    try {
-      const originUrl = await remoteOrigin(cwd);
-      const authProvider = detectMrPlatform(originUrl);
-      const cfg = await loadUserConfig(configMemento, cwd, cliStorageDir);
-      const authToken =
-        authProvider === "gitlab"
-          ? cfg.gitlabToken?.trim()
-          : authProvider === "github"
-            ? cfg.githubToken?.trim()
-            : cfg.githubToken?.trim() || cfg.gitlabToken?.trim() || undefined;
-      return { authToken: authToken || undefined, authProvider };
-    } catch {
-      return { authProvider: "unknown" };
-    }
-  };
-
   if (req.type === "ready" || req.type === "refreshWorkspace") {
     const messages: HostMessage[] = [await workspacePayload(cwd, previewMode)];
     if (cwd && configMemento) {

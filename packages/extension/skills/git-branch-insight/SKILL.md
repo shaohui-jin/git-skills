@@ -3,21 +3,20 @@ name: git-branch-insight
 description: >-
   Git branch graph, merge rehearsal, conflict resolve, and MR/PR creation
   (cli / token / extension UI). Invoke with /git-branch-insight then state
-  into/from or intent. Defaults to git fetch.
+  into/from or intent. Defaults to git fetch. Bundled with Git Insight extension.
 disable-model-invocation: true
 ---
 
 # Git Branch Insight
 
-## 怎么用（用户侧）
+随 **Git Insight** 扩展安装后可用。用户侧：`/git-branch-insight` + 需求。
 
-1. Agent 聊天输入 `/git-branch-insight`（斜杠菜单选本 Skill）
-2. **同一条消息或下一条**写清需求，例如：
-   - `把 feature/x 合进 origin/develop，有冲突列出内容`
-   - `预演后能开 MR 再问我用 cli / token / ui`
-   - `只看分支图`
+## 怎么用
 
-不要让用户自己拼 CLI；由本 Skill 编排。
+```text
+/git-branch-insight
+把 feature/x 合进 origin/develop；能开 MR 再问我
+```
 
 ## 闭环
 
@@ -33,12 +32,12 @@ fetch/graph → preview-merge →（冲突：确认选边 + apply-resolve）→ 
 4. 冲突必须展示 `conflictContent`
 5. 左=线上 into，右=我的 from
 
-## CLI
+## CLI（扩展自带）
 
-先：`pnpm --filter @git-insight/core build`
+扩展安装后 CLI 路径（由扩展激活时写入，勿改占位逻辑外的约定）：
 
 ```bash
-pnpm --filter @git-insight/core exec node dist/cli.js <command> …
+node "__GIT_INSIGHT_CLI__" <command> …
 ```
 
 | 阶段 | 命令 |
@@ -51,7 +50,9 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 | 创建 MR | `create-mr --source … --target … --method cli\|token` |
 | 唤起 UI | `open-ui --into … --from …` |
 
-干净：`stash` 可用 `{ "files": [] }`。
+若 `__GIT_INSIGHT_CLI__` 仍是占位符或文件不存在：用命令面板 `Git Insight: 打开预演`，或 `vscode://jinshaohui.git-insight/preview?into=…&from=…&autoPreview=1`。
+
+干净合并：`stash` 可用 `{ "files": [] }`。
 
 ## 申请 MR（先问）
 
@@ -59,7 +60,7 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 |------|------|
 | cli | `create-mr --method cli` |
 | token | `create-mr --method token` 或 `GIT_INSIGHT_*_TOKEN` |
-| ui | `open-ui`（扩展出口，不是第二个 Skill） |
+| ui | `open-ui`（扩展面板） |
 
 ## 输出
 
@@ -76,6 +77,3 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 - 预演不用真实 merge/checkout
 - 未确认不写仓、不开 MR
 - 不同名强行建 MR
-- 不把流程拆成让用户自己点 CLI
-
-详情：[`docs/guide.md`](../../../docs/guide.md) §四。

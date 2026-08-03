@@ -40,4 +40,19 @@ await esbuild.build({
   logLevel: "info",
 });
 
-console.log("[git-insight] bundled dist/extension.js (core inlined)");
+/** Skill / Agent 在任意仓库可调用的 CLI（core 打进单文件） */
+await esbuild.build({
+  entryPoints: [resolve(extensionRoot, "../core/src/cli.ts")],
+  outfile: resolve(distDir, "cli.js"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node20",
+  banner: {
+    js: "import { createRequire as __giCreateRequire } from 'module'; const require = __giCreateRequire(import.meta.url);",
+  },
+  sourcemap: true,
+  logLevel: "info",
+});
+
+console.log("[git-insight] bundled dist/extension.js + dist/cli.js (core inlined)");

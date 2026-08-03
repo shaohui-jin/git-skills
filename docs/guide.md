@@ -20,10 +20,10 @@
 
 | 能力 | 交付面 | 是否改工作区 |
 |------|--------|--------------|
-| 分支图 / 合并预演 | CLI Skill + 扩展 Webview | **否**（`merge-tree` 等只读） |
-| 冲突选边 / AI 选边 | 扩展 Webview | 否（仅 UI / 暂存） |
-| 一键解决并推送 | 扩展 → core | **是**（独立 **worktree**，主工作区不 checkout） |
-| 一键申请 MR/PR | 扩展 → core | 否（`gh` / `glab` / Token API / 浏览器） |
+| 分支图 / 合并预演 | Agent Skill（`/git-branch-insight`）+ 扩展 Webview | **否**（`merge-tree` 等只读） |
+| 冲突选边 / AI 选边 | 扩展 Webview；Skill 对话确认 | 否（仅 UI / 暂存） |
+| 一键解决并推送 | 扩展或 Skill → core `apply-resolve` | **是**（独立 **worktree**，主工作区不 checkout） |
+| 一键申请 MR/PR | 扩展或 Skill（cli / token / ui）→ core | 否（`gh` / `glab` / Token API / 浏览器） |
 
 前置：**系统 Git ≥ 2.38**（依赖新版 `merge-tree --write-tree`）。
 
@@ -87,8 +87,11 @@ cursor --install-extension git-insight.vsix --force
 
 - `Git Insight: Open Web` — 打开面板（默认 **Git 配置**）
 - `Git Insight: 合并预演` — 打开并切到合并预演
+- `Git Insight: 同步 Agent Skill 到全局` — 手动把 `/git-branch-insight` 写到用户 Skill 目录（启动时也会自动同步）
 
 面板顶部输入本机仓库路径或 GitHub `owner/repo`，点「打开」。
+
+**Agent Skill（装扩展即有）：** Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（及 `~/.agents/skills/…`），并写入自带 CLI 路径。任意仓库 Agent 输入 `/git-branch-insight` 再说需求即可。详见 [§四](#四skill-说明)。
 
 > 浏览器 `pnpm preview` 仅看 UI：**不能**写仓库 / 推送 / 申请 MR。
 
@@ -612,14 +615,15 @@ glab mr create --source-branch feature/x --target-branch develop \
 packages/core                 @git-insight/core   — 唯一 Git/MR 引擎 + CLI
 packages/extension            git-insight         — Cursor/VS Code 宿主
 packages/extension/webview    @git-insight/webview — Vue3 UI（G6 分支图）
-skills/git-branch-insight     Agent Skill（只读 CLI）
+skills/git-branch-insight     Agent Skill 仓库副本（与 .cursor/skills 同步）
+packages/extension/skills/…  打进 VSIX；启动时同步到用户全局 Skill 目录
 docs/guide.md                 本文（唯一完整说明）
 ```
 
 | 包 | 职责 |
 |----|------|
-| **core** | `runGit` / fetch / 分支图 / merge-tree 预演 / worktree 落盘 / gh·glab·Token 建 MR |
-| **extension** | Webview 桥接、确认框、globalState 配置、CLI 下载、终端登录、AI 选边桥 |
+| **core** | `runGit` / fetch / 分支图 / merge-tree 预演 / worktree 落盘 / gh·glab·Token 建 MR + CLI |
+| **extension** | Webview 桥接、确认框、globalState 配置、CLI 下载、终端登录、AI 选边桥、**Skill 全局同步** |
 | **webview** | 分支树、G6 图、冲突三栏、Git 配置、MR 对话框；**不直接 spawn git** |
 
 ### 3.2 @git-insight/core
@@ -635,7 +639,14 @@ pnpm --filter @git-insight/core exec node dist/cli.js fetch
 
 输出 JSON：`{ ok, command, data, report?, mermaid? }`。
 
-**CLI 不包含**一键 resolve / create MR（仅扩展调用库函数）。
+CLI 另含写操作（供 Skill 闭环，须用户确认后调用）：
+
+```bash
+pnpm --filter @git-insight/core exec node dist/cli.js apply-resolve --into <线上> --from <我的> --stash stash.json
+pnpm --filter @git-insight/core exec node dist/cli.js prepare-mr --into <线上> --from <我的>
+pnpm --filter @git-insight/core exec node dist/cli.js create-mr --source <源> --target <目标> --method cli
+pnpm --filter @git-insight/core exec node dist/cli.js open-ui --into <线上> --from <我的>
+```
 
 程序化 API 示例：
 
@@ -692,7 +703,7 @@ pnpm --filter git-insight build
 | CLI 下载 | `packages/extension/src/cliBundle.ts` |
 | 配置存储 | `packages/extension/src/gitConfigStore.ts` |
 | 冲突 UI | `packages/extension/webview/src/ConflictResolvePanel.vue` |
-| Skill 入口 | `skills/git-branch-insight/SKILL.md` → 本文 §四 |
+| Skill 入口 | 扩展 `skills/git-branch-insight`（装完同步到 `~/.cursor/skills`）· 仓库副本见 §四 → 本文 §四 |
 
 ### 3.5 风险与约定
 
@@ -831,57 +842,122 @@ git push origin master
 
 ## 四、Skill 说明
 
-Cursor 加载入口：[`skills/git-branch-insight/SKILL.md`](../skills/git-branch-insight/SKILL.md)（frontmatter + 指向本文）。
+一个 Skill：`git-branch-insight`。用户侧只记斜杠调用；CLI / 扩展是它的执行出口，不是另一套产品。
 
-### 4.1 范围
+### 4.1 用户怎么用
+
+```text
+/git-branch-insight
+把 feature/x 合进 origin/develop；有冲突列出来；能开 MR 再问我
+```
+
+1. Agent 聊天输入 `/`，选 `git-branch-insight`（`disable-model-invocation: true`，不会自动抢戏）
+2. 同一条或下一条写清：目标远程分支、我的分支、是否只预演 / 是否开 MR
+
+### 4.2 安装扩展如何得到 Skill（推荐）
+
+装 Git Insight（市场或 VSIX）并 **Reload** 后：
+
+| 机制 | 说明 |
+|------|------|
+| 启动同步 | `onStartupFinished` 激活时，把扩展内 `skills/git-branch-insight/SKILL.md` 写到用户全局目录，并把 `__GIT_INSIGHT_CLI__` 替换为扩展自带 `dist/cli.js` 绝对路径 |
+| 写入位置 | `~/.cursor/skills/git-branch-insight/`、`~/.agents/skills/git-branch-insight/`（Windows 即 `%USERPROFILE%\.cursor\skills\…`） |
+| `chatSkills` | `package.json` → `contributes.chatSkills` 指向同一 Skill（宿主支持时直接贡献） |
+| 手动补同步 | 命令面板：`Git Insight: 同步 Agent Skill 到全局` |
+
+**自检：**
+
+1. 打开 `~/.cursor/skills/git-branch-insight/SKILL.md`，确认 CLI 行已是真实路径，而不是 `__GIT_INSIGHT_CLI__`
+2. 任意业务仓库 Agent 输入 `/git-branch-insight` 能搜到
+3. （可选）用 Skill 里的路径跑：`node "<扩展目录>\dist\cli.js" graph --no-fetch`
+
+升级扩展后若路径变了：Reload 或再跑一次「同步 Agent Skill 到全局」。
+
+开发本仓库（未依赖扩展全局 Skill）时仍可用：
+
+- [`.cursor/skills/git-branch-insight/SKILL.md`](../.cursor/skills/git-branch-insight/SKILL.md)
+- [`skills/git-branch-insight/SKILL.md`](../skills/git-branch-insight/SKILL.md)
+- 扩展打包源：[packages/extension/skills/git-branch-insight/SKILL.md](../packages/extension/skills/git-branch-insight/SKILL.md)
+
+### 4.3 范围
 
 | | Skill | 扩展 |
 |--|-------|------|
-| Fetch | 默认自动 | 加载图 / 预演默认 fetch |
-| 交互 | 对话 + 报告 | 可视化 + 一键解决 / MR |
-| 引擎 | 同一 `@git-insight/core` | 同一 |
-| 一键 resolve / MR | **不做** | 支持 |
+| Fetch / 分支图 / 预演 | CLI | Webview |
+| 冲突选边 | 对话确认 → `apply-resolve` stash | 三栏 / AI 选边 |
+| 一键 resolve | CLI `apply-resolve`（worktree） | 同一 core API |
+| 申请 MR | **三选一**：cli / token / **open-ui** | 面板内配置后一键申请 |
+| 引擎 | 同一 `@git-insight/core`（扩展 VSIX 内打进 `dist/cli.js`） | 同一 |
 
-Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
+Skill 与扩展**联动**：对话跑完分析后，可选 `open-ui` 唤起面板并种入 `into`/`from`（沿用扩展已配 Token/CLI）。
 
-### 4.2 前置
+### 4.4 前置与 CLI 调用
 
 - Git ≥ 2.38
-- 在仓库根执行，或 `--cwd <repo>`
-- 先：`pnpm --filter @git-insight/core build`
-- 调用：`pnpm --filter @git-insight/core exec node dist/cli.js <command> …`
+- 在目标仓库根执行，或 `--cwd <repo>`
 
-### 4.3 Agent 工作流
+**终端用户（已装扩展）：** 使用 Skill 文件里注入的路径：
 
-1. 确认仓库路径  
-2. 映射意图 → `graph` 或 `preview-merge`  
-3. 执行 CLI，解析 JSON  
-4. `ok: false` → 解释 `error`  
-5. `ok: true`：展示 `report`；有冲突时必须列出文件、`conflictContent` 与溯源；需要图时附 `mermaid`  
+```bash
+node "<Cursor扩展目录>/jinshaohui.git-insight-<version>/dist/cli.js" <command> …
+```
 
-默认先 fetch；仅用户明确要求离线时加 `--no-fetch`。
+**本仓库开发：**
 
-### 4.4 输出约定
+```bash
+pnpm --filter @git-insight/core build
+pnpm --filter @git-insight/core exec node dist/cli.js <command> …
+```
+
+### 4.5 Agent 工作流（业务闭环）
+
+1. 确认仓库路径；默认 `fetch`（离线加 `--no-fetch`）
+2. 可选 `graph` → 展示 `report` / `mermaid`
+3. `preview-merge --into <远程> --from <我的>`
+4. 同名 → 停止，告知自行 push/pull
+5. 有冲突 → 列出 `conflictContent` + 建议选边 → **用户确认** → 写 `stash.json` → `apply-resolve`
+6. 干净或已推临时分支 → **询问 MR 方式**（见下）→ 执行
+
+**申请 MR 三选一（必须先问用户）：**
+
+| 选择 | CLI | 说明 |
+|------|-----|------|
+| cli | `create-mr --method cli --source … --target …` | 本机 `gh` / `glab` 已登录 |
+| token | `create-mr --method token --token …`（或环境变量 `GIT_INSIGHT_GITHUB_TOKEN` / `GIT_INSIGHT_GITLAB_TOKEN`） | 无 CLI 时 |
+| ui | `open-ui --into … --from …` | 已装扩展则拉起预演面板（URI `vscode://jinshaohui.git-insight/preview?…`）；也可命令 `gitInsight.openPreview` |
+
+`prepare-mr` 会返回 `mrChoices` 供 Agent 展示选项。
+
+### 4.6 输出约定
 
 ```markdown
 ## 结论
-（干净合并 / 冲突 N 个文件）
+（干净合并 / 冲突 N 个文件 / 同名跳过）
 
 ## 冲突详情
 （每个文件：路径、溯源、冲突内容代码块）
 
 ## 图
 （mermaid）
+
+## 建议动作
+- 选边确认 / apply-resolve
+- 申请 MR：cli | token | ui（待用户选）
+
+## 结果
+（临时分支 / MR URL / 已打开扩展）
 ```
 
-### 4.5 不要做的事
+### 4.7 不要做的事
 
-- 不要为预演执行真实 `git merge` / `checkout` / `push`
+- 不要为**预演**执行真实 `git merge` / `checkout`（预演只用 CLI 只读命令）
+- 不要在用户未确认时执行 `apply-resolve` / `create-mr`
+- 不要对同名分支强行建 MR
 - 不要把 PR 号当作核心参数
 - 不要跳过默认 fetch（除非用户要求离线）
 - 冲突时不要只汇报「有冲突」而省略冲突正文
 
-### 4.6 预演 JSON 要点
+### 4.8 预演 JSON 要点
 
 ```json
 {
@@ -941,6 +1017,18 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 **发布 Cursor 市场失败 / 找不到扩展**  
 见 **§3.6**：按 ①→④ 配好后，日常只改 `version` 推 master。市场搜不到时先看 open-vsx.org。
 
+**装了扩展但 Agent 没有 `/git-branch-insight`？**  
+1. `Developer: Reload Window`  
+2. 命令面板：`Git Insight: 同步 Agent Skill 到全局`  
+3. 确认存在 `~/.cursor/skills/git-branch-insight/SKILL.md`，且其中 CLI 不是占位符 `__GIT_INSIGHT_CLI__`  
+4. 新开一条 Agent 对话再试 `/`
+
+**Skill 里的 CLI 路径失效（升级/换机后）？**  
+再跑「同步 Agent Skill 到全局」或 Reload；扩展会按当前安装目录重写路径。
+
+**只装扩展、不打开面板，能用 Skill 吗？**  
+能。Skill 用扩展自带 `dist/cli.js`；写操作与开 MR 仍须在对话里确认。面板用于可视化选边与配置 Token/CLI。
+
 ### 5.2 CLI 速查（git-insight 封装）
 
 ```text
@@ -948,9 +1036,13 @@ git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch]
 git-insight fetch [--cwd] [--remote]
 git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd] [--no-fetch]
 git-insight conflict-blame …   # 同 preview-merge
+git-insight apply-resolve --into … --from … --stash <json> [--no-push]
+git-insight prepare-mr --into … --from …
+git-insight create-mr --source … --target … --method cli|token
+git-insight open-ui --into … --from …
 ```
 
-一键 resolve / create MR **无** CLI 子命令，仅扩展调库。
+终端用户：用扩展目录下 `dist/cli.js`（见 §4.2 / Skill 文件内路径）。本仓库开发：`pnpm --filter @git-insight/core exec node dist/cli.js …`。写操作须用户确认后再由 Agent 调用。
 
 ### 5.3 底层指令速查（按功能）
 

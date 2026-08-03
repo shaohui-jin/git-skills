@@ -2,7 +2,7 @@
   "name": "git-insight",
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, one-click resolve & push, and create MR/PR — powered by @git-insight/core",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "publisher": "jinshaohui",
   "license": "MIT",
   "repository": {
@@ -29,9 +29,13 @@
   },
   "categories": ["SCM Providers", "Other"],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:gitInsight.openWeb",
     "onCommand:gitInsight.previewMerge",
-    "onCommand:gitInsight.conflictBlame"
+    "onCommand:gitInsight.conflictBlame",
+    "onCommand:gitInsight.openPreview",
+    "onCommand:gitInsight.syncSkill",
+    "onUri"
   ],
   "main": "./dist/extension.js",
   "type": "module",
@@ -51,6 +55,21 @@
         "command": "gitInsight.conflictBlame",
         "title": "Git Insight: 合并预演（兼容）",
         "category": "Git Insight"
+      },
+      {
+        "command": "gitInsight.openPreview",
+        "title": "Git Insight: 打开预演（可带 into/from）",
+        "category": "Git Insight"
+      },
+      {
+        "command": "gitInsight.syncSkill",
+        "title": "Git Insight: 同步 Agent Skill 到全局",
+        "category": "Git Insight"
+      }
+    ],
+    "chatSkills": [
+      {
+        "path": "./skills/git-branch-insight/SKILL.md"
       }
     ]
   },

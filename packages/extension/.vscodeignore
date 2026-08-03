@@ -1,4 +1,4 @@
-# 只打进：package.json / README / LICENSE / dist/extension.js / dist/webview/**
+# 打进：package.json / README / LICENSE / dist/** / skills/**
 .vscode/**
 src/**
 scripts/**
