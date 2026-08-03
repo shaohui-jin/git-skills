@@ -607,10 +607,22 @@ const gitlabTitleStatus = computed(() => {
       <aside class="card config-split-side">
         <h3>使用顺序</h3>
         <ol class="config-steps">
-          <li>在本页选好 MR 方式（自动保存）；需要 AI 选边时填好上方模型接口</li>
-          <li>「合并预演」选线上目标 + 我的分支，完成冲突选边（可 AI）</li>
-          <li>点击「一键解决并推送」（把我的合进线上并推送）</li>
-          <li>成功后才可点击「一键申请 MR」</li>
+          <li>
+            <span class="config-step-n">1</span>
+            在本页选好 MR 方式（自动保存）；需要 AI 选边时填好上方模型接口
+          </li>
+          <li>
+            <span class="config-step-n">2</span>
+            「合并预演」选线上目标 + 我的分支，完成冲突选边（可 AI）
+          </li>
+          <li>
+            <span class="config-step-n">3</span>
+            点击「一键解决并推送」（把我的合进线上并推送）
+          </li>
+          <li>
+            <span class="config-step-n">4</span>
+            成功后才可点击「一键申请 MR」
+          </li>
         </ol>
       </aside>
     </div>

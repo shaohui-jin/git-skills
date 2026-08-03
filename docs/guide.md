@@ -117,7 +117,20 @@ cursor --install-extension git-insight.vsix --force
 - 标签上方有「打开创建 Token 页面」按钮（GitHub / GitLab）
 - Token `change` 后自动校验并保存；标题旁显示有效期（中国时间）
 
-配置**双写**（各仓库共用同一套 Token / MR 方式）：
+**AI 选边（模型）**（同页下方，可选，与 A–D 无关）：
+
+| 项 | 说明 |
+|----|------|
+| 作用 | 合并预演冲突面板点「AI 选边」时的**模型回退**配置 |
+| 是否必填 | **否**。不用 AI、或宿主 `vscode.lm` / Chat 桥够用时可不填 |
+| 字段 | Base URL、API Key、模型名（OpenAI 兼容：官方 API / 代理 / 本地 Ollama） |
+| 生效条件 | Base URL + 模型名必填；云端还需 API Key；`localhost` / `127.0.0.1` 可留空 Key |
+| 调用顺序 | 见 §2.5：优先 `vscode.lm` → 本配置 → Cursor Chat 本地回传桥 |
+| Ollama 示例 | Base URL=`http://127.0.0.1:11434/v1`，模型=`qwen2.5-coder`，Key 留空 |
+
+默认会预填 `https://api.openai.com/v1` + `gpt-4o-mini`；**未填 Key 时不会调用 OpenAI**，会落到 Chat 桥。
+
+配置**双写**（各仓库共用同一套 Token / MR 方式 / AI 模型配置）：
 
 | 位置 | 键 / 路径 |
 |------|-----------|
@@ -310,9 +323,23 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 1. 勾选规则：默认偏我的 / 偏线上（互斥）、新覆盖旧、可合并则合并；可填额外说明
 2. 裁决优先级：额外说明 → 新覆盖旧 → 可合并则合并 → 偏我的/偏线上 → 否则 pending
-3. 模型路径：`vscode.lm` → 已配置 OpenAI 兼容 API → Cursor Chat 本地回传桥
+3. 模型路径（按序尝试，见下表）
 4. Chat 桥：冲突数据写入临时 JSON，提示词只引用路径；超长自动分批（约 25 块 / 8 万字符）
 5. **须人工核对**后再推送 / 申请 MR
+
+**模型路径**
+
+| 优先级 | 路径 | 何时走这条 |
+|--------|------|------------|
+| 1 | 宿主 `vscode.lm` | Cursor / VS Code 能选出 Chat 模型 |
+| 2 | Git 配置「AI 选边（模型）」 | `vscode.lm` 不可用，且已配齐 OpenAI 兼容接口（见 §2.1） |
+| 3 | Cursor Chat 本地回传桥 | 前两步都不可用；打开 Chat，粘贴提示词后回传 JSON |
+
+说明：
+
+- 「AI 选边（模型）」是**可选回退**，不是申请 MR 的前置；只影响冲突面板的「AI 选边」
+- Cursor 里 `vscode.lm` 经常拿不到模型，配 API / Ollama 可减少对 Chat 桥的依赖
+- 仅手动选边、不用 AI 时，可不配置该区块
 
 **回传约定（技术分享重点）**
 
@@ -325,7 +352,7 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 **实际指令：** 本功能**不调用** `git` / `gh` / `glab`（只读预演结果 + 本地模型/HTTP）。
 
-代码：`packages/extension/src/aiResolve*.ts`、`webview/.../AiResolveDialog.vue`。
+代码：`packages/extension/src/aiResolve*.ts`、`aiResolveLm.ts`、`webview/.../AiResolveDialog.vue`、`GitConfigPanel.vue`。
 
 ---
 
@@ -633,7 +660,7 @@ const preview = await rehearseMerge({
 
 | Tab / 面板 | 功能 | 主要协议 |
 |------------|------|----------|
-| Git 配置 | A–D、Token、下载 CLI、登录 | `getGitConfig` / `saveGitConfig` / `downloadCli` / `cliAuthLogin` |
+| Git 配置 | A–D、Token、下载 CLI、登录、AI 模型回退 | `getGitConfig` / `saveGitConfig` / `downloadCli` / `cliAuthLogin` |
 | 分支图 | tip 图 + 链路报告 | `graph` → `buildBranchGraph` |
 | 合并预演 | 冲突三栏、AI 选边、一键解决、申请 MR | `preview` / `applyResolve` / `prepareCreateMr` / `createMr` / `aiResolveConflicts` |
 
@@ -695,7 +722,7 @@ Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**（不是 Micro
 【一次性】Open VSX 账号 + Token + create-namespace + GitHub Secret OVSX_PAT
                               ↓
 【日常】改 packages/extension/package.json 的 version（升高）
-        并在 CHANGELOG.md 顶部追加该版本说明
+        并在 CHANGELOG.md 表格顶部追加行（版本 | 日期 | 变更项）
                               ↓
               git commit && git push origin master
                               ↓
@@ -709,7 +736,7 @@ Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**（不是 Micro
 ```
 
 > **市场变更记录**：`vsce package` 会收录扩展目录下的 `CHANGELOG.md`（包内为 `changelog.md`）。  
-> 每次升 `version` 务必同步写 changelog，否则 Cursor / Open VSX 详情页没有可读的版本说明。
+> 格式为表格三列：**版本 | 日期 | 变更项**（每个版本一行；变更项用 `1. …` / `2. …`，项之间用 `<br>` 换行）。每次升 `version` 务必同步写 changelog，否则 Cursor / Open VSX 详情页没有可读的版本说明。
 
 > **Open VSX Token（`OVSX_PAT`）≠ 扩展面板里的 GitHub/GitLab Token。**  
 > 只用于发版；不要写进代码、不要提交 git、不要填进「Git 配置」。
@@ -903,7 +930,10 @@ Agent **不要**为了预演去真实 `merge` / `checkout` / `push`。
 必须 `glpat-`；不要把 `ghp_` 填进 GitLab 框。Token 仅用于申请 MR，不能代替 fetch 登录。
 
 **AI 选边一直等不到结果**  
-检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。
+检查是否停在 MCP feedback；把 JSON 粘贴到弹层兜底。也可在 Git 配置填 OpenAI 兼容 API / 本地 Ollama（§2.1「AI 选边（模型）」），绕过 Chat 桥。
+
+**Git 配置里「AI 选边（模型）」要不要填？**  
+可选。优先用宿主 `vscode.lm`；没有再用这里的 API；再没有走 Chat 桥。不用 AI 选边时完全可留空（默认 URL 无 Key 也不会调云端）。详见 §2.1 / §2.5。
 
 **左侧文件角标是 `8Δ`、没有 `x/y`？**  
 表示该文件**无冲突红块**，只有绿/蓝自动变更（Δ=变更数）。主列表只显示有冲突的文件；这类文件在折叠分组「仅自动合并」里，一键解决仍会写入。详见 §2.4「冲突解决面板」。

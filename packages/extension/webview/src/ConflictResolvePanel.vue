@@ -776,7 +776,7 @@ const resultLineStarts = computed(() => {
         <div class="resolve-actions">
           <button
             type="button"
-            class="btn"
+            class="btn secondary"
             :disabled="allStats.conflicts === 0 || aiBusy || previewMode"
             title="按规则调用模型选边，结果回填后仍需人工确认"
             @click="openAiDialog"
@@ -795,7 +795,8 @@ const resultLineStarts = computed(() => {
           <button
             type="button"
             class="btn"
-            :disabled="previewMode || !into || !from || !canCreateMr || aiBusy"
+            :class="{ secondary: !canCreateMr }"
+            :disabled="previewMode || !into || !from || aiBusy"
             :title="
               createMrBlockReason ||
               '需先完成一键解决并推送，且在 Git 配置中选好可用方式'
@@ -812,7 +813,7 @@ const resultLineStarts = computed(() => {
           </button>
           <button
             type="button"
-            class="btn secondary"
+            class="btn secondary btn-sm"
             :disabled="aiBusy"
             title="重置界面选边，不清理本地暂存缓存"
             @click="resetStash"

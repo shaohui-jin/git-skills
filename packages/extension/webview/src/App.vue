@@ -869,6 +869,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
   <div class="app">
     <header class="topbar">
       <div class="topbar-path">
+        <span class="topbar-label">仓库</span>
         <input
           v-model="pathInput"
           class="path"
@@ -877,9 +878,9 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
           placeholder="本机路径，或 GitHub：owner/repo / https://github.com/owner/repo"
           @keyup.enter="openByPath"
         />
-        <button class="btn secondary" :disabled="busy" @click="openByPath">打开</button>
+        <button class="btn secondary btn-sm" :disabled="busy" @click="openByPath">打开</button>
         <button
-          class="btn secondary"
+          class="btn secondary btn-sm"
           :disabled="busy"
           title="系统目录对话框（不依赖浏览器 HTTPS）"
           @click="pickFolder"
@@ -888,74 +889,119 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
         </button>
       </div>
       <div class="topbar-actions">
-        <button
-          class="btn secondary"
-          :disabled="busy || !cwd"
-          @click="vscode.postMessage({ type: 'refreshWorkspace' })"
-        >
-          刷新分支
-        </button>
-        <button
-          class="btn secondary"
-          :disabled="busy || !cwd"
-          title="手动再 fetch 一次（加载图/预演已默认 fetch）"
-          @click="vscode.postMessage({ type: 'fetch' })"
-        >
-          Fetch
-        </button>
-        <button
-          v-if="tab === 'graph'"
-          class="btn"
-          :class="{ loading: loadingAction === 'graph' }"
-          :disabled="busy || !cwd"
-          :title="loadingAction === 'graph' ? busyLabel : undefined"
-          @click="loadGraph"
-        >
-          <span v-if="loadingAction === 'graph'" class="btn-spinner" aria-hidden="true" />
-          {{ actionButtonText("graph") }}
-        </button>
-        <button
-          v-else
-          class="btn"
-          :class="{ loading: loadingAction === 'preview' }"
-          :disabled="busy || !cwd || !into || !from || !!previewBlockReason"
-          :title="
-            previewBlockReason ||
-            (loadingAction === 'preview' ? busyLabel : undefined)
-          "
-          @click="runPreview"
-        >
-          <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
-          {{ actionButtonText("preview") }}
-        </button>
+        <div class="topbar-tools">
+          <button
+            class="btn secondary btn-sm"
+            :disabled="busy || !cwd"
+            @click="vscode.postMessage({ type: 'refreshWorkspace' })"
+          >
+            刷新分支
+          </button>
+          <button
+            class="btn secondary btn-sm"
+            :disabled="busy || !cwd"
+            title="手动再 fetch 一次（加载图/预演已默认 fetch）"
+            @click="vscode.postMessage({ type: 'fetch' })"
+          >
+            Fetch
+          </button>
+        </div>
+        <div class="topbar-primary">
+          <button
+            v-if="tab === 'graph'"
+            class="btn"
+            :class="{ loading: loadingAction === 'graph' }"
+            :disabled="busy || !cwd"
+            :title="loadingAction === 'graph' ? busyLabel : undefined"
+            @click="loadGraph"
+          >
+            <span v-if="loadingAction === 'graph'" class="btn-spinner" aria-hidden="true" />
+            {{ actionButtonText("graph") }}
+          </button>
+          <button
+            v-else-if="tab === 'preview'"
+            class="btn"
+            :class="{ loading: loadingAction === 'preview' }"
+            :disabled="busy || !cwd || !into || !from || !!previewBlockReason"
+            :title="
+              previewBlockReason ||
+              (loadingAction === 'preview' ? busyLabel : undefined)
+            "
+            @click="runPreview"
+          >
+            <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
+            {{ actionButtonText("preview") }}
+          </button>
+          <button
+            v-else
+            class="btn secondary"
+            :disabled="busy"
+            title="配置完成后可去分支图或合并预演"
+            @click="tab = 'graph'"
+          >
+            下一步：分支图
+          </button>
+        </div>
       </div>
     </header>
 
-    <div class="status" :class="{ error: !!error }">
-      <template v-if="busy">
-        <span>{{ statusBusyText() }}</span>
-        <span
-          v-if="busyPercent != null"
-          class="status-bar"
-          :style="{ '--pct': `${busyPercent}%` }"
-          aria-hidden="true"
-        />
-      </template>
-      <template v-else>{{ status }}</template>
+    <div class="status" :class="{ error: !!error, busy }">
+      <span class="status-dot" aria-hidden="true" />
+      <div class="status-body">
+        <template v-if="busy">
+          <span class="status-text">{{ statusBusyText() }}</span>
+          <span
+            v-if="busyPercent != null"
+            class="status-bar"
+            :style="{ '--pct': `${busyPercent}%` }"
+            aria-hidden="true"
+          />
+        </template>
+        <template v-else>
+          <span class="status-text">{{ status }}</span>
+        </template>
+      </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'">
+    <div class="tabs" role="tablist">
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'config' }"
+        :aria-selected="tab === 'config'"
+        @click="tab = 'config'"
+      >
+        <span class="tab-step">1</span>
         Git 配置
       </button>
-      <button class="tab" :class="{ active: tab === 'graph' }" @click="tab = 'graph'">分支图</button>
-      <button class="tab" :class="{ active: tab === 'preview' }" @click="tab = 'preview'">
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'graph' }"
+        :aria-selected="tab === 'graph'"
+        @click="tab = 'graph'"
+      >
+        <span class="tab-step">2</span>
+        分支图
+      </button>
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'preview' }"
+        :aria-selected="tab === 'preview'"
+        @click="tab = 'preview'"
+      >
+        <span class="tab-step">3</span>
         合并预演
       </button>
     </div>
 
     <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
       <aside v-if="tab === 'preview'" class="sidebar">
+        <div class="sidebar-head">
+          <h3 class="sidebar-title">合并方向</h3>
+          <p class="hint">我的分支 → 线上目标 → 申请 MR</p>
+        </div>
         <label>
           目标分支（线上 / 仅远程）
           <BranchTreeSelect
@@ -966,6 +1012,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             placeholder="选择远程目标，如 origin/test…"
           />
         </label>
+        <div class="merge-flow-mark" aria-hidden="true">← 合入</div>
         <label>
           我的分支（待合入，可本地）
           <BranchTreeSelect
@@ -976,10 +1023,10 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
           />
         </label>
         <p class="hint">
-          把「我的分支」合进「线上目标」并申请 MR。目标须为远程分支；若两边是同一分支（如
-          master ↔ origin/master），请自行 push / pull，此处不处理。
+          目标须为远程分支；若两边是同一分支（如 master ↔ origin/master），请自行 push /
+          pull，此处不处理。
         </p>
-        <p v-if="previewBlockReason" class="hint" style="color: var(--danger, #c44)">
+        <p v-if="previewBlockReason" class="hint hint--danger">
           {{ previewBlockReason }}
         </p>
       </aside>
@@ -1019,7 +1066,9 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               </div>
             </div>
           </div>
-          <div v-else class="empty empty--fill">打开仓库后，点顶部「加载分支图」</div>
+          <div v-else class="empty empty--fill">
+            打开仓库后，点击右上角「加载分支图」
+          </div>
         </template>
 
         <template v-if="tab === 'preview'">
@@ -1051,11 +1100,20 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                     }}
                   </span>
                 </h3>
-                <p class="mono">
-                  线上 {{ preview.into }} ({{ short(preview.intoSha) }}) ← 我的
-                  {{ preview.from }} ({{ short(preview.fromSha) }})
-                </p>
-                <p class="mono">
+                <div class="merge-meta">
+                  <span class="merge-chip" :title="preview.into">
+                    <span class="merge-chip-label">线上</span>
+                    <span class="merge-chip-ref mono">{{ preview.into }}</span>
+                    <span class="merge-chip-sha mono">{{ short(preview.intoSha) }}</span>
+                  </span>
+                  <span class="merge-arrow" aria-hidden="true">←</span>
+                  <span class="merge-chip" :title="preview.from">
+                    <span class="merge-chip-label">我的</span>
+                    <span class="merge-chip-ref mono">{{ preview.from }}</span>
+                    <span class="merge-chip-sha mono">{{ short(preview.fromSha) }}</span>
+                  </span>
+                </div>
+                <p class="mono merge-base-line">
                   merge-base:
                   {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
                 </p>
@@ -1071,8 +1129,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                 <p v-else>未检测到可解析的冲突文件内容。</p>
                 <div
                   v-if="preview.clean && !previewMode && !sameBranchForMr"
-                  class="btn-row"
-                  style="margin-top: 10px"
+                  class="btn-row preview-cta"
                 >
                   <button
                     type="button"
@@ -1085,7 +1142,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   </button>
                   <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
                 </div>
-                <p v-else-if="preview.clean && sameBranchForMr" class="muted" style="margin-top: 10px">
+                <p v-else-if="preview.clean && sameBranchForMr" class="muted preview-cta">
                   源/目标是同一分支，请自行 <code>git push</code> / <code>git pull</code>，此处不申请 MR。
                 </p>
               </div>
@@ -1133,11 +1190,20 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                     合并预演结果
                     <span class="badge danger">{{ preview.conflictFiles.length }} 个冲突</span>
                   </h3>
-                  <p class="mono">
-                    线上 {{ preview.into }} ({{ short(preview.intoSha) }}) ← 我的
-                    {{ preview.from }} ({{ short(preview.fromSha) }})
-                  </p>
-                  <p class="mono">
+                  <div class="merge-meta">
+                    <span class="merge-chip" :title="preview.into">
+                      <span class="merge-chip-label">线上</span>
+                      <span class="merge-chip-ref mono">{{ preview.into }}</span>
+                      <span class="merge-chip-sha mono">{{ short(preview.intoSha) }}</span>
+                    </span>
+                    <span class="merge-arrow" aria-hidden="true">←</span>
+                    <span class="merge-chip" :title="preview.from">
+                      <span class="merge-chip-label">我的</span>
+                      <span class="merge-chip-ref mono">{{ preview.from }}</span>
+                      <span class="merge-chip-sha mono">{{ short(preview.fromSha) }}</span>
+                    </span>
+                  </div>
+                  <p class="mono merge-base-line">
                     merge-base:
                     {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
                   </p>
@@ -1146,7 +1212,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             </ConflictResolvePanel>
           </div>
           <div v-else class="empty empty--fill">
-            选择线上目标分支与我的分支后，点击「开始预演」
+            在左侧选定合并方向后，点击右上角「开始预演」
           </div>
         </template>
       </section>
