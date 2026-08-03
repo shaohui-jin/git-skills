@@ -181,13 +181,13 @@ export function branchGraphToG6(graph: BranchGraph): G6GraphData {
 export function kindColor(kind: G6NodeKind): string {
   switch (kind) {
     case "base":
-      return "#0e639c";
+      return "#3d8bdb"; /* online */
     case "local-tip":
-      return "#3d8b40";
+      return "#d19a66"; /* mine */
     case "remote-tip":
-      return "#2d6a9f";
+      return "#3d8bdb";
     case "tip":
-      return "#3d8b40";
+      return "#98c379"; /* clean */
     default:
       return "#5a5a5a";
   }

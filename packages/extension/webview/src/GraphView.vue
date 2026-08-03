@@ -33,7 +33,7 @@ const searchIndex = ref(0);
 
 const LEGEND_TEXT =
   "点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 · " +
-  "绿色=本地分支 · 蓝色=远程跟踪分支 · 从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点";
+  "琥珀=本地分支 · 蓝色=远程跟踪分支 · 从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点";
 
 const searchHits = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
@@ -457,6 +457,15 @@ watch(searchQuery, () => {
       <button type="button" class="btn secondary tiny" @click="closeSearch">关闭</button>
     </div>
 
-    <div class="path-hint path-hint--idle" :title="LEGEND_TEXT">{{ LEGEND_TEXT }}</div>
+    <div class="path-hint path-hint--idle" :title="LEGEND_TEXT">
+      <span>点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 ·</span>
+      <span class="legend-swatch legend-swatch--local" aria-hidden="true" />
+      <span>本地分支</span>
+      <span class="legend-sep">·</span>
+      <span class="legend-swatch legend-swatch--remote" aria-hidden="true" />
+      <span>远程跟踪分支</span>
+      <span class="legend-sep">·</span>
+      <span>从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点</span>
+    </div>
   </div>
 </template>

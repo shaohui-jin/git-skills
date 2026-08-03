@@ -771,7 +771,8 @@ const resultLineStarts = computed(() => {
           </span>
         </div>
         <p class="muted resolve-tip">
-          左栏=线上目标（远程），右栏=我的分支。选边后用「一键解决并推送」写入临时分支（不切换当前分支），再申请 MR。
+          <span class="tag-online">左栏=线上目标</span>，
+          <span class="tag-mine">右栏=我的分支</span>。选边后用「一键解决并推送」写入临时分支（不切换当前分支），再申请 MR。
         </p>
         <div class="resolve-actions">
           <button

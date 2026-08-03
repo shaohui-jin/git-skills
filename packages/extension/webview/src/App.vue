@@ -997,13 +997,13 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
     </div>
 
     <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
-      <aside v-if="tab === 'preview'" class="sidebar">
+      <aside v-if="tab === 'preview'" class="sidebar sidebar--legend">
         <div class="sidebar-head">
-          <h3 class="sidebar-title">合并方向</h3>
-          <p class="hint">我的分支 → 线上目标 → 申请 MR</p>
+          <h3 class="sidebar-title mono">LEGEND</h3>
+          <p class="hint">FROM → INTO → MR</p>
         </div>
-        <label>
-          目标分支（线上 / 仅远程）
+        <label class="field-online">
+          <span class="field-online-caption">目标分支（线上 / 仅远程）</span>
           <BranchTreeSelect
             v-model="into"
             :branches="branches"
@@ -1013,8 +1013,8 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
           />
         </label>
         <div class="merge-flow-mark" aria-hidden="true">← 合入</div>
-        <label>
-          我的分支（待合入，可本地）
+        <label class="field-mine">
+          <span class="field-mine-caption">我的分支（待合入，可本地）</span>
           <BranchTreeSelect
             v-model="from"
             :branches="branches"
@@ -1078,11 +1078,20 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               v-if="preview.clean || preview.conflictFiles.length === 0"
               class="preview-pane preview-pane--clean"
             >
-              <div class="card preview-summary">
-                <h3>
-                  合并预演结果
+              <div
+                class="flow-map"
+                :class="
+                  preview.unrelatedHistories || preview.outcome === 'unrelated'
+                    ? 'flow-map--warn'
+                    : preview.clean
+                      ? 'flow-map--clean'
+                      : 'flow-map--conflict'
+                "
+              >
+                <div class="flow-map-head">
+                  <span class="flow-map-title mono">MERGE MAP</span>
                   <span
-                    class="badge"
+                    class="flow-stamp"
                     :class="
                       preview.clean
                         ? 'ok'
@@ -1093,58 +1102,62 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                   >
                     {{
                       preview.unrelatedHistories || preview.outcome === "unrelated"
-                        ? "无关历史"
+                        ? "UNRELATED"
                         : preview.clean
-                          ? "可干净合并"
-                          : `${preview.conflictFiles.length} 个冲突`
+                          ? "CLEAN"
+                          : `${preview.conflictFiles.length} CONFLICTS`
                     }}
                   </span>
-                </h3>
-                <div class="merge-meta">
-                  <span class="merge-chip" :title="preview.into">
-                    <span class="merge-chip-label">线上</span>
-                    <span class="merge-chip-ref mono">{{ preview.into }}</span>
-                    <span class="merge-chip-sha mono">{{ short(preview.intoSha) }}</span>
-                  </span>
-                  <span class="merge-arrow" aria-hidden="true">←</span>
-                  <span class="merge-chip" :title="preview.from">
-                    <span class="merge-chip-label">我的</span>
-                    <span class="merge-chip-ref mono">{{ preview.from }}</span>
-                    <span class="merge-chip-sha mono">{{ short(preview.fromSha) }}</span>
-                  </span>
                 </div>
-                <p class="mono merge-base-line">
-                  merge-base:
-                  {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
-                </p>
-              </div>
-              <div class="card preview-desc">
-                <p v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'">
-                  两条分支没有共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
-                </p>
-                <p v-else-if="preview.clean">
-                  无冲突，可将 <code>{{ preview.from }}</code> 合入
-                  <code>{{ preview.into }}</code>。
-                </p>
-                <p v-else>未检测到可解析的冲突文件内容。</p>
-                <div
-                  v-if="preview.clean && !previewMode && !sameBranchForMr"
-                  class="btn-row preview-cta"
-                >
-                  <button
-                    type="button"
-                    class="btn"
-                    :disabled="busy || mrBusy || !canCreateMr"
-                    :title="createMrBlockReason || '申请 MR'"
-                    @click="onRequestCreateMr({ into: preview.into, from: preview.from })"
+                <div class="flow-map-body">
+                  <div class="flow-end flow-end--mine" :title="preview.from">
+                    <span class="flow-end-kicker">FROM · 我的</span>
+                    <span class="flow-end-ref mono">{{ preview.from }}</span>
+                    <span class="flow-end-sha mono">{{ short(preview.fromSha) }}</span>
+                  </div>
+                  <div class="flow-bridge" aria-hidden="true">
+                    <span class="flow-bridge-track" />
+                    <span class="flow-bridge-node" />
+                    <span class="flow-bridge-caption mono">
+                      base
+                      {{ preview.mergeBase ? short(preview.mergeBase) : "none" }}
+                    </span>
+                  </div>
+                  <div class="flow-end flow-end--online" :title="preview.into">
+                    <span class="flow-end-kicker">INTO · 线上</span>
+                    <span class="flow-end-ref mono">{{ preview.into }}</span>
+                    <span class="flow-end-sha mono">{{ short(preview.intoSha) }}</span>
+                  </div>
+                </div>
+                <div class="flow-map-foot">
+                  <p v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'">
+                    无共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
+                  </p>
+                  <p v-else-if="preview.clean">
+                    无冲突：<code class="tag-mine">{{ preview.from }}</code>
+                    可合入
+                    <code class="tag-online">{{ preview.into }}</code>
+                  </p>
+                  <p v-else>未检测到可解析的冲突文件内容。</p>
+                  <div
+                    v-if="preview.clean && !previewMode && !sameBranchForMr"
+                    class="btn-row preview-cta"
                   >
-                    一键申请 MR
-                  </button>
-                  <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
+                    <button
+                      type="button"
+                      class="btn"
+                      :disabled="busy || mrBusy || !canCreateMr"
+                      :title="createMrBlockReason || '申请 MR'"
+                      @click="onRequestCreateMr({ into: preview.into, from: preview.from })"
+                    >
+                      一键申请 MR
+                    </button>
+                    <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
+                  </div>
+                  <p v-else-if="preview.clean && sameBranchForMr" class="muted preview-cta">
+                    源/目标是同一分支，请自行 <code>git push</code> / <code>git pull</code>，此处不申请 MR。
+                  </p>
                 </div>
-                <p v-else-if="preview.clean && sameBranchForMr" class="muted preview-cta">
-                  源/目标是同一分支，请自行 <code>git push</code> / <code>git pull</code>，此处不申请 MR。
-                </p>
               </div>
             </div>
 
@@ -1185,28 +1198,31 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               "
             >
               <template #summary>
-                <div class="card preview-summary">
-                  <h3>
-                    合并预演结果
-                    <span class="badge danger">{{ preview.conflictFiles.length }} 个冲突</span>
-                  </h3>
-                  <div class="merge-meta">
-                    <span class="merge-chip" :title="preview.into">
-                      <span class="merge-chip-label">线上</span>
-                      <span class="merge-chip-ref mono">{{ preview.into }}</span>
-                      <span class="merge-chip-sha mono">{{ short(preview.intoSha) }}</span>
-                    </span>
-                    <span class="merge-arrow" aria-hidden="true">←</span>
-                    <span class="merge-chip" :title="preview.from">
-                      <span class="merge-chip-label">我的</span>
-                      <span class="merge-chip-ref mono">{{ preview.from }}</span>
-                      <span class="merge-chip-sha mono">{{ short(preview.fromSha) }}</span>
-                    </span>
+                <div class="flow-map flow-map--conflict flow-map--compact">
+                  <div class="flow-map-head">
+                    <span class="flow-map-title mono">MERGE MAP</span>
+                    <span class="flow-stamp danger">{{ preview.conflictFiles.length }} CONFLICTS</span>
                   </div>
-                  <p class="mono merge-base-line">
-                    merge-base:
-                    {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
-                  </p>
+                  <div class="flow-map-body">
+                    <div class="flow-end flow-end--mine" :title="preview.from">
+                      <span class="flow-end-kicker">FROM · 我的</span>
+                      <span class="flow-end-ref mono">{{ preview.from }}</span>
+                      <span class="flow-end-sha mono">{{ short(preview.fromSha) }}</span>
+                    </div>
+                    <div class="flow-bridge" aria-hidden="true">
+                      <span class="flow-bridge-track" />
+                      <span class="flow-bridge-node" />
+                      <span class="flow-bridge-caption mono">
+                        base
+                        {{ preview.mergeBase ? short(preview.mergeBase) : "none" }}
+                      </span>
+                    </div>
+                    <div class="flow-end flow-end--online" :title="preview.into">
+                      <span class="flow-end-kicker">INTO · 线上</span>
+                      <span class="flow-end-ref mono">{{ preview.into }}</span>
+                      <span class="flow-end-sha mono">{{ short(preview.intoSha) }}</span>
+                    </div>
+                  </div>
                 </div>
               </template>
             </ConflictResolvePanel>

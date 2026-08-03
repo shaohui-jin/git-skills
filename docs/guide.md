@@ -224,7 +224,7 @@ git for-each-ref --format=%(refname)%00%(refname:short) refs/heads refs/remotes
 **操作要点**
 
 1. 点「加载分支图」（扩展默认全量 tip，`maxNodes: 0`）
-2. 画布：绿色=本地 tip，蓝色=远程 tip；边从左到右表示「较近 tip 祖先 → 子分支」（不是完整 commit 链）
+2. 画布：琥珀=本地 tip，蓝色=远程 tip；边从左到右表示「较近 tip 祖先 → 子分支」（不是完整 commit 链）
 3. 点击 tip：高亮到根源链路，右侧出链路报告；底部图例文案不随点击变化
 4. Ctrl+F 或「搜索节点」：按分支名 / sha 定位
 

@@ -15,6 +15,12 @@
   --font: var(--vscode-font-family, "Segoe UI", sans-serif);
   --mono: var(--vscode-editor-font-family, Consolas, monospace);
 
+  /* Diff Cartography：叠在 IDE 主题上的 git 语义色 */
+  --online: #3d8bdb;
+  --mine: #d19a66;
+  --conflict: #e06c75;
+  --clean: #98c379;
+
   /* Soft Tool surfaces（弱分区，不靠重阴影） */
   --surface: color-mix(in srgb, var(--panel) 78%, var(--bg));
   --surface-soft: color-mix(in srgb, var(--panel) 52%, var(--bg));
@@ -275,6 +281,21 @@ body {
   min-height: 0;
 }
 
+.sidebar--legend {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--fg) 4%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--fg) 4%, transparent) 1px,
+      transparent 1px
+    ),
+    var(--surface-soft);
+  background-size: 12px 12px, 12px 12px, auto;
+}
+
 .sidebar-head {
   display: flex;
   flex-direction: column;
@@ -282,23 +303,85 @@ body {
   padding: var(--space-2) var(--space-3);
   margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) var(--space-1);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  background: var(--surface-accent);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 
 .sidebar-title {
   margin: 0;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   color: var(--fg);
 }
 
+.sidebar--legend .sidebar-head .hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar label.field-online,
+.sidebar label.field-mine {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+
+.sidebar label.field-online {
+  border-left: 3px solid var(--online);
+}
+
+.sidebar label.field-mine {
+  border-left: 3px solid var(--mine);
+}
+
+.sidebar .field-online-caption,
+.sidebar .field-mine-caption {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar .field-online-caption {
+  color: color-mix(in srgb, var(--online) 80%, var(--fg));
+}
+
+.sidebar .field-mine-caption {
+  color: color-mix(in srgb, var(--mine) 85%, var(--fg));
+}
+
 .merge-flow-mark {
-  align-self: center;
-  font-size: 11px;
-  font-weight: 600;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 2px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   color: var(--muted);
-  letter-spacing: 0.02em;
   user-select: none;
+}
+
+.merge-flow-mark::before,
+.merge-flow-mark::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg) 35%, transparent) 0 3px,
+    transparent 3px 6px
+  );
 }
 
 .content {
@@ -325,6 +408,13 @@ body {
   width: 100%;
   display: flex;
   flex-direction: column;
+  background:
+    radial-gradient(
+      color-mix(in srgb, var(--fg) 9%, transparent) 0.6px,
+      transparent 0.7px
+    ),
+    var(--bg);
+  background-size: 14px 14px, auto;
 }
 
 .preview-pane--clean {
@@ -335,87 +425,288 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  padding: 2px;
 }
 
-.preview-pane--clean > .card {
+/* MERGE MAP：预演页唯一大胆签名 */
+.flow-map {
+  position: relative;
   width: 100%;
   flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--fg) 22%, var(--border));
+  border-radius: 0;
+  background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 4%, transparent);
+  overflow: hidden;
+  animation: flow-map-in 0.35s ease-out both;
 }
 
-.preview-summary h3 {
-  margin: 0 0 10px;
+.flow-map--compact {
+  margin-bottom: 0;
+}
+
+.flow-map--clean {
+  border-color: color-mix(in srgb, var(--clean) 40%, var(--border));
+}
+
+.flow-map--conflict {
+  border-color: color-mix(in srgb, var(--conflict) 45%, var(--border));
+}
+
+.flow-map--warn {
+  border-color: color-mix(in srgb, var(--warn, #dcdcaa) 45%, var(--border));
+}
+
+@keyframes flow-map-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-map {
+    animation: none;
+  }
+
+  .flow-bridge-track::after {
+    animation: none !important;
+  }
+}
+
+.flow-map-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--fg) 18%, transparent);
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
 }
 
-.preview-summary .mono {
-  margin: 4px 0;
+.flow-map-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: color-mix(in srgb, var(--fg) 78%, var(--muted));
 }
 
-.merge-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 6px;
-}
-
-.merge-chip {
+.flow-stamp {
   display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 5px;
-  max-width: 100%;
-  padding: 4px 7px;
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--surface-soft);
-}
-
-.merge-chip-label {
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 0;
+  font-family: var(--mono);
   font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.5;
+  transform: rotate(-2deg);
 }
 
-.merge-chip-ref {
-  font-size: 12px;
+.flow-stamp.ok {
+  color: var(--clean);
+  background: color-mix(in srgb, var(--clean) 10%, transparent);
+}
+
+.flow-stamp.danger {
+  color: var(--conflict);
+  background: color-mix(in srgb, var(--conflict) 12%, transparent);
+}
+
+.flow-stamp.warn {
+  color: var(--warn, #dcdcaa);
+  background: color-mix(in srgb, var(--warn, #dcdcaa) 12%, transparent);
+}
+
+.flow-map-body {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(88px, 0.7fr) minmax(140px, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 16px 14px 14px;
+}
+
+.flow-end {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+}
+
+.flow-end--mine {
+  border-color: color-mix(in srgb, var(--mine) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mine) 18%, transparent);
+}
+
+.flow-end--online {
+  border-color: color-mix(in srgb, var(--online) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--online) 18%, transparent);
+}
+
+.flow-end-kicker {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.flow-end--mine .flow-end-kicker {
+  color: color-mix(in srgb, var(--mine) 90%, var(--fg));
+}
+
+.flow-end--online .flow-end-kicker {
+  color: color-mix(in srgb, var(--online) 90%, var(--fg));
+}
+
+.flow-end-ref {
+  font-size: 13px;
+  font-weight: 650;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 220px;
+  letter-spacing: 0.02em;
 }
 
-.merge-chip-sha {
+.flow-end-sha {
   font-size: 11px;
   color: var(--muted);
+  letter-spacing: 0.04em;
 }
 
-.merge-arrow {
-  flex: 0 0 auto;
+.flow-bridge {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.flow-bridge-track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--fg) 40%, transparent) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.flow-bridge-track::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 28%;
+  height: 4px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, var(--mine), var(--online));
+  animation: flow-pulse 1.4s ease-in-out infinite;
+}
+
+.flow-map--conflict .flow-bridge-track::after {
+  background: linear-gradient(90deg, var(--mine), var(--conflict), var(--online));
+}
+
+.flow-map--clean .flow-bridge-track::after {
+  background: linear-gradient(90deg, var(--mine), var(--clean), var(--online));
+}
+
+@keyframes flow-pulse {
+  0% {
+    left: 0;
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    left: 72%;
+    opacity: 0.35;
+  }
+}
+
+.flow-bridge-node {
+  width: 9px;
+  height: 9px;
+  margin-top: -14px;
+  border: 2px solid color-mix(in srgb, var(--fg) 55%, var(--border));
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg) 80%, transparent);
+}
+
+.flow-bridge-caption {
+  font-size: 10px;
+  letter-spacing: 0.08em;
   color: var(--muted);
-  font-size: 14px;
-  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.merge-base-line {
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 11px;
+.flow-map-foot {
+  padding: 10px 12px 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--fg) 16%, transparent);
+  background: color-mix(in srgb, var(--bg) 28%, transparent);
 }
 
-.preview-desc p {
+.flow-map-foot p {
   margin: 0;
   line-height: 1.55;
+  font-size: 12px;
+}
+
+.flow-map-foot code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.tag-online,
+.tag-mine {
+  font-weight: 650;
+}
+
+.tag-online {
+  color: color-mix(in srgb, var(--online) 80%, var(--fg));
+}
+
+.tag-mine {
+  color: color-mix(in srgb, var(--mine) 85%, var(--fg));
 }
 
 .preview-cta {
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+@media (max-width: 720px) {
+  .flow-map-body {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .flow-bridge {
+    padding: 4px 0 8px;
+    order: 0;
+  }
+
+  .flow-end--mine {
+    order: -1;
+  }
 }
 
 .panel-stack {
@@ -532,6 +823,31 @@ body {
 
 .path-hint--idle {
   color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 25%, transparent);
+}
+
+.legend-swatch--local {
+  background: var(--mine);
+}
+
+.legend-swatch--remote {
+  background: var(--online);
+}
+
+.legend-sep {
+  opacity: 0.55;
 }
 
 .graph-search-toggle {
@@ -1089,16 +1405,16 @@ button.btn.loading {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 
-.badge.danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+.badge.ok {
+  color: var(--clean);
+  border-color: color-mix(in srgb, var(--clean) 45%, var(--border));
+  background: color-mix(in srgb, var(--clean) 12%, transparent);
 }
 
-.badge.ok {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
+.badge.danger {
+  color: var(--conflict);
+  border-color: color-mix(in srgb, var(--conflict) 45%, var(--border));
+  background: color-mix(in srgb, var(--conflict) 12%, transparent);
 }
 
 .badge.warn {
@@ -1745,7 +2061,8 @@ button.btn.tiny {
   display: flex;
 }
 
-.resolve-summary-slot > .card {
+.resolve-summary-slot > .card,
+.resolve-summary-slot > .flow-map {
   flex: 1 1 auto;
   width: 100%;
   margin: 0;
@@ -1997,12 +2314,12 @@ button.btn.tiny {
 
 /* ========== WebStorm Merge Revisions 布局 ========== */
 .merge-ws {
-  --merge-add: color-mix(in srgb, #3d8b40 22%, transparent);
-  --merge-add-edge: color-mix(in srgb, #3d8b40 48%, var(--border));
-  --merge-mod: color-mix(in srgb, #2a6db0 24%, transparent);
-  --merge-mod-edge: color-mix(in srgb, #2a6db0 48%, var(--border));
-  --merge-conflict: color-mix(in srgb, #c74e39 24%, transparent);
-  --merge-conflict-edge: color-mix(in srgb, #c74e39 52%, var(--border));
+  --merge-add: color-mix(in srgb, var(--clean) 22%, transparent);
+  --merge-add-edge: color-mix(in srgb, var(--clean) 48%, var(--border));
+  --merge-mod: color-mix(in srgb, var(--online) 24%, transparent);
+  --merge-mod-edge: color-mix(in srgb, var(--online) 48%, var(--border));
+  --merge-conflict: color-mix(in srgb, var(--conflict) 24%, transparent);
+  --merge-conflict-edge: color-mix(in srgb, var(--conflict) 52%, var(--border));
 
   flex: 1 1 auto;
   min-height: 0;
@@ -2033,11 +2350,21 @@ button.btn.tiny {
 }
 
 .merge-ws-head--ours {
-  background: color-mix(in srgb, #0e639c 12%, var(--surface-soft));
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--online) 85%, var(--fg));
+  background: color-mix(in srgb, var(--online) 14%, var(--surface-soft));
+  box-shadow: inset 0 -2px 0 var(--online);
 }
 
 .merge-ws-head--theirs {
-  background: color-mix(in srgb, #3d8b40 12%, var(--surface-soft));
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--mine) 90%, var(--fg));
+  background: color-mix(in srgb, var(--mine) 14%, var(--surface-soft));
+  box-shadow: inset 0 -2px 0 var(--mine);
   border-right: none;
 }
 
