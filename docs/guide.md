@@ -99,7 +99,7 @@ cursor --install-extension git-insight.vsix --force
 
 ## 二、各模块操作与实际指令（技术分享）
 
-下列指令为代码中**真实 argv**（经 `spawn("git"|"gh"|"glab", …)` 或集成终端 `sendText`）。分享时可按模块对照讲解。
+下列指令为代码中**真实 argv**（经 `spawn("git"|"gh"|"glab", …)` 或集成终端 `sendText`）。
 
 ### 2.1 Git / MR 配置
 
@@ -119,6 +119,13 @@ cursor --install-extension git-insight.vsix --force
 - 按远程平台只填一侧；GitLab Token **必须以 `glpat-` 开头**
 - 标签上方有「打开创建 Token 页面」按钮（GitHub / GitLab）
 - Token `change` 后自动校验并保存；标题旁显示有效期（中国时间）
+
+
+
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.8adz6x3r82.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.1sfrdlv94y.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.2ksmvcfjen.webp" style="height: 100px" />
 
 **AI 选边（模型）**（同页下方，可选，与 A–D 无关）：
 
@@ -164,7 +171,11 @@ cursor --install-extension git-insight.vsix --force
 **操作要点**
 
 加载分支图、合并预演默认会先 fetch；顶栏也可点「Fetch」。  
-**工作区 fetch**（分支图 / 预演 / 手动）：只用本机 Git 凭据，**允许弹窗**；方案 C Token **不参与**。
+**工作区 fetch**（分支图 / 预演 / 手动）：只用本机 Git 凭据，**允许弹窗**；
+
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.5j4wyupdgx.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.pg22q5jlh.webp" style="height: 100px" />
 
 **实际指令**
 
@@ -258,7 +269,10 @@ git-insight graph --no-fetch
 
 ---
 
-### 2.4 合并预演（只读）
+### 2.4 合并预演
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.msiplcgy.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.86ud97qygk.webp" style="height: 100px" />
 
 **操作要点**
 
@@ -320,7 +334,7 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 ---
 
-### 2.5 AI 选边（扩展）
+### 2.5 AI 选边
 
 **操作要点**
 
@@ -344,7 +358,7 @@ git-insight conflict-blame --into <线上> --from <我的>
 - Cursor 里 `vscode.lm` 经常拿不到模型，配 API / Ollama 可减少对 Chat 桥的依赖
 - 仅手动选边、不用 AI 时，可不配置该区块
 
-**回传约定（技术分享重点）**
+**回传约定**
 
 | 方式 | 说明 |
 |------|------|
@@ -360,6 +374,9 @@ git-insight conflict-blame --into <线上> --from <我的>
 ---
 
 ### 2.6 一键解决并推送（独立 worktree）
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.41yrx3u0dl.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.2dpezx6oyk.webp" style="height: 100px" />
 
 **操作要点**
 
@@ -399,6 +416,10 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 ---
 ### 2.7 一键申请 MR
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.et89l2gkr.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.362ahnpqqo.webp" style="height: 100px" />
+
 
 **操作要点**
 
