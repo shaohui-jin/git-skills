@@ -2122,8 +2122,8 @@ button.btn.tiny {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* 高密度：文件列表更窄，主区留给三栏 */
-  grid-template-columns: 120px minmax(0, 1fr);
+  /* 文件列需容纳角标 + 行内「线上/我的」；主区仍留给三栏 */
+  grid-template-columns: 196px minmax(0, 1fr);
   gap: var(--space-2);
 }
 
@@ -2142,13 +2142,48 @@ button.btn.tiny {
   background: var(--surface-soft);
 }
 
+.resolve-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
 .resolve-files h4 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 10px;
   color: var(--muted);
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resolve-files-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+
+.resolve-files-nav-btn {
+  min-width: 18px;
+  padding: 0 4px;
+  line-height: 1.4;
+  font-size: 12px;
+}
+
+.resolve-files-nav-pos {
+  min-width: 2.6em;
+  text-align: center;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .resolve-files-empty {
@@ -2226,6 +2261,26 @@ button.btn.tiny {
   font-size: 10px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 行内整文件选边：仅当前选中文件显示 */
+.resolve-file-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: 1px;
+}
+
+.resolve-file.active .resolve-file-actions {
+  display: inline-flex;
+}
+
+.resolve-file-side {
+  padding: 0 4px;
+  line-height: 1.35;
+  font-size: 10px;
+  min-height: 0;
 }
 
 .resolve-main {

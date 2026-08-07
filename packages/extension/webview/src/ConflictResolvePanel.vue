@@ -323,16 +323,20 @@ function ignoreRight(hunk: ChangeHunk): void {
   }
 }
 
-function acceptAll(side: "left" | "right"): void {
-  const path = activePath.value;
-  const list = hunksByPath.value[path];
+/** 整文件选边；可指定 path（左侧行内），未指定则用当前文件 */
+function acceptAll(side: "left" | "right", path?: string): void {
+  const target = path ?? activePath.value;
+  const list = hunksByPath.value[target];
   if (!list) {
     return;
+  }
+  if (path && path !== activePath.value) {
+    activePath.value = path;
   }
   const action: HunkAction = side === "left" ? "accept-left" : "accept-right";
   hunksByPath.value = {
     ...hunksByPath.value,
-    [path]: list.map((h) =>
+    [target]: list.map((h) =>
       h.kind === "conflict" ? { ...h, action } : h,
     ),
   };
@@ -842,7 +846,40 @@ const resultLineStarts = computed(() => {
 
     <div class="resolve-layout">
       <aside class="resolve-files card">
-        <h4>冲突文件（{{ conflictFilePaths.length }}）</h4>
+        <div class="resolve-files-head">
+          <h4>冲突文件（{{ conflictFilePaths.length }}）</h4>
+          <div
+            v-if="conflictFilePaths.length"
+            class="resolve-files-nav"
+            title="仅在有红块的冲突文件间跳转"
+          >
+            <button
+              type="button"
+              class="btn tiny resolve-files-nav-btn"
+              :disabled="conflictFilePaths.length < 2"
+              title="上一冲突文件"
+              @click="goConflictFile(-1)"
+            >
+              ‹
+            </button>
+            <span class="resolve-files-nav-pos">
+              {{
+                conflictFileIndex >= 0
+                  ? `${conflictFileIndex + 1}/${conflictFilePaths.length}`
+                  : `0/${conflictFilePaths.length}`
+              }}
+            </span>
+            <button
+              type="button"
+              class="btn tiny resolve-files-nav-btn"
+              :disabled="conflictFilePaths.length < 2"
+              title="下一冲突文件"
+              @click="goConflictFile(1)"
+            >
+              ›
+            </button>
+          </div>
+        </div>
         <ul v-if="conflictFilePaths.length">
           <li
             v-for="path in conflictFilePaths"
@@ -854,6 +891,24 @@ const resultLineStarts = computed(() => {
           >
             <span class="mono path">{{ path.split("/").pop() }}</span>
             <span class="count">{{ fileResolvedCount(path) }}</span>
+            <span class="resolve-file-actions" @click.stop>
+              <button
+                type="button"
+                class="btn tiny resolve-file-side"
+                title="本文件全部冲突采用线上目标"
+                @click="acceptAll('left', path)"
+              >
+                线上
+              </button>
+              <button
+                type="button"
+                class="btn tiny resolve-file-side"
+                title="本文件全部冲突采用我的分支"
+                @click="acceptAll('right', path)"
+              >
+                我的
+              </button>
+            </span>
           </li>
         </ul>
         <p v-else class="resolve-files-empty muted">无待手选冲突</p>
@@ -903,34 +958,6 @@ const resultLineStarts = computed(() => {
                 <button
                   type="button"
                   class="btn nav-conflict-btn"
-                  :disabled="conflictFilePaths.length < 2"
-                  title="上一冲突文件（仅有红块的文件间跳转）"
-                  @click="goConflictFile(-1)"
-                >
-                  ← 上一文件
-                </button>
-                <span class="nav-conflict-pos" title="当前冲突文件序号">
-                  {{
-                    conflictFileIndex >= 0
-                      ? `${conflictFileIndex + 1} / ${conflictFilePaths.length}`
-                      : `0 / ${conflictFilePaths.length}`
-                  }}
-                </span>
-                <button
-                  type="button"
-                  class="btn nav-conflict-btn"
-                  :disabled="conflictFilePaths.length < 2"
-                  title="下一冲突文件（仅有红块的文件间跳转）"
-                  @click="goConflictFile(1)"
-                >
-                  下一文件 →
-                </button>
-              </div>
-              <span class="bar-sep" />
-              <div class="nav-conflict-group">
-                <button
-                  type="button"
-                  class="btn nav-conflict-btn"
                   :disabled="conflictHunks.length === 0"
                   title="上一处冲突（优先未解决）"
                   @click="goConflict(-1)"
@@ -975,25 +1002,6 @@ const resultLineStarts = computed(() => {
                 @click="activeHunk && acceptRight(activeHunk)"
               >
                 采用我的
-              </button>
-              <span class="bar-sep" />
-              <button
-                type="button"
-                class="btn secondary tiny"
-                :disabled="fileStats.conflicts === 0"
-                title="本文件全部冲突采用线上目标"
-                @click="acceptAll('left')"
-              >
-                全部线上
-              </button>
-              <button
-                type="button"
-                class="btn secondary tiny"
-                :disabled="fileStats.conflicts === 0"
-                title="本文件全部冲突采用我的分支"
-                @click="acceptAll('right')"
-              >
-                全部我的
               </button>
               <button
                 type="button"
