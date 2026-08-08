@@ -5,13 +5,18 @@ import { pathToRoots } from "./graph/pathToRoot";
 import {
   branchGraphToG6,
   kindColor,
+  legendItemsForGraph,
   tipNameFromNodeId,
   type G6GraphData,
   type G6NodeKind,
 } from "./graph/toG6Data";
 import type { BranchGraph } from "./types";
 
-const props = defineProps<{ graph: BranchGraph }>();
+const props = defineProps<{
+  graph: BranchGraph;
+  defaultRemote?: string;
+  remotes?: string[];
+}>();
 
 const emit = defineEmits<{
   /** chain: tip node ids from selected → root；null 表示清除 */
@@ -24,16 +29,21 @@ const graphInst = shallowRef<Graph | null>(null);
 let resizeObserver: ResizeObserver | null = null;
 let g6Data: G6GraphData | null = null;
 let renderSeq = 0;
-/** 底部图例预留 */
-const HINT_RESERVE = 56;
+/** 底部操作说明预留 */
+const HINT_RESERVE = 40;
 
 const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchIndex = ref(0);
 
-const LEGEND_TEXT =
-  "点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 · " +
-  "琥珀=本地分支 · 蓝色=远程跟踪分支 · 从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点";
+const graphOptions = computed(() => ({
+  defaultRemote: props.defaultRemote,
+  remotes: props.remotes,
+}));
+
+const legendItems = computed(() =>
+  legendItemsForGraph(props.graph, graphOptions.value),
+);
 
 const searchHits = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
@@ -55,7 +65,12 @@ function nodeLabel(id: string): string {
   if (!n) {
     return tipNameFromNodeId(id) ?? id.slice(0, 7);
   }
-  return n.data.tipName || n.data.label || id.slice(0, 7);
+  return n.data.label || n.data.tipName || id.slice(0, 7);
+}
+
+function tipFullNameFromNode(id: string): string {
+  const n = g6Data?.nodes.find((x) => x.id === id);
+  return n?.data.tipFullName || tipNameFromNodeId(id) || nodeLabel(id);
 }
 
 /** 用 stage 测尺寸：container 在 G6 destroy 后常被写成很小的 inline height */
@@ -123,12 +138,7 @@ async function highlightPath(g: Graph, startId: string): Promise<void> {
 
   await g.setElementState(states);
 
-  const tipName = tipNameFromNodeId(startId);
-  if (tipName) {
-    emit("select", { tipName, chain });
-  } else {
-    emit("select", { tipName: nodeLabel(startId), chain });
-  }
+  emit("select", { tipName: tipFullNameFromNode(startId), chain });
 }
 
 async function focusNode(id: string): Promise<void> {
@@ -241,7 +251,7 @@ async function renderGraph(): Promise<void> {
   }
   clearContainerInlineSize();
 
-  const data = branchGraphToG6(props.graph);
+  const data = branchGraphToG6(props.graph, graphOptions.value);
   g6Data = data;
   if (data.nodes.length === 0) {
     return;
@@ -279,8 +289,11 @@ async function renderGraph(): Promise<void> {
         labelFontFamily: "Consolas, monospace",
         labelPlacement: "center",
         fill: (d) => {
-          const kind = ((d as { data?: { kind?: G6NodeKind } }).data?.kind ??
-            "local-tip") as G6NodeKind;
+          const data = (d as { data?: { color?: string; kind?: G6NodeKind } }).data;
+          if (data?.color) {
+            return data.color;
+          }
+          const kind = (data?.kind ?? "local-tip") as G6NodeKind;
           return kindColor(kind);
         },
         stroke: "rgba(255,255,255,0.25)",
@@ -330,14 +343,24 @@ async function renderGraph(): Promise<void> {
   });
 
   g.on(NodeEvent.CLICK, (evt) => {
-    const id = String((evt.target as { id?: string }).id ?? "");
+    const t = evt as {
+      target?: { id?: string };
+      targetId?: string;
+    };
+    const id = String(t.targetId ?? t.target?.id ?? "");
     if (!id) {
       return;
     }
     void highlightPath(g, id);
   });
 
-  g.on(CanvasEvent.CLICK, () => {
+  // 仅空白画布清除；节点点击勿被 canvas 冒泡清掉高亮
+  g.on(CanvasEvent.CLICK, (evt) => {
+    const t = evt as { target?: { id?: string }; targetId?: string };
+    const id = String(t.targetId ?? t.target?.id ?? "");
+    if (id && id !== "canvas" && !id.startsWith("canvas")) {
+      return;
+    }
     void clearHighlight(g);
   });
 
@@ -404,7 +427,12 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => props.graph,
+  () =>
+    [
+      props.graph,
+      props.defaultRemote ?? "",
+      (props.remotes ?? []).join("\0"),
+    ] as const,
   () => {
     closeSearch();
     void renderGraph();
@@ -457,15 +485,27 @@ watch(searchQuery, () => {
       <button type="button" class="btn secondary tiny" @click="closeSearch">关闭</button>
     </div>
 
-    <div class="path-hint path-hint--idle" :title="LEGEND_TEXT">
-      <span>点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 ·</span>
-      <span class="legend-swatch legend-swatch--local" aria-hidden="true" />
-      <span>本地分支</span>
-      <span class="legend-sep">·</span>
-      <span class="legend-swatch legend-swatch--remote" aria-hidden="true" />
-      <span>远程跟踪分支</span>
-      <span class="legend-sep">·</span>
-      <span>从左到右的连线：较近的 tip 祖先 → 子分支（非完整 commit 链） · Ctrl+F 搜索节点</span>
+    <div
+      class="graph-color-legend"
+      :class="{ 'graph-color-legend--below-search': searchOpen }"
+      title="节点颜色：本地 / 各远程"
+    >
+      <div
+        v-for="item in legendItems"
+        :key="item.key"
+        class="graph-color-legend-row"
+      >
+        <span
+          class="legend-swatch"
+          :style="{ background: item.color }"
+          aria-hidden="true"
+        />
+        <span>{{ item.label }}</span>
+      </div>
+    </div>
+
+    <div class="path-hint path-hint--idle">
+      <span>点击分支：高亮到根源的链路并更新右侧报告 · 点击空白处恢复总览 · 连线：较近 tip 祖先 → 子分支 · Ctrl+F 搜索</span>
     </div>
   </div>
 </template>

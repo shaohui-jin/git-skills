@@ -42,7 +42,7 @@ node "__GIT_INSIGHT_CLI__" <command> …
 
 | 阶段 | 命令 |
 |------|------|
-| 同步 | `fetch` |
+| 同步 | `fetch`（未传 `--remote` 时读扩展配置 `defaultRemote`，见 `~/.git-insight/user-config.json`） |
 | 图 | `graph` |
 | 预演 | `preview-merge --into <远程> --from <我的>` |
 | 落盘 | `apply-resolve --into … --from … --stash stash.json` |

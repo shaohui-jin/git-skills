@@ -28,14 +28,22 @@ function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
-/** 与 core branchNameForMr 对齐：去掉 refs / origin 前缀 */
+/** 与 core branchNameForMr 对齐：去掉 refs / 各 remote 前缀 */
 function branchNameForMr(ref: string): string {
   let s = ref
     .trim()
     .replace(/^refs\/heads\//, "")
     .replace(/^refs\/remotes\/[^/]+\//, "");
-  if (s.startsWith("origin/")) {
-    s = s.slice("origin/".length);
+  const remotes = [...(cliStatus.value?.remotes ?? [])]
+    .map((r) => r.name)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const remote of remotes) {
+    const prefix = `${remote}/`;
+    if (s.startsWith(prefix)) {
+      s = s.slice(prefix.length);
+      break;
+    }
   }
   return s;
 }
@@ -285,6 +293,14 @@ let lastTokenPrecheckKey = "";
 
 const sameBranchForMr = computed(() =>
   isSameBranchForMr(into.value, from.value),
+);
+
+/** 稳定引用，避免每次渲染新数组导致 GraphView 整图重建、点击高亮丢失 */
+const graphDefaultRemote = computed(
+  () => cliStatus.value?.defaultRemote || gitConfig.value?.defaultRemote || "",
+);
+const graphRemotes = computed(() =>
+  (cliStatus.value?.remotes ?? []).map((r) => r.name),
 );
 
 const tempPushDoneForPair = computed(() => {
@@ -781,6 +797,7 @@ function saveGitConfig(payload: {
   mrMethod: GitInsightConfigView["mrMethod"];
   githubToken: string;
   gitlabToken: string;
+  defaultRemote?: string;
   aiApiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
@@ -1075,7 +1092,12 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
           <div v-if="graph" class="panel-stack panel-stack--split">
             <div class="card card--viz">
               <h3>可视化（仅分支）</h3>
-              <GraphView :graph="graph" @select="onGraphSelect" />
+              <GraphView
+                :graph="graph"
+                :default-remote="graphDefaultRemote"
+                :remotes="graphRemotes"
+                @select="onGraphSelect"
+              />
             </div>
             <div class="card card--report">
               <h3>{{ selectedPath ? "链路报告" : "总览报告" }}</h3>

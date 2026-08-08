@@ -3,6 +3,7 @@ import type { MrMethod } from "../config/gitInsightConfig.js";
 import { GitError, resolveRepoRoot, runGit } from "../git/runner.js";
 import { buildCreateMrUrl, defaultTempBranchName } from "./applyResolve.js";
 import { branchNameForMr } from "./branchName.js";
+import { listRemotes } from "../git/remotes.js";
 
 export type MrPlatform = "github" | "gitlab" | "unknown";
 
@@ -197,9 +198,10 @@ async function resolveDefaultSource(
   from: string,
   remote: string,
   explicit?: string,
+  remotes: string[] = ["origin"],
 ): Promise<string> {
   if (explicit?.trim()) {
-    return branchNameForMr(explicit);
+    return branchNameForMr(explicit, remotes);
   }
   const temp = defaultTempBranchName(into, from);
   if (
@@ -208,7 +210,7 @@ async function resolveDefaultSource(
   ) {
     return temp;
   }
-  return branchNameForMr(from);
+  return branchNameForMr(from, remotes);
 }
 
 async function checkGh(
@@ -627,15 +629,17 @@ export async function prepareCreateMr(
     throw new GitError("into / from 不能为空", { code: "USAGE" });
   }
 
+  const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
   const url = await remoteUrl(repoRoot, remote);
   const platform = detectMrPlatform(url);
-  const targetBranch = branchNameForMr(into);
+  const targetBranch = branchNameForMr(into, remotes);
   const sourceBranch = await resolveDefaultSource(
     repoRoot,
     into,
     from,
     remote,
     options.sourceBranch,
+    remotes,
   );
   if (sourceBranch === targetBranch) {
     throw new GitError(
@@ -744,10 +748,11 @@ export async function createMergeRequest(
 ): Promise<CreateMergeRequestResult> {
   const repoRoot = await resolveRepoRoot(options.cwd);
   const remote = options.remote ?? "origin";
+  const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
   const url = await remoteUrl(repoRoot, remote);
   const platform = detectMrPlatform(url);
-  const sourceBranch = branchNameForMr(options.sourceBranch);
-  const targetBranch = branchNameForMr(options.targetBranch);
+  const sourceBranch = branchNameForMr(options.sourceBranch, remotes);
+  const targetBranch = branchNameForMr(options.targetBranch, remotes);
   if (!sourceBranch || !targetBranch) {
     throw new GitError("sourceBranch / targetBranch 不能为空", { code: "USAGE" });
   }

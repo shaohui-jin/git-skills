@@ -53,6 +53,16 @@ export {
   resolveFetchAuth,
 } from "./git/fetch.js";
 export {
+  listRemotes,
+  readConfiguredDefaultRemote,
+  resolveDefaultRemote,
+  resolveRemoteName,
+  splitRemoteTipName,
+  userConfigHomePath,
+  USER_CONFIG_HOME_FILE,
+} from "./git/remotes.js";
+export type { GitRemoteInfo } from "./git/remotes.js";
+export {
   gitAuthConfigArgs,
   gitInteractiveEnv,
   gitNonInteractiveEnv,

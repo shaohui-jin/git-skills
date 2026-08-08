@@ -140,7 +140,7 @@ export function overviewReport(graph: BranchGraph): string {
     `## 说明`,
     `- 琥珀：本地分支；蓝色：远程跟踪分支`,
     `- 边：子分支 tip 的**最近** tip 祖先 → 子分支（不是完整 commit 链）`,
-    `- 同 commit 上的本地/远程 tip 会并列为两个节点`,
+    `- 与默认远程同短名且同 commit 的本地 tip 会合并为单节点（短名展示）`,
   );
   return lines.join("\n");
 }

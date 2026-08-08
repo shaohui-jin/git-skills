@@ -99,16 +99,26 @@ export interface GitInsightConfigView {
   mrMethod: MrMethod | null;
   githubToken?: string;
   gitlabToken?: string;
+  /** 默认远程名（如 origin） */
+  defaultRemote?: string;
   aiApiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
   updatedAt: number;
 }
 
+export interface GitRemoteView {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
 export interface CliStatusPayload {
   platformHint: "github" | "gitlab" | "unknown";
-  /** origin 规范化后的 https 网页根（含路径前的 origin，如 https://gitlab.example.com） */
+  /** 默认远程 URL 规范化后的 https 网页根 */
   remoteWebOrigin?: string | null;
+  remotes: GitRemoteView[];
+  defaultRemote: string;
   systemGh: { installed: boolean; loggedIn: boolean };
   systemGlab: { installed: boolean; loggedIn: boolean };
   bundledGh: { installed: boolean; loggedIn: boolean };

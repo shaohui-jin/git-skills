@@ -5,6 +5,7 @@ import { reportProgress } from "../progress.js";
 import type { ProgressReporter } from "../types.js";
 import { GitError, ensureRev, resolveRepoRoot, runGit } from "../git/runner.js";
 import { branchNameForMr } from "./branchName.js";
+import { listRemotes } from "../git/remotes.js";
 
 export interface StashFilePayload {
   path: string;
@@ -50,15 +51,19 @@ export interface ApplyResolveResult {
   messages: string[];
 }
 
-function slugRef(ref: string): string {
-  return branchNameForMr(ref)
+function slugRef(ref: string, remotes: string[] = ["origin"]): string {
+  return branchNameForMr(ref, remotes)
     .replace(/[^a-zA-Z0-9._/-]+/g, "-")
     .replace(/\/+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
-export function defaultTempBranchName(into: string, from: string): string {
-  return `merge/${slugRef(from)}-into-${slugRef(into)}`;
+export function defaultTempBranchName(
+  into: string,
+  from: string,
+  remotes: string[] = ["origin"],
+): string {
+  return `merge/${slugRef(from, remotes)}-into-${slugRef(into, remotes)}`;
 }
 
 async function currentBranch(cwd: string): Promise<string | null> {
@@ -162,10 +167,11 @@ export async function applyStashedResolve(
   const remote = options.remote ?? "origin";
   const doPush = options.push !== false;
   const repoRoot = await resolveRepoRoot(options.cwd);
+  const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
   const into = options.into.trim();
   const from = options.from.trim();
   const tempBranch =
-    options.tempBranch?.trim() || defaultTempBranchName(into, from);
+    options.tempBranch?.trim() || defaultTempBranchName(into, from, remotes);
 
   if (!into || !from) {
     throw new GitError("into / from 不能为空", { code: "USAGE" });
@@ -322,7 +328,7 @@ export async function applyStashedResolve(
     const createMrUrl = buildCreateMrUrl(
       remoteUrl,
       tempBranch,
-      branchNameForMr(into),
+      branchNameForMr(into, remotes),
     );
 
     reportProgress(onProgress, 100, "完成");

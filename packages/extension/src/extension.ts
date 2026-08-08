@@ -66,10 +66,6 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }),
-    // 兼容旧命令名 → 合并预演
-    vscode.commands.registerCommand("gitInsight.conflictBlame", () => {
-      GitInsightPanel.createOrShow(context, "preview");
-    }),
     vscode.window.registerUriHandler({
       handleUri(uri: vscode.Uri): vscode.ProviderResult<void> {
         // vscode://jinshaohui.git-insight/preview?into=...&from=...

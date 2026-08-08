@@ -4,6 +4,7 @@
 
 | 版本     | 日期 | 变更项 |
 |--------|------|--------|
+| 0.1.17 | 2026-08-08 | 1. **默认远程**：配置页列出 `git remote -v` 并保存 `defaultRemote`（紧凑条置于「MR 方式」卡片顶部；AI 选边默认折叠）；fetch / 短名剥前缀 / MR / 平台探测不再写死 `origin`<br>2. **CLI / Skill**：未传 `--remote` 时读 `~/.git-insight/user-config.json`（或环境变量）再兜底；打开仓库时 `gh`/`glab` 系统与扩展内探测改为 `Promise.all` 并行<br>3. **分支图**：节点只显示短名；本地与默认远程同短名同 sha 合并为单节点；多 remote 分色 + 右上角图例；修复点击高亮链路被父组件重绘清掉<br>4. **冲突文件列**：选中行改为两行（上行文件名+角标，下行 secondary「线上 / 我的」）<br>5. 命令面板去掉「合并预演（兼容）」；`docs/guide.md` 补充指令一览、默认远程与分支图约定 |
 | 0.1.16 | 2026-08-07 | 1. 冲突解决：文件级操作归位左侧「冲突文件」列（加宽）；列表头 `‹ n/N ›` 切换冲突文件<br>2. 当前选中文件行显示短文案「线上 / 我的」整文件选边；主工具条去掉「上一文件 / 下一文件」「全部线上 / 全部我的」<br>3. 主工具条仅保留冲突块级：上一处 / 下一处、采用线上 / 采用我的、重置本文件 |
 | 0.1.15 | 2026-08-03 | 1. Skill/CLI 闭环：`apply-resolve` / `prepare-mr` / `create-mr` / `open-ui`；申请 MR 三选一（cli / token / 唤起 UI）<br>2. 扩展 URI / `gitInsight.openPreview` 种入 into·from 并可自动预演<br>3. 安装扩展即注册 `/git-branch-insight`：`chatSkills` + 启动同步到 `~/.cursor/skills` / `~/.agents/skills`；VSIX 内附 `dist/cli.js` 与 Skill，注入 CLI 绝对路径<br>4. 命令「同步 Agent Skill 到全局」；文档补充装扩展 → `/git-branch-insight`（guide §四、README） |
 | 0.1.14 | 2026-08-03 | 1. 预演页加强 MERGE MAP：图纸网格、硬边终端、虚线桥轨与印章态；侧栏改为 LEGEND<br>2. 冲突三栏表头改为 mono 大写语义色条<br>3. 分支图底部图例与报告文案改为琥珀=本地 / 蓝色=远程（与节点色一致） |

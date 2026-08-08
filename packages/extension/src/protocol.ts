@@ -59,6 +59,7 @@ export type WebviewRequest =
         mrMethod: MrMethod | null;
         githubToken?: string;
         gitlabToken?: string;
+        defaultRemote?: string;
         aiApiBaseUrl?: string;
         aiApiKey?: string;
         aiModel?: string;
@@ -115,8 +116,12 @@ export type WebviewRequest =
 
 export interface CliStatusPayload {
   platformHint: "github" | "gitlab" | "unknown";
-  /** origin 的 https 站点根，如 https://gitlab.example.com */
+  /** 默认远程 URL 规范化后的 https 站点根，如 https://gitlab.example.com */
   remoteWebOrigin?: string | null;
+  /** 当前仓库 `git remote -v`（无仓库时为空） */
+  remotes: Array<{ name: string; fetchUrl: string; pushUrl: string }>;
+  /** 解析后的默认远程名 */
+  defaultRemote: string;
   systemGh: { installed: boolean; loggedIn: boolean };
   systemGlab: { installed: boolean; loggedIn: boolean };
   bundledGh: { installed: boolean; loggedIn: boolean };

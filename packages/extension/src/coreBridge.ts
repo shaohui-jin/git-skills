@@ -4,12 +4,14 @@ import {
   createMergeRequest,
   detectMrPlatform,
   fetchRemote,
+  listRemotes,
   normalizeRemoteWebUrl,
   prepareCreateMr,
   rehearseMerge,
   reportFetch,
   reportGraph,
   reportMergeRehearsal,
+  resolveDefaultRemote,
   resolveRepoRoot,
   runGit,
   graphToMermaid,
@@ -158,16 +160,33 @@ function cliPairOk(
   return (gh.installed && gh.loggedIn) || (glab.installed && glab.loggedIn);
 }
 
+function emptyCliStatus(configuredDefaultRemote?: string | null): CliStatusPayload {
+  return {
+    platformHint: "unknown",
+    remoteWebOrigin: null,
+    remotes: [],
+    defaultRemote: configuredDefaultRemote?.trim() || "origin",
+    systemGh: { installed: false, loggedIn: false },
+    systemGlab: { installed: false, loggedIn: false },
+    bundledGh: { installed: false, loggedIn: false },
+    bundledGlab: { installed: false, loggedIn: false },
+    systemCliOk: false,
+    bundledCliOk: false,
+  };
+}
+
 async function buildCliStatus(
   repoRoot: string,
   cliStorageDir: string | undefined,
+  configuredDefaultRemote?: string | null,
 ): Promise<CliStatusPayload> {
-  const remote = await runGit(repoRoot, ["remote", "get-url", "origin"], {
-    allowFail: true,
-  });
-  const originUrl = remote.stdout.trim();
-  const platformHint = detectMrPlatform(originUrl);
-  const web = normalizeRemoteWebUrl(originUrl);
+  const remotes = repoRoot ? await listRemotes(repoRoot) : [];
+  const remoteNames = remotes.map((r) => r.name);
+  const defaultRemote = resolveDefaultRemote(configuredDefaultRemote, remoteNames);
+  const defaultInfo = remotes.find((r) => r.name === defaultRemote);
+  const remoteUrl = defaultInfo?.fetchUrl || defaultInfo?.pushUrl || "";
+  const platformHint = detectMrPlatform(remoteUrl);
+  const web = normalizeRemoteWebUrl(remoteUrl);
   let remoteWebOrigin: string | null = null;
   if (web) {
     try {
@@ -176,17 +195,22 @@ async function buildCliStatus(
       remoteWebOrigin = null;
     }
   }
-  const systemGh = await checkSystemCli(repoRoot, "gh");
-  const systemGlab = await checkSystemCli(repoRoot, "glab");
-  const bundledGh = cliStorageDir
-    ? await checkBundledCli(cliStorageDir, "gh", repoRoot)
-    : { installed: false, loggedIn: false };
-  const bundledGlab = cliStorageDir
-    ? await checkBundledCli(cliStorageDir, "glab", repoRoot)
-    : { installed: false, loggedIn: false };
+  const emptyCli = { installed: false, loggedIn: false };
+  const [systemGh, systemGlab, bundledGh, bundledGlab] = await Promise.all([
+    checkSystemCli(repoRoot, "gh"),
+    checkSystemCli(repoRoot, "glab"),
+    cliStorageDir
+      ? checkBundledCli(cliStorageDir, "gh", repoRoot)
+      : Promise.resolve(emptyCli),
+    cliStorageDir
+      ? checkBundledCli(cliStorageDir, "glab", repoRoot)
+      : Promise.resolve(emptyCli),
+  ]);
   return {
     platformHint,
     remoteWebOrigin,
+    remotes,
+    defaultRemote,
     systemGh,
     systemGlab,
     bundledGh,
@@ -196,11 +220,33 @@ async function buildCliStatus(
   };
 }
 
-async function remoteOrigin(repoRoot: string): Promise<string> {
-  const remote = await runGit(repoRoot, ["remote", "get-url", "origin"], {
-    allowFail: true,
-  });
-  return remote.stdout.trim();
+async function remoteUrlForDefault(
+  repoRoot: string,
+  configuredDefaultRemote?: string | null,
+): Promise<string> {
+  const remotes = await listRemotes(repoRoot);
+  const name = resolveDefaultRemote(
+    configuredDefaultRemote,
+    remotes.map((r) => r.name),
+  );
+  const info = remotes.find((r) => r.name === name);
+  return info?.fetchUrl || info?.pushUrl || "";
+}
+
+async function resolveOpRemote(
+  cwd: string,
+  explicit: string | undefined,
+  loadCfg: () => Promise<{ defaultRemote?: string }>,
+): Promise<string> {
+  if (explicit?.trim()) {
+    return explicit.trim();
+  }
+  const cfg = await loadCfg();
+  const remotes = await listRemotes(cwd);
+  return resolveDefaultRemote(
+    cfg.defaultRemote,
+    remotes.map((r) => r.name),
+  );
 }
 
 /** 方案 C：按指定平台或远程倾向校验 Token */
@@ -208,8 +254,9 @@ async function validateTokenForRepo(
   repoRoot: string,
   tokens: { githubToken?: string; gitlabToken?: string },
   platform?: TokenPlatform,
+  configuredDefaultRemote?: string | null,
 ): Promise<TokenValidateResult> {
-  const originUrl = await remoteOrigin(repoRoot);
+  const originUrl = await remoteUrlForDefault(repoRoot, configuredDefaultRemote);
   const hint = platform ?? detectMrPlatform(originUrl);
   if (hint === "github") {
     return validateGithubToken(tokens.githubToken ?? "");
@@ -281,9 +328,19 @@ export async function handleWebviewRequest(
     if (cwd && configMemento) {
       try {
         const config = await loadCfg();
-        const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-        // 从未选过 MR 方式：有本机 gh/glab → A，否则 → D
         let cfg = config;
+        const cliStatus = await buildCliStatus(
+          cwd,
+          cliStorageDir,
+          cfg.defaultRemote,
+        );
+        if (cliStatus.remotes.length > 0) {
+          const resolved = cliStatus.defaultRemote;
+          if ((cfg.defaultRemote || "").trim() !== resolved) {
+            cfg = await saveCfg({ ...cfg, defaultRemote: resolved });
+          }
+        }
+        // 从未选过 MR 方式：有本机 gh/glab → A，否则 → D
         if (cfg.mrMethod == null) {
           const mrMethod = resolveDefaultMrMethod({
             platformHint: cliStatus.platformHint,
@@ -404,6 +461,72 @@ export async function handleWebviewRequest(
     };
   }
 
+  if (req.type === "getGitConfig") {
+    const config = await loadCfg();
+    let cfg = config;
+    const cliStatus = cwd
+      ? await buildCliStatus(cwd, cliStorageDir, cfg.defaultRemote)
+      : emptyCliStatus(cfg.defaultRemote);
+    if (cwd && cliStatus.remotes.length > 0) {
+      const resolved = cliStatus.defaultRemote;
+      if ((cfg.defaultRemote || "").trim() !== resolved) {
+        cfg = await saveCfg({ ...cfg, defaultRemote: resolved });
+      }
+    }
+    if (cfg.mrMethod == null) {
+      const mrMethod = resolveDefaultMrMethod({
+        platformHint: cliStatus.platformHint,
+        systemGhInstalled: cliStatus.systemGh.installed,
+        systemGlabInstalled: cliStatus.systemGlab.installed,
+      });
+      cfg = await saveCfg({ ...cfg, mrMethod });
+    }
+    const ready = isMrMethodReady(cfg, cliStatus);
+    return {
+      messages: [
+        {
+          type: "gitConfigResult",
+          config: cfg,
+          cliStatus,
+          configPath: cfgPath(),
+          methodReady: ready.ok,
+          methodReadyReason: ready.reason,
+        },
+      ],
+    };
+  }
+
+  if (req.type === "saveGitConfig") {
+    const prev = await loadCfg();
+    const saved = await saveCfg({
+      ...prev,
+      mrMethod: req.config.mrMethod,
+      githubToken: req.config.githubToken ?? "",
+      gitlabToken: req.config.gitlabToken ?? "",
+      defaultRemote:
+        req.config.defaultRemote?.trim() || prev.defaultRemote || "origin",
+      aiApiBaseUrl: req.config.aiApiBaseUrl ?? prev.aiApiBaseUrl ?? "",
+      aiApiKey: req.config.aiApiKey ?? prev.aiApiKey ?? "",
+      aiModel: req.config.aiModel ?? prev.aiModel ?? "",
+    });
+    const cliStatus = cwd
+      ? await buildCliStatus(cwd, cliStorageDir, saved.defaultRemote)
+      : emptyCliStatus(saved.defaultRemote);
+    const ready = isMrMethodReady(saved, cliStatus);
+    return {
+      messages: [
+        {
+          type: "gitConfigResult",
+          config: saved,
+          cliStatus,
+          configPath: cfgPath(),
+          methodReady: ready.ok,
+          methodReadyReason: ready.reason,
+        },
+      ],
+    };
+  }
+
   if (!cwd) {
     return {
       messages: [
@@ -418,7 +541,8 @@ export async function handleWebviewRequest(
 
   try {
     if (req.type === "fetch") {
-      const data = await fetchRemote(cwd, req.remote ?? "origin", onProgress);
+      const remote = await resolveOpRemote(cwd, req.remote, loadCfg);
+      const data = await fetchRemote(cwd, remote, onProgress);
       return {
         messages: [
           { type: "fetchResult", data, report: reportFetch(data) },
@@ -430,12 +554,14 @@ export async function handleWebviewRequest(
     if (req.type === "graph") {
       // 网页/扩展默认全量（maxNodes: 0）；CLI 仍默认 200
       const maxNodes = req.maxNodes === undefined ? 0 : req.maxNodes;
+      const remote = await resolveOpRemote(cwd, undefined, loadCfg);
       const data = await buildBranchGraph({
         cwd,
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
         maxNodes,
+        remote,
         onProgress,
       });
       return {
@@ -463,11 +589,13 @@ export async function handleWebviewRequest(
           ],
         };
       }
+      const remote = await resolveOpRemote(cwd, undefined, loadCfg);
       const data = await rehearseMerge({
         cwd,
         into: req.into,
         from: req.from,
         fetch: !req.noFetch,
+        remote,
         onProgress,
       });
       return {
@@ -506,12 +634,13 @@ export async function handleWebviewRequest(
         };
       }
       // files 可为空：干净合并（如同名 master→origin/master）仅推临时分支
+      const remote = await resolveOpRemote(cwd, req.remote, loadCfg);
       const data = await applyStashedResolve({
         cwd,
         into: req.into,
         from: req.from,
         files: req.files ?? [],
-        remote: req.remote,
+        remote,
         push: req.push,
         tempBranch: req.tempBranch,
         onProgress,
@@ -535,64 +664,10 @@ export async function handleWebviewRequest(
       };
     }
 
-    if (req.type === "getGitConfig") {
-      const config = await loadCfg();
-      let cfg = config;
-      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-      if (cfg.mrMethod == null) {
-        const mrMethod = resolveDefaultMrMethod({
-          platformHint: cliStatus.platformHint,
-          systemGhInstalled: cliStatus.systemGh.installed,
-          systemGlabInstalled: cliStatus.systemGlab.installed,
-        });
-        cfg = await saveCfg({ ...cfg, mrMethod });
-      }
-      const ready = isMrMethodReady(cfg, cliStatus);
-      return {
-        messages: [
-          {
-            type: "gitConfigResult",
-            config: cfg,
-            cliStatus,
-            configPath: cfgPath(),
-            methodReady: ready.ok,
-            methodReadyReason: ready.reason,
-          },
-        ],
-      };
-    }
-
-    if (req.type === "saveGitConfig") {
-      const prev = await loadCfg();
-      // 始终持久化（方法 + Token）；校验在失焦时单独做，不阻断写入
-      const saved = await saveCfg({
-        ...prev,
-        mrMethod: req.config.mrMethod,
-        githubToken: req.config.githubToken ?? "",
-        gitlabToken: req.config.gitlabToken ?? "",
-        aiApiBaseUrl: req.config.aiApiBaseUrl ?? prev.aiApiBaseUrl ?? "",
-        aiApiKey: req.config.aiApiKey ?? prev.aiApiKey ?? "",
-        aiModel: req.config.aiModel ?? prev.aiModel ?? "",
-      });
-      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
-      const ready = isMrMethodReady(saved, cliStatus);
-      return {
-        messages: [
-          {
-            type: "gitConfigResult",
-            config: saved,
-            cliStatus,
-            configPath: cfgPath(),
-            methodReady: ready.ok,
-            methodReadyReason: ready.reason,
-          },
-        ],
-      };
-    }
-
     if (req.type === "validateToken") {
       void onProgress?.({ percent: 40, label: "校验 Token…" });
       const platform = req.platform;
+      const cfgForToken = await loadCfg();
       const checked = await validateTokenForRepo(
         cwd,
         {
@@ -600,6 +675,7 @@ export async function handleWebviewRequest(
           gitlabToken: req.gitlabToken,
         },
         platform,
+        cfgForToken.defaultRemote,
       );
       const payload = tokenResultPayload(checked);
       const messages: HostMessage[] = [{ type: "tokenValidateResult", ...payload }];
@@ -612,7 +688,11 @@ export async function handleWebviewRequest(
           githubToken: req.githubToken ?? prev.githubToken ?? "",
           gitlabToken: req.gitlabToken ?? prev.gitlabToken ?? "",
         });
-        const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+        const cliStatus = await buildCliStatus(
+          cwd,
+          cliStorageDir,
+          saved.defaultRemote,
+        );
         let ready = isMrMethodReady(saved, cliStatus);
         if (saved.mrMethod === "token") {
           ready = checked.ok
@@ -648,7 +728,11 @@ export async function handleWebviewRequest(
         void onProgress?.({ percent: 50, label });
       });
       const config = await loadCfg();
-      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const cliStatus = await buildCliStatus(
+        cwd,
+        cliStorageDir,
+        config.defaultRemote,
+      );
       const ready = isMrMethodReady(config, cliStatus);
       const st = req.kind === "glab" ? cliStatus.bundledGlab : cliStatus.bundledGh;
       const loginHint = st.loggedIn
@@ -687,7 +771,11 @@ export async function handleWebviewRequest(
         };
       }
       const config = await loadCfg();
-      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const cliStatus = await buildCliStatus(
+        cwd,
+        cliStorageDir,
+        config.defaultRemote,
+      );
       const ready = isMrMethodReady(config, cliStatus);
       if (!ready.ok) {
         return {
@@ -711,12 +799,13 @@ export async function handleWebviewRequest(
             ? config.gitlabToken
             : config.githubToken
           : undefined;
+      const remote = await resolveOpRemote(cwd, req.remote, loadCfg);
       const data = await prepareCreateMr({
         cwd,
         into: req.into,
         from: req.from,
         sourceBranch: req.sourceBranch,
-        remote: req.remote,
+        remote,
         method: config.mrMethod,
         cliPath,
         token,
@@ -753,7 +842,11 @@ export async function handleWebviewRequest(
         };
       }
       const config = await loadCfg();
-      const cliStatus = await buildCliStatus(cwd, cliStorageDir);
+      const cliStatus = await buildCliStatus(
+        cwd,
+        cliStorageDir,
+        config.defaultRemote,
+      );
       const ready = isMrMethodReady(config, cliStatus);
       if (!ready.ok) {
         return {
@@ -777,6 +870,7 @@ export async function handleWebviewRequest(
             ? config.gitlabToken
             : config.githubToken
           : undefined;
+      const remote = await resolveOpRemote(cwd, req.remote, loadCfg);
       const data = await createMergeRequest({
         cwd,
         sourceBranch: req.sourceBranch,
@@ -784,7 +878,7 @@ export async function handleWebviewRequest(
         title: req.title,
         body: req.body,
         reviewers: req.reviewers,
-        remote: req.remote,
+        remote,
         method: config.mrMethod,
         cliPath,
         token,

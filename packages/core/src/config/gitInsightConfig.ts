@@ -9,6 +9,11 @@ export interface GitInsightProjectConfig {
   githubToken?: string;
   gitlabToken?: string;
   /**
+   * 默认远程名（如 origin / upstream）。fetch、图合并、剥前缀、CLI 未传 --remote 时使用。
+   * 以仓库实际 `git remote` 为准；不存在时回退 origin 或第一项。
+   */
+  defaultRemote?: string;
+  /**
    * AI 选边：OpenAI 兼容 API（Cursor 的 vscode.lm 常为空时使用）
    * 例：https://api.openai.com/v1 或 http://127.0.0.1:11434/v1
    */
@@ -28,6 +33,7 @@ export function defaultGitInsightConfig(): GitInsightProjectConfig {
     mrMethod: null,
     githubToken: "",
     gitlabToken: "",
+    defaultRemote: "origin",
     aiApiBaseUrl: "https://api.openai.com/v1",
     aiApiKey: "",
     aiModel: "gpt-4o-mini",

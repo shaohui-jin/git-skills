@@ -10,7 +10,12 @@
 2. [各模块操作与实际指令](#二各模块操作与实际指令技术分享)
 3. [核心模块实现说明](#三核心模块实现说明)（含 [发布到 Cursor 市场](#36-发布到-cursor-市场open-vsx)）
 4. [Skill 说明](#四skill-说明)
-5. [附录：FAQ 与命令速查](#五附录faq-与命令速查)
+5. [附录：指令一览、FAQ 与命令速查](#五附录指令一览faq-与命令速查)
+   - [5.1 Cursor 扩展指令](#51-cursor-扩展指令命令面板--uri)
+   - [5.2 Skill / CLI 指令](#52-skill--cli-指令)
+   - [5.3 扩展 ↔ Skill 能力对照](#53-扩展--skill-能力对照)
+   - [5.4 FAQ](#54-faq)
+   - [5.5 CLI 一行速查](#55-cli-一行速查git-insight-封装)
 
 ---
 
@@ -83,11 +88,16 @@ cursor --install-extension git-insight.vsix --force
 - 本地安装：见上方 VSIX 命令  
 - Cursor 扩展市场：搜 `Git Insight` / `jinshaohui.git-insight`（上游为 Open VSX；**维护者上架流程见 [§3.6](#36-发布到-cursor-市场open-vsx)**）
 
-安装后 **Reload Window**，命令面板：
+安装后 **Reload Window**，命令面板（`Ctrl+Shift+P` / `Cmd+Shift+P`）搜 **Git Insight**：
 
-- `Git Insight: Open Web` — 打开面板（默认 **Git 配置**）
-- `Git Insight: 合并预演` — 打开并切到合并预演
-- `Git Insight: 同步 Agent Skill 到全局` — 手动把 `/git-branch-insight` 写到用户 Skill 目录（启动时也会自动同步）
+| 面板标题 | 命令 ID | 作用 |
+|----------|---------|------|
+| Git Insight: Open Web | `gitInsight.openWeb` | 打开面板（默认 **Git 配置** Tab） |
+| Git Insight: 合并预演 | `gitInsight.previewMerge` | 打开面板并切到 **合并预演** |
+| Git Insight: 打开预演（可带 into/from） | `gitInsight.openPreview` | 打开预演；可种入 `into` / `from` / `cwd`，并默认自动跑预演（Skill / URI 用） |
+| Git Insight: 同步 Agent Skill 到全局 | `gitInsight.syncSkill` | 把 `/git-branch-insight` 写到用户 Skill 目录（启动时也会自动同步） |
+
+> **只有一条「合并预演」**：旧命令 `gitInsight.conflictBlame`（面板曾显示「合并预演（兼容）」）已移除，勿再依赖。完整 URI / CLI 清单见 [§五](#五附录指令一览faq-与命令速查)。
 
 面板顶部输入本机仓库路径或 GitHub `owner/repo`，点「打开」。
 
@@ -120,8 +130,18 @@ cursor --install-extension git-insight.vsix --force
 - 标签上方有「打开创建 Token 页面」按钮（GitHub / GitLab）
 - Token `change` 后自动校验并保存；标题旁显示有效期（中国时间）
 
+**默认远程**（同页，与 A–D 并列配置）：
 
-
+| 项 | 说明 |
+|----|------|
+| 字段 | 全局配置 `defaultRemote`（默认偏好名，如 `origin`） |
+| UI | 左侧「MR 方式」卡片顶部紧凑条：下拉 + 当前 remote 的 fetch URL（ellipsis）；AI 选边默认折叠 |
+| 加载 | 进入配置页 / 打开仓库时执行 `git remote -v` |
+| 下拉 | 仅列出当前仓库实际 remotes；切换即保存 |
+| 无仓库 / 无 remote | 条内红色短提示，请先打开仓库 |
+| 回退 | 配置名不在仓库 remotes 中 → `origin`（若有）→ 列表第一项 |
+| 用途 | fetch、分支图「本地↔默认远程」合并、MR 短名剥前缀、平台探测 URL |
+| CLI 镜像 | 扩展保存/加载时写入 `~/.git-insight/user-config.json`；CLI 未传 `--remote` 时读取（可用 `GIT_INSIGHT_DEFAULT_REMOTE` / `GIT_INSIGHT_USER_CONFIG` 覆盖） |
 
 <img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.8adz6x3r82.webp" style="height: 100px" />
 <img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.1sfrdlv94y.webp" style="height: 100px" />
@@ -140,21 +160,21 @@ cursor --install-extension git-insight.vsix --force
 
 默认会预填 `https://api.openai.com/v1` + `gpt-4o-mini`；**未填 Key 时不会调用 OpenAI**，会落到 Chat 桥。
 
-配置**双写**（各仓库共用同一套 Token / MR 方式 / AI 模型配置）：
+配置**双写 / 三写**（各仓库共用同一套 Token / MR 方式 / 默认远程 / AI 模型配置）：
 
 | 位置 | 键 / 路径 |
 |------|-----------|
 | 扩展 `globalState` | `gitInsight.userConfig` |
 | 扩展 `globalStorage` | `user-config.json` |
+| 用户家目录（供 CLI） | `~/.git-insight/user-config.json` |
 
 **实际指令 / 行为**
 
 | 用途 | 指令 / 行为 |
 |------|-------------|
-| 探测平台 | `git remote get-url origin` → 解析主机名（含 `github` / `gitlab` / `git.`） |
-| 检测系统 CLI | `gh --version`；`glab --version` |
-| 检测扩展内 CLI | 同上，可执行文件路径为扩展 `globalStorage` 下下载的 `gh` / `glab` |
-| 登录状态 | `gh auth status`；`glab auth status` |
+| 列远程 | `git remote -v` → 配置页下拉 + 解析默认远程 URL |
+| 探测平台 | 默认远程的 fetch URL → 解析主机名（含 `github` / `gitlab` / `git.`） |
+| 检测 CLI | 打开仓库时对系统/扩展内 `gh`·`glab` 做 `--version` + `auth status`；**四路 `Promise.all` 并行** |
 | 唤起登录 | 集成终端 `sendText`：`gh auth login` / `glab auth login`；扩展内二进制用 PowerShell：`& "<path>\gh.exe" auth login`（或 glab） |
 | 下载 gh（B） | `GET https://api.github.com/repos/cli/cli/releases/latest` → 按 OS/arch 下 zip/tar |
 | 下载 glab（B） | `GET https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases/permalink/latest` → 匹配 `windows_amd64.zip` 等 |
@@ -238,11 +258,14 @@ git for-each-ref --format=%(refname)%00%(refname:short) refs/heads refs/remotes
 **操作要点**
 
 1. 点「加载分支图」（扩展默认全量 tip，`maxNodes: 0`）
-2. 画布：琥珀=本地 tip，蓝色=远程 tip；边从左到右表示「较近 tip 祖先 → 子分支」（不是完整 commit 链）
-3. 点击 tip：高亮到根源链路，右侧出链路报告；底部图例文案不随点击变化
-4. Ctrl+F 或「搜索节点」：按分支名 / sha 定位
+2. 节点标签为**短分支名**（如 `foo`，不写 `origin/foo`）；颜色区分本地 / 各 remote
+3. **合并展示**：本地与**默认远程**同短名且 tip sha 相同 → 只画一个节点（默认远程色）；sha 不一致则仍画两条
+4. 其它 remote 各自成点；右上角（搜索下方）色块图例：本地 + 各 remote 名
+5. 边从左到右表示「较近 tip 祖先 → 子分支」（不是完整 commit 链）
+6. 点击 tip：高亮到根源链路，右侧出链路报告；底部仅保留操作说明
+7. Ctrl+F 或「搜索节点」：按分支名 / sha 定位
 
-**注意：** fetch 主要更新 `origin/*`；**本地分支 tip 不会因 fetch 自动快进**。对照线上请看 `origin/xxx`。
+**注意：** fetch 更新默认远程下的跟踪分支；**本地 tip 不会因 fetch 自动快进**。默认远程在 §2.1 配置。
 
 **实际指令**
 
@@ -286,12 +309,12 @@ git-insight graph --no-fetch
 | 项 | 说明 |
 |----|------|
 | 三栏含义 | 左=线上目标（into）、中=结果、右=我的分支（from） |
-| 左侧「冲突文件」 | **仅列出有红块（需手选）的文件**；角标 `已解决/冲突数`（如 `9/9`）；当前选中行显示「线上 / 我的」整文件选边 |
+| 左侧「冲突文件」 | **仅列出有红块（需手选）的文件**；上行：文件名 + 右对齐角标 `已解决/冲突数`；**选中行第二行** secondary「线上 / 我的」整文件选边 |
 | 「仅自动合并（N）」 | 折叠分组：无冲突红块、只有绿/蓝自动变更的文件；角标 `NΔ`（Δ=自动变更数）。默认折叠，可展开查看 |
 | 为何还有 `NΔ` 文件 | `merge-tree` 可能仍报该路径，但三方 diff 后无需手选；**一键解决仍会写入这些文件**，并非目录错误 |
 | 文件内导航 | 「↑ 上一处 / ↓ 下一处」：在当前文件的冲突块间跳转（优先未解决） |
 | 文件间导航 | 左侧列表头 `‹ n/N ›`：**只在有冲突红块的文件间**循环跳转（不进入「仅自动合并」列表） |
-| 整文件选边 | 选中文件行上「线上 / 我的」：该文件全部冲突块采用对应侧 |
+| 整文件选边 | 选中文件第二行「线上 / 我的」：该文件全部冲突块采用对应侧 |
 | 冲突块选边 | 主工具条「采用线上 / 采用我的」：仅作用于当前冲突块 |
 | 代码 | `webview/src/ConflictResolvePanel.vue`、`conflict/buildChangeHunks.ts` |
 
@@ -318,7 +341,7 @@ CLI：
 ```bash
 git-insight preview-merge --into develop --from feature/x
 git-insight preview-merge --into develop --from origin/feature/x --no-fetch
-# 兼容旧名
+# CLI 旧名别名（等同 preview-merge；命令面板无对应项）
 git-insight conflict-blame --into <线上> --from <我的>
 ```
 
@@ -931,6 +954,20 @@ pnpm --filter @git-insight/core build
 pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 ```
 
+**CLI 子命令（Skill 执行出口，完整表见 [§5.2](#52-skill--cli-指令)）**
+
+| 阶段 | 命令 | 读写 |
+|------|------|------|
+| 同步 | `fetch [--cwd] [--remote]` | 只读（网络） |
+| 图 | `graph [--cwd] [--max] [--into] [--from] [--no-fetch] [--remote]` | 只读 |
+| 预演 | `preview-merge --into <远程> --from <我的> [--cwd] [--no-fetch]` | 只读 |
+| 落盘 | `apply-resolve --into … --from … --stash <json> [--cwd] [--no-push]` | **写**（须确认） |
+| 准备 MR | `prepare-mr --into … --from …` | 只读准备 |
+| 创建 MR | `create-mr --source … --target … --method cli\|token …` | **写远端**（须确认） |
+| 唤起 UI | `open-ui --into … --from … [--cwd] [--no-open]` | 打开扩展 |
+
+别名（等同 `preview-merge`，**仅 CLI**，不会出现在命令面板）：`conflict-blame`、`merge-rehearsal`。帮助：`-h` / `--help`。
+
 ### 4.5 Agent 工作流（业务闭环）
 
 1. 确认仓库路径；默认 `fetch`（离线加 `--no-fetch`）
@@ -1002,9 +1039,105 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 
 ---
 
-## 五、附录：FAQ 与命令速查
+## 五、附录：指令一览、FAQ 与命令速查
 
-### 5.1 FAQ
+### 5.1 Cursor 扩展指令（命令面板 / URI）
+
+命令面板搜 **Git Insight**（与 `package.json` → `contributes.commands` 一致）：
+
+| 面板标题 | 命令 ID | 作用 |
+|----------|---------|------|
+| Git Insight: Open Web | `gitInsight.openWeb` | 打开面板 → 默认 **Git 配置** |
+| Git Insight: 合并预演 | `gitInsight.previewMerge` | 打开面板 → **合并预演** |
+| Git Insight: 打开预演（可带 into/from） | `gitInsight.openPreview` | 打开预演并种入分支；供 Skill / 程序 / URI 调用 |
+| Git Insight: 同步 Agent Skill 到全局 | `gitInsight.syncSkill` | 同步 Skill 到 `~/.cursor/skills` 与 `~/.agents/skills` |
+
+`gitInsight.openPreview` 参数：
+
+| 参数 | 说明 |
+|------|------|
+| `into` | 线上目标（建议远程，如 `origin/develop`） |
+| `from` | 我的分支 |
+| `cwd` | 仓库路径（可选） |
+| `autoPreview` | 默认 `true`；`false` 时只种入分支、不自动跑预演 |
+
+**URI 唤起**（扩展 ID `jinshaohui.git-insight`）：
+
+| Path | 作用 | Query |
+|------|------|--------|
+| `/preview`（或 `/`、`/open`） | 打开合并预演并种入分支 | `into`、`from`、`cwd`、`autoPreview`（`0` / `false` 关闭自动预演） |
+| `/config` | 打开 Git 配置 | — |
+| `/graph` | 打开分支图 | — |
+
+示例：
+
+```text
+vscode://jinshaohui.git-insight/preview?into=origin/develop&from=feature/x&autoPreview=1
+```
+
+> 已删除命令面板中的 `gitInsight.conflictBlame`（「合并预演（兼容）」）。日常只用 **合并预演**；需要带分支参数时用 **打开预演** 或上表 URI。
+
+### 5.2 Skill / CLI 指令
+
+| 项 | 内容 |
+|----|------|
+| 斜杠入口 | **`/git-branch-insight`** |
+| Skill 名 | `git-branch-insight` |
+| 调用策略 | `disable-model-invocation: true`（须用户主动 `/`，模型不会自动抢调） |
+
+调用形态：
+
+```bash
+# 已装扩展（路径见 Skill 文件内注入值）
+node "<扩展目录>/jinshaohui.git-insight-<version>/dist/cli.js" <command> …
+
+# 本仓库开发
+pnpm --filter @git-insight/core exec node dist/cli.js <command> …
+```
+
+| 命令 | 主要参数 | 说明 |
+|------|----------|------|
+| `fetch` | `[--cwd]` `[--remote]` | 拉远程（默认 `origin`） |
+| `graph` | `[--cwd]` `[--max]` `[--into]` `[--from]` `[--no-fetch]` `[--remote]` | 分支图 + `report` / `mermaid` |
+| `preview-merge` | **必填** `--into` `--from`；`[--cwd]` `[--no-fetch]` | 合并预演（只读） |
+| `conflict-blame` | 同 `preview-merge` | CLI 旧名别名 |
+| `merge-rehearsal` | 同 `preview-merge` | CLI 旧名别名 |
+| `apply-resolve` | `--into` `--from` `--stash <file.json>` `[--cwd]` `[--no-push]` | worktree 落盘；干净合并可用 `{ "files": [] }`；**须确认** |
+| `prepare-mr` | `--into` `--from` `[--source]` `[--method]` `[--token]` `[--cwd]` | 准备 MR，返回可选方式等 |
+| `create-mr` | `--source` `--target` `[--method cli\|token]` `[--token]` `[--title]` `[--body]` `[--reviewers a,b]` `[--cwd]` | 创建 MR/PR；**须确认** |
+| `open-ui` | `--into` `--from` `[--cwd]` `[--no-open]` | 生成/打开扩展预演 URI |
+
+Skill 约定闭环：
+
+```text
+fetch / graph → preview-merge
+  →（有冲突：确认选边 → apply-resolve）
+  → 询问 MR：cli | token | ui
+  → create-mr 或 open-ui
+```
+
+硬性规则见 [§4.7](#47-不要做的事) 与 Skill 正文：`--into` 用远程；同名分支停止；写仓 / 开 MR 前确认；冲突展示 `conflictContent`；左=线上、右=我的。
+
+### 5.3 扩展 ↔ Skill 能力对照
+
+| 能力 | 命令面板 / URI | Skill CLI |
+|------|----------------|-----------|
+| 打开配置 | `openWeb` / URI `/config` | —（或面板） |
+| 分支图 | URI `/graph`（面板内） | `graph` |
+| Fetch | 面板内 | `fetch` |
+| 合并预演 | `previewMerge`；带参用 `openPreview` / URI `/preview` | `preview-merge` |
+| 冲突解决落盘 | 面板「一键解决并推送」 | `apply-resolve` |
+| 准备 / 创建 MR | 面板内 | `prepare-mr` / `create-mr` |
+| 唤起 UI | `openPreview` | `open-ui` |
+| 同步 Skill | `syncSkill` | — |
+
+### 5.4 FAQ
+
+**命令面板里为什么曾有两条「合并预演」？**  
+旧命令 ID `gitInsight.conflictBlame` 曾以「合并预演（兼容）」保留，与 `previewMerge` 重复。现已删除兼容项，面板只保留 **Git Insight: 合并预演**。CLI 仍可用 `conflict-blame` 作为 `preview-merge` 别名（不会出现在命令面板）。
+
+**「合并预演」和「打开预演（可带 into/from）」有何区别？**  
+前者只打开预演 Tab；后者可传入 `into` / `from` / `cwd` 并默认自动预演，供 Skill、`open-ui`、URI 使用。
 
 **Fetch 失败，但 WebStorm 可以**  
 确认本机 Git / Credential Manager 能对同一仓库 `git fetch`；方案 C Token **不参与** fetch。若弹窗未出现，检查是否被策略禁用了交互凭据。
@@ -1051,22 +1184,24 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 **只装扩展、不打开面板，能用 Skill 吗？**  
 能。Skill 用扩展自带 `dist/cli.js`；写操作与开 MR 仍须在对话里确认。面板用于可视化选边与配置 Token/CLI。
 
-### 5.2 CLI 速查（git-insight 封装）
+### 5.5 CLI 一行速查（git-insight 封装）
+
+完整说明见 [§5.2](#52-skill--cli-指令)。简表：
 
 ```text
-git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch]
+git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch] [--remote]
 git-insight fetch [--cwd] [--remote]
 git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd] [--no-fetch]
-git-insight conflict-blame …   # 同 preview-merge
-git-insight apply-resolve --into … --from … --stash <json> [--no-push]
-git-insight prepare-mr --into … --from …
-git-insight create-mr --source … --target … --method cli|token
-git-insight open-ui --into … --from …
+git-insight conflict-blame|merge-rehearsal …   # 同 preview-merge（仅 CLI 别名）
+git-insight apply-resolve --into … --from … --stash <json> [--cwd] [--no-push]
+git-insight prepare-mr --into … --from … [--source] [--method] [--token] [--cwd]
+git-insight create-mr --source … --target … --method cli|token [--token] [--title] [--body] [--reviewers] [--cwd]
+git-insight open-ui --into … --from … [--cwd] [--no-open]
 ```
 
 终端用户：用扩展目录下 `dist/cli.js`（见 §4.2 / Skill 文件内路径）。本仓库开发：`pnpm --filter @git-insight/core exec node dist/cli.js …`。写操作须用户确认后再由 Agent 调用。
 
-### 5.3 底层指令速查（按功能）
+### 5.6 底层指令速查（按功能）
 
 | 功能 | 核心命令（详见 §二） |
 |------|----------------------|
@@ -1082,7 +1217,7 @@ git-insight open-ui --into … --from …
 | 申请 MR · Token | GitHub `pulls` + `requested_reviewers` + `issues/…/assignees`；GitLab `users?username` + `merge_requests` |
 | 打开远程仓 | `git clone --` / `git fetch --all --prune`（可 Token / 弹窗） |
 
-### 5.4 与 WebStorm 的差异（Fetch）
+### 5.7 与 WebStorm 的差异（Fetch）
 
 WebStorm 默认允许交互取凭据。本扩展**工作区** fetch 同样直接允许弹窗（已有本机凭据时通常不弹）；方案 C Token **不**用于工作区 fetch。打开 `owner/repo` 远程缓存时仍可能注入 Token（§2.8）。
 

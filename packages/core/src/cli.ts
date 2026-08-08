@@ -12,6 +12,7 @@ import {
 import { isSameBranchForMr } from "./merge/branchName.js";
 import type { MrMethod } from "./config/gitInsightConfig.js";
 import { GitError } from "./git/runner.js";
+import { listRemotes, resolveRemoteName } from "./git/remotes.js";
 import { reportFetch, reportGraph, reportMergeRehearsal } from "./report/chinese.js";
 import { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
 import type { CliJsonError, CliJsonResult } from "./types.js";
@@ -43,7 +44,20 @@ Notes:
   - create-mr --method: cli（本机 gh/glab）| token（--token 或环境 GIT_INSIGHT_GITHUB_TOKEN / GIT_INSIGHT_GITLAB_TOKEN）
   - open-ui: 生成并尝试打开扩展预演面板（需已安装 Git Insight）
   - 同名分支（master ↔ origin/master）不要走 MR，请自行 push/pull
+  - --remote 未传时：读 ~/.git-insight/user-config.json 的 defaultRemote，再按仓库 remotes 兜底
 `;
+}
+
+async function remoteNames(cwd?: string): Promise<string[]> {
+  return (await listRemotes(cwd)).map((r) => r.name);
+}
+
+async function resolvedRemote(
+  args: string[],
+  cwd?: string,
+): Promise<string> {
+  const { remote } = await resolveRemoteName(cwd, getFlag(args, "--remote"));
+  return remote;
 }
 
 function getFlag(args: string[], name: string): string | undefined {
@@ -94,7 +108,9 @@ async function runMergeRehearsal(command: string, args: string[]): Promise<void>
       code: "USAGE",
     });
   }
-  if (isSameBranchForMr(into, from)) {
+  const cwd = getFlag(args, "--cwd");
+  const remotes = await remoteNames(cwd);
+  if (isSameBranchForMr(into, from, remotes)) {
     printJson({
       ok: false,
       command: "preview-merge",
@@ -105,11 +121,11 @@ async function runMergeRehearsal(command: string, args: string[]): Promise<void>
     return;
   }
   const data = await rehearseMerge({
-    cwd: getFlag(args, "--cwd"),
+    cwd,
     into,
     from,
     fetch: !hasSwitch(args, "--no-fetch"),
-    remote: getFlag(args, "--remote"),
+    remote: await resolvedRemote(args, cwd),
   });
   printJson({
     ok: true,
@@ -130,7 +146,9 @@ async function runApplyResolve(args: string[]): Promise<void> {
       { code: "USAGE" },
     );
   }
-  if (isSameBranchForMr(into, from)) {
+  const cwd = getFlag(args, "--cwd");
+  const remotes = await remoteNames(cwd);
+  if (isSameBranchForMr(into, from, remotes)) {
     throw new GitError(
       `源/目标是同一分支，请自行 push / pull，勿 apply-resolve`,
       { code: "SAME_BRANCH_MR" },
@@ -145,11 +163,11 @@ async function runApplyResolve(args: string[]): Promise<void> {
   }
   const files = Array.isArray(parsed.files) ? parsed.files : [];
   const data = await applyStashedResolve({
-    cwd: getFlag(args, "--cwd"),
+    cwd,
     into,
     from,
     files,
-    remote: getFlag(args, "--remote"),
+    remote: await resolvedRemote(args, cwd),
     push: !hasSwitch(args, "--no-push"),
     tempBranch: getFlag(args, "--temp-branch"),
   });
@@ -175,12 +193,13 @@ async function runPrepareMr(args: string[]): Promise<void> {
     throw new GitError("prepare-mr 需要 --into 与 --from", { code: "USAGE" });
   }
   const method = parseMethod(getFlag(args, "--method")) ?? "cli";
+  const cwd = getFlag(args, "--cwd");
   const data = await prepareCreateMr({
-    cwd: getFlag(args, "--cwd"),
+    cwd,
     into,
     from,
     sourceBranch: getFlag(args, "--source"),
-    remote: getFlag(args, "--remote"),
+    remote: await resolvedRemote(args, cwd),
     method,
     token: resolveToken(getFlag(args, "--token")),
   });
@@ -222,14 +241,15 @@ async function runCreateMr(args: string[]): Promise<void> {
   const reviewers = reviewersRaw
     ? reviewersRaw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
     : [];
+  const cwd = getFlag(args, "--cwd");
   const data = await createMergeRequest({
-    cwd: getFlag(args, "--cwd"),
+    cwd,
     sourceBranch: source,
     targetBranch: target,
     title: getFlag(args, "--title"),
     body: getFlag(args, "--body"),
     reviewers,
-    remote: getFlag(args, "--remote"),
+    remote: await resolvedRemote(args, cwd),
     method,
     token: resolveToken(getFlag(args, "--token")),
   });
@@ -357,13 +377,14 @@ async function main(): Promise<void> {
   try {
     if (command === "graph") {
       const maxRaw = getFlag(args, "--max");
+      const cwd = getFlag(args, "--cwd");
       const graph = await buildBranchGraph({
-        cwd: getFlag(args, "--cwd"),
+        cwd,
         maxNodes: maxRaw ? Number(maxRaw) : undefined,
         into: getFlag(args, "--into"),
         from: getFlag(args, "--from"),
         fetch: !hasSwitch(args, "--no-fetch"),
-        remote: getFlag(args, "--remote"),
+        remote: await resolvedRemote(args, cwd),
       });
       printJson({
         ok: true,
@@ -376,10 +397,8 @@ async function main(): Promise<void> {
     }
 
     if (command === "fetch") {
-      const data = await fetchRemote(
-        getFlag(args, "--cwd"),
-        getFlag(args, "--remote") ?? "origin",
-      );
+      const cwd = getFlag(args, "--cwd");
+      const data = await fetchRemote(cwd, await resolvedRemote(args, cwd));
       printJson({
         ok: true,
         command,

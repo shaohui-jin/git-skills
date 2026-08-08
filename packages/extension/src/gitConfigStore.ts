@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   defaultGitInsightConfig,
   GIT_INSIGHT_CONFIG_FILE,
   GIT_INSIGHT_DIR,
+  userConfigHomePath,
   type GitInsightProjectConfig,
   type MrMethod,
 } from "@git-insight/core";
@@ -42,6 +43,7 @@ function normalizeConfig(raw: Partial<GitInsightProjectConfig> | undefined): Git
     mrMethod: (raw.mrMethod as MrMethod | null | undefined) ?? null,
     githubToken: raw.githubToken ?? "",
     gitlabToken: raw.gitlabToken ?? "",
+    defaultRemote: raw.defaultRemote?.trim() || base.defaultRemote || "origin",
     aiApiBaseUrl: raw.aiApiBaseUrl ?? base.aiApiBaseUrl ?? "",
     aiApiKey: raw.aiApiKey ?? "",
     aiModel: raw.aiModel ?? base.aiModel ?? "",
@@ -125,15 +127,18 @@ export async function loadUserConfig(
     } else if (b < a) {
       await writeStorageFile(storageDir, newer);
     }
+    await writeHomeConfigMirror(newer);
     return newer;
   }
   if (configHasUserData(stored)) {
     const cfg = normalizeConfig(stored);
     await writeStorageFile(storageDir, cfg);
+    await writeHomeConfigMirror(cfg);
     return cfg;
   }
   if (fromFile) {
     await memento.update(GLOBAL_CONFIG_KEY, fromFile);
+    await writeHomeConfigMirror(fromFile);
     return fromFile;
   }
 
@@ -141,9 +146,22 @@ export async function loadUserConfig(
   if (legacy) {
     await memento.update(GLOBAL_CONFIG_KEY, legacy);
     await writeStorageFile(storageDir, legacy);
+    await writeHomeConfigMirror(legacy);
     return legacy;
   }
-  return defaultGitInsightConfig();
+  const fresh = defaultGitInsightConfig();
+  await writeHomeConfigMirror(fresh);
+  return fresh;
+}
+
+async function writeHomeConfigMirror(config: GitInsightProjectConfig): Promise<void> {
+  try {
+    const path = userConfigHomePath();
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } catch {
+    // 家目录不可写时不影响扩展主配置
+  }
 }
 
 export async function saveUserConfig(
@@ -156,6 +174,7 @@ export async function saveUserConfig(
     mrMethod: config.mrMethod,
     githubToken: config.githubToken ?? "",
     gitlabToken: config.gitlabToken ?? "",
+    defaultRemote: config.defaultRemote?.trim() || "origin",
     aiApiBaseUrl: config.aiApiBaseUrl ?? "https://api.openai.com/v1",
     aiApiKey: config.aiApiKey ?? "",
     aiModel: config.aiModel ?? "gpt-4o-mini",
@@ -163,6 +182,7 @@ export async function saveUserConfig(
   };
   await memento.update(GLOBAL_CONFIG_KEY, next);
   await writeStorageFile(storageDir, next);
+  await writeHomeConfigMirror(next);
   return next;
 }
 

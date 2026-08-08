@@ -27,8 +27,8 @@ Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（
 
 ### 面板（可视化）
 
-1. 命令面板：`Git Insight: Open Web` 或 `Git Insight: 合并预演`
-2. 在面板完成 Git 配置（A 本机 CLI / B 下载 CLI / C Token / D 浏览器；可选「AI 选边」模型回退）
+1. 命令面板搜 Git Insight：`Open Web`（配置）/ `合并预演` / `打开预演（可带 into/from）` / `同步 Agent Skill 到全局`
+2. 在面板完成 Git 配置：默认远程 + A/B/C/D MR 方式（AI 选边可折叠配置）
 3. 分支图 → 合并预演 →（如有冲突）一键解决并推送 → 申请 MR
 
 ### Agent Skill（任意仓库）
@@ -46,5 +46,5 @@ Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（
 - 源/目标短名相同（如 `master` ↔ `origin/master`）不处理，请自行 `git push` / `pull`
 - 「AI 选边（模型）」可选：`vscode.lm` → OpenAI 兼容 API / Ollama → Chat 桥（详见 [docs/guide.md §2.5](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md#25-ai-选边扩展)）
 
-完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)（§1.4 安装 · §四 Skill）。  
+完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)（§1.4 安装 · §四 Skill · **§五 指令一览**）。  
 变更记录：[CHANGELOG.md](./CHANGELOG.md)（随 VSIX 发布，Cursor / Open VSX 市场可见）。

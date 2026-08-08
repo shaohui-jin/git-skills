@@ -20,6 +20,7 @@ const emit = defineEmits<{
       mrMethod: GitInsightConfigView["mrMethod"];
       githubToken: string;
       gitlabToken: string;
+      defaultRemote: string;
       aiApiBaseUrl: string;
       aiApiKey: string;
       aiModel: string;
@@ -44,11 +45,29 @@ const emit = defineEmits<{
 const method = ref<GitInsightConfigView["mrMethod"]>(null);
 const githubToken = ref("");
 const gitlabToken = ref("");
+const defaultRemote = ref("origin");
 const aiApiBaseUrl = ref("https://api.openai.com/v1");
 const aiApiKey = ref("");
 const aiModel = ref("gpt-4o-mini");
 const githubChecking = ref(false);
 const gitlabChecking = ref(false);
+
+const remoteList = computed(() => props.cliStatus?.remotes ?? []);
+const hasRepoRemotes = computed(() => remoteList.value.length > 0);
+const aiSectionOpen = ref(false);
+
+const selectedRemoteInfo = computed(() => {
+  const name = defaultRemote.value.trim();
+  return remoteList.value.find((r) => r.name === name) ?? remoteList.value[0] ?? null;
+});
+
+const selectedRemoteUrl = computed(() => {
+  const r = selectedRemoteInfo.value;
+  if (!r) {
+    return "";
+  }
+  return r.fetchUrl || r.pushUrl || "";
+});
 
 /** 与宿主一致：未选过时，有本机 gh/glab → A，否则 → D */
 function suggestDefaultMethod(): NonNullable<GitInsightConfigView["mrMethod"]> {
@@ -71,13 +90,15 @@ function suggestDefaultMethod(): NonNullable<GitInsightConfigView["mrMethod"]> {
 
 watch(
   () => [props.config, props.cliStatus] as const,
-  ([c]) => {
+  ([c, status]) => {
     if (!c) {
       return;
     }
     method.value = c.mrMethod ?? suggestDefaultMethod();
     githubToken.value = c.githubToken ?? "";
     gitlabToken.value = c.gitlabToken ?? "";
+    defaultRemote.value =
+      status?.defaultRemote || c.defaultRemote?.trim() || "origin";
     aiApiBaseUrl.value = c.aiApiBaseUrl ?? "https://api.openai.com/v1";
     aiApiKey.value = c.aiApiKey ?? "";
     aiModel.value = c.aiModel ?? "gpt-4o-mini";
@@ -261,10 +282,15 @@ function persistConfig(): void {
     mrMethod: method.value,
     githubToken: githubToken.value,
     gitlabToken: gitlabToken.value,
+    defaultRemote: defaultRemote.value.trim() || "origin",
     aiApiBaseUrl: aiApiBaseUrl.value,
     aiApiKey: aiApiKey.value,
     aiModel: aiModel.value,
   });
+}
+
+function onDefaultRemoteChange(): void {
+  persistConfig();
 }
 
 function selectMethod(id: GitInsightConfigView["mrMethod"]): void {
@@ -328,19 +354,47 @@ const gitlabTitleStatus = computed(() => {
 <template>
   <div class="config-panel">
     <div class="card config-header">
-      <h3>Git / MR 配置</h3>
-      <p class="muted">
-        选择「一键申请 MR」使用的方式（切换即自动保存）。首次进入：本机有 gh/glab 默认选
-        A，否则默认选 D。存储位置：
-        <code class="mono">{{ configPath || "扩展全局配置（各仓库共用）" }}</code>
+      <div class="config-header-row">
+        <h3>Git / MR 配置</h3>
+        <span v-if="methodReady" class="config-ready-pill">已就绪</span>
+        <span v-else-if="methodReadyReason" class="config-ready-pill warn">未就绪</span>
+      </div>
+      <p class="muted config-header-meta">
+        切换 MR 方式即保存 · 首次：有 gh/glab 默认 A，否则 D ·
+        <code class="mono">{{ configPath || "扩展全局配置" }}</code>
       </p>
       <p v-if="previewMode" class="mr-warn">预览模式可查看选项，但不会写入扩展配置。</p>
       <p v-if="!methodReady && methodReadyReason" class="mr-warn">{{ methodReadyReason }}</p>
-      <p v-else-if="methodReady" class="muted" style="color: var(--ok)">当前方式已就绪</p>
     </div>
 
     <div class="config-split">
       <div class="card config-split-main">
+        <div
+          class="default-remote-bar"
+          :title="'用于 fetch、分支图合并、MR 短名剥前缀、CLI 未传 --remote'"
+        >
+          <span class="default-remote-label">默认远程</span>
+          <template v-if="hasRepoRemotes">
+            <select
+              v-model="defaultRemote"
+              class="mono default-remote-select"
+              :disabled="busy || previewMode"
+              @change="onDefaultRemoteChange"
+            >
+              <option v-for="r in remoteList" :key="r.name" :value="r.name">
+                {{ r.name }}
+              </option>
+            </select>
+            <span
+              class="mono muted default-remote-url"
+              :title="selectedRemoteUrl"
+            >{{ selectedRemoteUrl || "—" }}</span>
+          </template>
+          <span v-else class="mr-warn default-remote-empty">
+            未打开仓库或无 remote，请先在顶部打开仓库路径
+          </span>
+        </div>
+
         <h3>MR 方式（四选一）</h3>
         <div
           v-for="opt in options"
@@ -560,47 +614,58 @@ const gitlabTitleStatus = computed(() => {
           </button>
         </div>
 
-        <div class="card" style="margin-top: 12px">
-          <h3>AI 选边（模型）</h3>
-          <p class="muted">
-            Cursor 的 <code>vscode.lm</code> 经常拿不到模型。可配置 OpenAI 兼容接口作为回退（官方
-            API / 代理 / 本地 Ollama 等）。优先用宿主模型；没有时自动用下面配置。
-          </p>
-          <label>
-            Base URL
-            <input
-              v-model="aiApiBaseUrl"
-              type="text"
-              :disabled="busy || previewMode"
-              placeholder="https://api.openai.com/v1"
-              @change="persistConfig"
-            />
-          </label>
-          <label>
-            API Key（本地 Ollama 可留空）
-            <input
-              v-model="aiApiKey"
-              type="password"
-              autocomplete="off"
-              :disabled="busy || previewMode"
-              placeholder="sk-… 或留空"
-              @change="persistConfig"
-            />
-          </label>
-          <label>
-            模型名
-            <input
-              v-model="aiModel"
-              type="text"
-              :disabled="busy || previewMode"
-              placeholder="gpt-4o-mini"
-              @change="persistConfig"
-            />
-          </label>
-          <p class="muted" style="margin: 0">
-            示例 Ollama：Base URL = <code>http://127.0.0.1:11434/v1</code>，模型 =
-            <code>qwen2.5-coder</code>，Key 留空。
-          </p>
+        <div class="ai-section">
+          <button
+            type="button"
+            class="ai-section-toggle"
+            :aria-expanded="aiSectionOpen"
+            @click="aiSectionOpen = !aiSectionOpen"
+          >
+            <span class="tree-caret">{{ aiSectionOpen ? "▾" : "▸" }}</span>
+            AI 选边（模型）
+            <span class="muted ai-section-hint">可选 · 默认折叠</span>
+          </button>
+          <div v-if="aiSectionOpen" class="ai-section-body">
+            <p class="muted">
+              Cursor 的 <code>vscode.lm</code> 经常拿不到模型。可配置 OpenAI 兼容接口作为回退（官方
+              API / 代理 / 本地 Ollama 等）。优先用宿主模型；没有时自动用下面配置。
+            </p>
+            <label>
+              Base URL
+              <input
+                v-model="aiApiBaseUrl"
+                type="text"
+                :disabled="busy || previewMode"
+                placeholder="https://api.openai.com/v1"
+                @change="persistConfig"
+              />
+            </label>
+            <label>
+              API Key（本地 Ollama 可留空）
+              <input
+                v-model="aiApiKey"
+                type="password"
+                autocomplete="off"
+                :disabled="busy || previewMode"
+                placeholder="sk-… 或留空"
+                @change="persistConfig"
+              />
+            </label>
+            <label>
+              模型名
+              <input
+                v-model="aiModel"
+                type="text"
+                :disabled="busy || previewMode"
+                placeholder="gpt-4o-mini"
+                @change="persistConfig"
+              />
+            </label>
+            <p class="muted" style="margin: 0">
+              示例 Ollama：Base URL = <code>http://127.0.0.1:11434/v1</code>，模型 =
+              <code>qwen2.5-coder</code>，Key 留空。
+            </p>
+          </div>
         </div>
       </div>
 

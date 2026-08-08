@@ -889,12 +889,18 @@ const resultLineStarts = computed(() => {
             :title="path"
             @click="activePath = path"
           >
-            <span class="mono path">{{ path.split("/").pop() }}</span>
-            <span class="count">{{ fileResolvedCount(path) }}</span>
-            <span class="resolve-file-actions" @click.stop>
+            <div class="resolve-file-main">
+              <span class="mono path">{{ path.split("/").pop() }}</span>
+              <span class="count">{{ fileResolvedCount(path) }}</span>
+            </div>
+            <div
+              v-if="path === activePath"
+              class="resolve-file-actions"
+              @click.stop
+            >
               <button
                 type="button"
-                class="btn tiny resolve-file-side"
+                class="btn secondary tiny resolve-file-side"
                 title="本文件全部冲突采用线上目标"
                 @click="acceptAll('left', path)"
               >
@@ -902,13 +908,13 @@ const resultLineStarts = computed(() => {
               </button>
               <button
                 type="button"
-                class="btn tiny resolve-file-side"
+                class="btn secondary tiny resolve-file-side"
                 title="本文件全部冲突采用我的分支"
                 @click="acceptAll('right', path)"
               >
                 我的
               </button>
-            </span>
+            </div>
           </li>
         </ul>
         <p v-else class="resolve-files-empty muted">无待手选冲突</p>
@@ -932,8 +938,10 @@ const resultLineStarts = computed(() => {
             :title="`${path}（无冲突，仅自动变更）`"
             @click="activePath = path"
           >
-            <span class="mono path">{{ path.split("/").pop() }}</span>
-            <span class="count">{{ fileResolvedCount(path) }}</span>
+            <div class="resolve-file-main">
+              <span class="mono path">{{ path.split("/").pop() }}</span>
+              <span class="count">{{ fileResolvedCount(path) }}</span>
+            </div>
           </li>
         </ul>
       </aside>
