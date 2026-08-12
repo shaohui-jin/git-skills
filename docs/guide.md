@@ -360,6 +360,11 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 ### 2.5 AI 选边
 
+
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.8adze84k4m.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.2a5t9hv4to.webp" style="height: 100px" />
+<img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.1e9bu1mzsj.webp" style="height: 100px" />
+
 **操作要点**
 
 1. 勾选规则：默认偏我的 / 偏线上（互斥）、新覆盖旧、可合并则合并；可填额外说明
