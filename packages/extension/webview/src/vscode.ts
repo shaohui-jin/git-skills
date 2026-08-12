@@ -96,7 +96,6 @@ export type WebviewRequest =
       }>;
     }
   | { type: "aiResolveCancelBridge" }
-  | { type: "aiResolveSubmitPaste"; text: string }
   | { type: "aiResolveCopyPrompt" };
 
 export interface VsCodeApi {

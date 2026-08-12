@@ -39,9 +39,11 @@ export async function buildConflictContent(
   theirsContent: string | null;
   baseContent: string | null;
 }> {
-  const oursContent = await showFile(cwd, intoSha, path);
-  const theirsContent = await showFile(cwd, fromSha, path);
-  const baseContent = await showFile(cwd, baseSha, path);
+  const [oursContent, theirsContent, baseContent] = await Promise.all([
+    showFile(cwd, intoSha, path),
+    showFile(cwd, fromSha, path),
+    showFile(cwd, baseSha, path),
+  ]);
 
   if (oursContent === null && theirsContent === null) {
     return {

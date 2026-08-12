@@ -7,7 +7,13 @@ export function branchNameForMr(ref: string, remotes: string[] = ["origin"]): st
     .trim()
     .replace(/^refs\/heads\//, "")
     .replace(/^refs\/remotes\/[^/]+\//, "");
-  for (const remote of remotes) {
+  // 长名优先：remote 名允许带 /，`a` 与 `a/b` 同时存在时应剥掉更长的那个
+  // （与 splitRemoteTipName 的匹配顺序保持一致）
+  const byLongest = [...remotes]
+    .map((r) => r.trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const remote of byLongest) {
     const prefix = `${remote}/`;
     if (s.startsWith(prefix)) {
       s = s.slice(prefix.length);

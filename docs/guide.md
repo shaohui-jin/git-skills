@@ -333,7 +333,7 @@ git-insight graph --no-fetch
 | 行级溯源 | `git blame -l -w -L<start>,<end> --line-porcelain <rev> -- <path>` |
 | （可选）关联 PR | `gh pr list --search <sha7> --state all --json number --limit 1`（`GH_PROMPT_DISABLED=1`，失败静默） |
 
-空 tree 常量：`4b825dc642cb6eb9a060e54bf8d0927f6fb5fb496`（不现场 `hash-object`）。  
+空 tree 常量：`4b825dc642cb6eb9a060e54bf8d69288fbee4904`（不现场 `hash-object`；见 `core/src/git/constants.ts`）。  
 前置：`git --version` ≥ 2.38（`merge-tree --write-tree`）。
 
 CLI：
@@ -374,7 +374,7 @@ git-insight conflict-blame --into <线上> --from <我的>
 |--------|------|------------|
 | 1 | 宿主 `vscode.lm` | Cursor / VS Code 能选出 Chat 模型 |
 | 2 | Git 配置「AI 选边（模型）」 | `vscode.lm` 不可用，且已配齐 OpenAI 兼容接口（见 §2.1） |
-| 3 | Cursor Chat 本地回传桥 | 前两步都不可用；打开 Chat，粘贴提示词后回传 JSON |
+| 3 | Cursor Chat 回传桥 | 前两步都不可用；打开 Chat（**须 Agent 模式**），粘贴提示词后回传 JSON |
 
 说明：
 
@@ -386,10 +386,14 @@ git-insight conflict-blame --into <线上> --from <我的>
 
 | 方式 | 说明 |
 |------|------|
-| A | Agent `curl` POST 到本机 `http://127.0.0.1:<port>/result` |
-| B | 把 JSON 贴回弹层「粘贴结果并应用」 |
+| A（首选） | Agent 把结果 JSON 写入临时目录里的 `result*.json`，扩展用 `fs.watch` + 800ms 轮询监听 |
+| B（兜底） | POST 到本机 `http://127.0.0.1:<port>/result/<secret>`；提示词按平台给 PowerShell 或 bash 写法 |
 
-若配置了 **MCP feedback** 等旁路：Agent 可能停在确认而不 curl——扩展**只认** HTTP 回传或粘贴，请用方式 B。临时 `conflicts` / `prompt` 文件在回传或取消后删除。
+只有这两条通道，都没走通就等于没交付；因此**必须用 Agent 模式**，普通 Ask 会话既不能写文件也不能跑终端。若配置了 **MCP feedback** 等旁路，Agent 可能停在确认上，需要催它继续写结果文件。
+
+Windows 注意：PowerShell 里 `curl` 是 `Invoke-WebRequest` 的别名，直接用会报 `CannotConvertArgumentTypeToMessage`；提示词已按平台分叉给 `Invoke-RestMethod`。
+
+单批等待上限 20 分钟。分批时**某批失败只把该批的块标成 `pending`**，其余批次已拿到的裁决会保留；只有用户主动取消才会中断整轮。临时 `conflicts` / `prompt` / `result` 文件在回传、超时或取消后连目录一起删除。
 
 **实际指令：** 本功能**不调用** `git` / `gh` / `glab`（只读预演结果 + 本地模型/HTTP）。
 

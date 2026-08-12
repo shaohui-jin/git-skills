@@ -60,7 +60,6 @@ const emit = defineEmits<{
   clearAiError: [];
   aiCopyPrompt: [];
   aiCancelBridge: [];
-  aiSubmitPaste: [text: string];
 }>();
 
 const activePath = ref("");
@@ -841,7 +840,6 @@ const resultLineStarts = computed(() => {
       @confirm="onAiConfirm"
       @copy-prompt="emit('aiCopyPrompt')"
       @cancel-bridge="emit('aiCancelBridge')"
-      @submit-paste="(t) => emit('aiSubmitPaste', t)"
     />
 
     <div class="resolve-layout">

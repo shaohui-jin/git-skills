@@ -1,10 +1,16 @@
+import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import type { AiBridgeSession } from "./aiResolveBridge.js";
+import { AiBridgeCancelledError, type AiBridgeSession } from "./aiResolveBridge.js";
 import { runAiResolve } from "./aiResolveLm.js";
 import { bundledCliPath, shellExecCommand } from "./cliBundle.js";
 import { handleWebviewRequest, resolveWorkspaceCwd } from "./coreBridge.js";
 import { loadUserConfig } from "./gitConfigStore.js";
 import type { HostMessage, WebviewRequest } from "./protocol.js";
+
+/** 打开面板时种入的分支/Tab，须等 webview 挂载后再发 */
+type SeedMessage =
+  | { type: "focusTab"; tab: string }
+  | { type: "seedPreview"; into?: string; from?: string; autoPreview?: boolean };
 
 export class GitInsightPanel {
   public static current: GitInsightPanel | undefined;
@@ -20,6 +26,8 @@ export class GitInsightPanel {
   /** 当前 Chat 回传桥会话（粘贴 / 取消） */
   private aiBridgeSession: AiBridgeSession | null = null;
   private lastAiPrompt = "";
+  /** 新建面板时暂存，收到 webview 的 ready 后再下发（否则会发给还没挂监听的页面） */
+  private pendingSeed: SeedMessage[] | null = null;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -100,29 +108,32 @@ export class GitInsightPanel {
     const cliStorageDir = context.globalStorageUri.fsPath;
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
-    const postSeed = (panel: GitInsightPanel): void => {
-      if (seed?.cwd?.trim()) {
-        panel.overrideCwd = seed.cwd.trim();
-      }
-      const tab = focusTab ?? (seed?.into || seed?.from ? "preview" : undefined);
-      if (tab) {
-        void panel.panel.webview.postMessage({ type: "focusTab", tab });
-      }
-      if (seed?.into || seed?.from) {
-        void panel.panel.webview.postMessage({
-          type: "seedPreview",
-          into: seed.into,
-          from: seed.from,
-          autoPreview: seed.autoPreview !== false,
-        });
-      }
-    };
+    const seedMessages: SeedMessage[] = [];
+    const tab = focusTab ?? (seed?.into || seed?.from ? "preview" : undefined);
+    if (tab) {
+      seedMessages.push({ type: "focusTab", tab });
+    }
+    if (seed?.into || seed?.from) {
+      seedMessages.push({
+        type: "seedPreview",
+        into: seed.into,
+        from: seed.from,
+        autoPreview: seed.autoPreview !== false,
+      });
+    }
 
     if (GitInsightPanel.current) {
-      GitInsightPanel.current.panel.reveal(column);
-      postSeed(GitInsightPanel.current);
+      const existing = GitInsightPanel.current;
+      existing.panel.reveal(column);
       if (seed?.cwd?.trim()) {
-        void GitInsightPanel.current.refreshWorkspaceAfterSeed();
+        existing.overrideCwd = seed.cwd.trim();
+      }
+      // webview 已挂载，直接下发
+      for (const msg of seedMessages) {
+        void existing.panel.webview.postMessage(msg);
+      }
+      if (seed?.cwd?.trim()) {
+        void existing.refreshWorkspaceAfterSeed();
       }
       return;
     }
@@ -138,20 +149,30 @@ export class GitInsightPanel {
       },
     );
 
-    GitInsightPanel.current = new GitInsightPanel(
+    const created = new GitInsightPanel(
       panel,
       extensionUri,
       cliStorageDir,
       context.globalState,
     );
-    setTimeout(() => {
-      if (GitInsightPanel.current) {
-        postSeed(GitInsightPanel.current);
-        if (seed?.cwd?.trim()) {
-          void GitInsightPanel.current.refreshWorkspaceAfterSeed();
-        }
-      }
-    }, 350);
+    GitInsightPanel.current = created;
+    // cwd 同步生效，webview 首次 ready 拿到的就是正确仓库
+    if (seed?.cwd?.trim()) {
+      created.overrideCwd = seed.cwd.trim();
+    }
+    created.pendingSeed = seedMessages.length > 0 ? seedMessages : null;
+  }
+
+  /** webview 挂载完成后补发种入消息 */
+  private async flushPendingSeed(): Promise<void> {
+    const pending = this.pendingSeed;
+    if (!pending) {
+      return;
+    }
+    this.pendingSeed = null;
+    for (const msg of pending) {
+      await this.post(msg);
+    }
   }
 
   /** seed 指定 cwd 后刷新工作区分支列表 */
@@ -184,17 +205,7 @@ export class GitInsightPanel {
     return resolveWorkspaceCwd(folder);
   }
 
-  private async post(
-    msg:
-      | HostMessage
-      | { type: "focusTab"; tab: string }
-      | {
-          type: "seedPreview";
-          into?: string;
-          from?: string;
-          autoPreview?: boolean;
-        },
-  ): Promise<void> {
+  private async post(msg: HostMessage | SeedMessage): Promise<void> {
     await this.panel.webview.postMessage(msg);
   }
 
@@ -211,7 +222,11 @@ export class GitInsightPanel {
 
     if (req.type === "openExternal") {
       try {
-        await vscode.env.openExternal(vscode.Uri.parse(req.url));
+        const uri = vscode.Uri.parse(req.url, true);
+        if (uri.scheme !== "http" && uri.scheme !== "https") {
+          throw new Error(`只允许打开 http/https 链接（收到 ${uri.scheme}）`);
+        }
+        await vscode.env.openExternal(uri);
       } catch (err) {
         await this.post({
           type: "error",
@@ -223,8 +238,17 @@ export class GitInsightPanel {
     }
 
     if (req.type === "cliAuthLogin") {
+      // 命令要进集成终端，参数只认这两个字面量，不接受 webview 传来的任意串
+      const kind = req.kind === "gh" || req.kind === "glab" ? req.kind : null;
+      if (!kind || (req.scope !== "system" && req.scope !== "bundled")) {
+        await this.post({
+          type: "error",
+          message: "不支持的 CLI 登录参数",
+          code: "BAD_CLI_LOGIN",
+        });
+        return;
+      }
       const cwd = (await this.getCwd()) ?? undefined;
-      const kind = req.kind;
       // PowerShell 下 `"path\to\gh.exe" auth login` 会把路径当字符串，必须用 &
       const cmd =
         req.scope === "bundled"
@@ -281,19 +305,6 @@ export class GitInsightPanel {
       this.aiBridgeSession?.cancel("用户取消了 AI 选边等待");
       this.aiBridgeSession = null;
       await this.post({ type: "busy", busy: false });
-      return;
-    }
-
-    if (req.type === "aiResolveSubmitPaste") {
-      if (!this.aiBridgeSession) {
-        await this.post({
-          type: "error",
-          message: "当前没有等待中的 AI 回传会话，请重新点「开始 AI 选边」",
-          code: "AI_NO_BRIDGE",
-        });
-        return;
-      }
-      this.aiBridgeSession.submitText(req.text ?? "");
       return;
     }
 
@@ -354,7 +365,7 @@ export class GitInsightPanel {
             onBridgeReady: async (info) => {
               this.lastAiPrompt = info.prompt;
               this.log(
-                `Chat 桥就绪 port=${info.port} batch=${info.batchIndex ?? 1}/${info.batchTotal ?? 1} conflicts=${info.conflictsFile} copied=${info.copied} opened=${info.openedChat} pasted=${info.pasted} submitted=${info.submitted}`,
+                `Chat 桥就绪 port=${info.port} batch=${info.batchIndex ?? 1}/${info.batchTotal ?? 1} conflicts=${info.conflictsFile} result=${info.resultFile} copied=${info.copied} opened=${info.openedChat} pasted=${info.pasted} submitted=${info.submitted}`,
               );
               await this.post({
                 type: "aiResolveBridgeReady",
@@ -363,6 +374,7 @@ export class GitInsightPanel {
                 prompt: info.prompt,
                 promptFile: info.promptFile,
                 conflictsFile: info.conflictsFile,
+                resultFile: info.resultFile,
                 openedChat: info.openedChat,
                 copied: info.copied,
                 pasted: info.pasted,
@@ -406,7 +418,7 @@ export class GitInsightPanel {
           message,
           code: "AI_RESOLVE",
         });
-        if (!/取消|cancel/i.test(message)) {
+        if (!(err instanceof AiBridgeCancelledError)) {
           void vscode.window.showErrorMessage(`Git Insight · AI 选边失败：${message}`);
           this.output.show(true);
         }
@@ -544,6 +556,9 @@ export class GitInsightPanel {
           }
         }
       }
+      if (req.type === "ready") {
+        await this.flushPendingSeed();
+      }
     } finally {
       if (label) {
         await this.post({ type: "busy", busy: false, percent: 100 });
@@ -587,10 +602,5 @@ export class GitInsightPanel {
 }
 
 function getNonce(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let id = "";
-  for (let i = 0; i < 32; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return id;
+  return randomBytes(24).toString("base64");
 }

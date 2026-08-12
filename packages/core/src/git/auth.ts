@@ -25,7 +25,10 @@ export function gitNonInteractiveEnv(
     VSCODE_GIT_ASKPASS_NODE: "",
     VSCODE_GIT_ASKPASS_MAIN: "",
     VSCODE_GIT_IPC_HANDLE: "",
+    // 冲突文件列表、"Already up to date" 等都靠英文输出做正则匹配；
+    // LC_ALL 优先级高于 LANG，只设 LANG 会被用户环境压过去导致解析静默失效
     LANG: "C",
+    LC_ALL: "C",
   };
 }
 
@@ -40,6 +43,7 @@ export function gitInteractiveEnv(
     GIT_TERMINAL_PROMPT: "1",
     GCM_INTERACTIVE: "always",
     LANG: "C",
+    LC_ALL: "C",
   };
   // 若上层曾清空 askpass，恢复为未设置，让 Cursor 默认注入生效
   if (env.GIT_ASKPASS === "") {

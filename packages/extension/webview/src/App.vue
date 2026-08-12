@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isSameBranchForMr as coreIsSameBranchForMr } from "@git-insight/core/merge/branchName";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";
@@ -28,31 +29,13 @@ function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
-/** 与 core branchNameForMr 对齐：去掉 refs / 各 remote 前缀 */
-function branchNameForMr(ref: string): string {
-  let s = ref
-    .trim()
-    .replace(/^refs\/heads\//, "")
-    .replace(/^refs\/remotes\/[^/]+\//, "");
-  const remotes = [...(cliStatus.value?.remotes ?? [])]
-    .map((r) => r.name)
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length);
-  for (const remote of remotes) {
-    const prefix = `${remote}/`;
-    if (s.startsWith(prefix)) {
-      s = s.slice(prefix.length);
-      break;
-    }
-  }
-  return s;
-}
-
-/** 规范化后同名（master ↔ origin/master）：不走本工具，自行 push/pull */
+/**
+ * 规范化后同名（master ↔ origin/master）：不走本工具，自行 push/pull。
+ * 判定逻辑与宿主共用 core 的实现，避免两侧各写一份后悄悄漂移。
+ */
 function isSameBranchForMr(intoRef: string, fromRef: string): boolean {
-  const a = branchNameForMr(intoRef);
-  const b = branchNameForMr(fromRef);
-  return !!a && !!b && a === b;
+  const remotes = (cliStatus.value?.remotes ?? []).map((r) => r.name).filter(Boolean);
+  return coreIsSameBranchForMr(intoRef, fromRef, remotes);
 }
 
 function preferRemoteInto(list: BranchOption[]): string {
@@ -438,6 +421,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
       prompt: msg.prompt,
       promptFile: msg.promptFile,
       conflictsFile: msg.conflictsFile,
+      resultFile: msg.resultFile,
       openedChat: msg.openedChat,
       copied: msg.copied,
       pasted: msg.pasted,
@@ -1226,9 +1210,6 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
                 vscode.postMessage({ type: 'aiResolveCancelBridge' });
                 aiBusy = false;
                 aiBridge = null;
-              "
-              @ai-submit-paste="
-                (t) => vscode.postMessage({ type: 'aiResolveSubmitPaste', text: t })
               "
               @clear-ai-error="
                 aiError = null;

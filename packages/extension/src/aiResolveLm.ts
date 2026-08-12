@@ -2,10 +2,12 @@ import * as vscode from "vscode";
 import {
   mapBatchProgress,
   mergeBatchedResponses,
+  pendingResultsForBatch,
   splitAiResolveBatches,
   type AiBatchMeta,
 } from "./aiResolveBatch.js";
 import {
+  AiBridgeCancelledError,
   parseBridgeResult,
   startAiResolveBridge,
   tryOpenCursorChat,
@@ -24,12 +26,16 @@ import {
   type OpenAiCompatOptions,
 } from "./aiResolvePrompt.js";
 
+/** 单批等 Chat 回传的上限；一批最多 25 个 hunk / 8 万字符，短了大批次必超时 */
+const BRIDGE_TIMEOUT_MS = 20 * 60 * 1000;
+
 export type AiBridgeReadyInfo = {
   port: number;
   callbackUrl: string;
   prompt: string;
   promptFile: string;
   conflictsFile: string;
+  resultFile: string;
   openedChat: boolean;
   copied: boolean;
   pasted: boolean;
@@ -145,7 +151,7 @@ async function runAiResolveBridgeOnce(
     `${batchHint}启动本地回传端口 + Cursor Chat…`,
     18,
   );
-  const session = await startAiResolveBridge(req, 5 * 60 * 1000, batch);
+  const session = await startAiResolveBridge(req, BRIDGE_TIMEOUT_MS, batch);
   options.onBridgeSession?.(session);
 
   let copied = false;
@@ -163,6 +169,7 @@ async function runAiResolveBridgeOnce(
     prompt: session.prompt,
     promptFile: session.promptFile,
     conflictsFile: session.conflictsFile,
+    resultFile: session.resultFile,
     openedChat: chat.opened,
     copied,
     pasted: chat.pasted,
@@ -280,8 +287,20 @@ export async function runAiResolve(
       },
     };
 
-    const part = await runAiResolveOnce(batch, batchOptions, meta);
-    parts.push(part);
+    try {
+      parts.push(await runAiResolveOnce(batch, batchOptions, meta));
+    } catch (err) {
+      // 用户主动取消要停整轮；其余失败只让本批降级，已裁决的批次不能陪葬
+      if (err instanceof AiBridgeCancelledError) {
+        throw err;
+      }
+      const why = err instanceof Error ? err.message : String(err);
+      const label = `第 ${meta.batchIndex}/${meta.batchTotal} 批失败：${why}`;
+      parts.push({
+        hunks: pendingResultsForBatch(batch, label),
+        messages: [label],
+      });
+    }
   }
 
   await options.onProgress?.("合并分批结果…", 95);

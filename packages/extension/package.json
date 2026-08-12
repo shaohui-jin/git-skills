@@ -2,7 +2,7 @@
   "name": "git-insight",
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, one-click resolve & push, and create MR/PR — powered by @git-insight/core",
-  "version": "0.1.17",
+  "version": "0.2.0",
   "publisher": "jinshaohui",
   "license": "MIT",
   "repository": {

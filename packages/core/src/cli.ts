@@ -30,7 +30,7 @@ function usage(): string {
 Usage (read-only):
   git-insight graph [--cwd <path>] [--max <n>] [--into <branch>] [--from <branch>] [--no-fetch]
   git-insight fetch [--cwd <path>] [--remote <name>]
-  git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd <path>] [--no-fetch]
+  git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd <path>] [--no-fetch] [--pr]
 
 Usage (write / MR — 需确认后由 Agent 调用):
   git-insight apply-resolve --into <线上> --from <我的> --stash <file.json> [--cwd] [--no-push]
@@ -40,6 +40,7 @@ Usage (write / MR — 需确认后由 Agent 调用):
 
 Notes:
   - preview-merge: --into=线上合入目标（建议远程），--from=我的分支
+  - preview-merge --pr: 额外为溯源 commit 关联 PR 号（每个 commit 一次 gh 调用，慢，默认关闭）
   - apply-resolve: stash JSON 为 { files: [{ path, resolvedContent }] }；干净合并可用 { "files": [] }
   - create-mr --method: cli（本机 gh/glab）| token（--token 或环境 GIT_INSIGHT_GITHUB_TOKEN / GIT_INSIGHT_GITLAB_TOKEN）
   - open-ui: 生成并尝试打开扩展预演面板（需已安装 Git Insight）
@@ -126,6 +127,7 @@ async function runMergeRehearsal(command: string, args: string[]): Promise<void>
     from,
     fetch: !hasSwitch(args, "--no-fetch"),
     remote: await resolvedRemote(args, cwd),
+    lookupPr: hasSwitch(args, "--pr"),
   });
   printJson({
     ok: true,

@@ -145,6 +145,11 @@ export interface MergeOptions {
   authProvider?: "github" | "gitlab" | "unknown";
   /** Max files to run blame on; default 20. */
   maxBlameFiles?: number;
+  /**
+   * 是否为溯源到的 commit 关联 PR 号（每个 commit 一次 `gh` 网络调用）。
+   * 默认关闭：文件多时它会主导整个预演耗时。
+   */
+  lookupPr?: boolean;
   onProgress?: ProgressReporter;
 }
 

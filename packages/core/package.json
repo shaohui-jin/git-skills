@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./merge/branchName": {
+      "types": "./dist/merge/branchName.d.ts",
+      "import": "./dist/merge/branchName.js"
     }
   },
   "files": [

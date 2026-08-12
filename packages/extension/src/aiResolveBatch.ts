@@ -75,6 +75,19 @@ export function splitAiResolveBatches(
   return batches;
 }
 
+/** 某批整体失败时把它的 hunk 全标成 pending，保住其它批次已拿到的裁决 */
+export function pendingResultsForBatch(
+  batch: AiResolveRequestPayload,
+  reason: string,
+): AiResolveHunkResult[] {
+  return batch.hunks.map((h) => ({
+    id: inputLocalId(h),
+    path: h.path,
+    choice: "pending" as const,
+    reason,
+  }));
+}
+
 /** 合并多批结果；缺漏的输入 hunk 补 pending */
 export function mergeBatchedHunkResults(
   parts: AiResolveHunkResult[],

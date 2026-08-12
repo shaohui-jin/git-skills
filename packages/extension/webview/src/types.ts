@@ -226,6 +226,7 @@ export type HostMessage =
       prompt: string;
       promptFile: string;
       conflictsFile: string;
+      resultFile: string;
       openedChat: boolean;
       copied: boolean;
       pasted?: boolean;

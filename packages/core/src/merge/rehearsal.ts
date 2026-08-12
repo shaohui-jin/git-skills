@@ -1,9 +1,19 @@
+import { EMPTY_TREE_SHA } from "../git/constants.js";
 import { ensureRev, resolveRepoRoot } from "../git/runner.js";
-import type { ConflictBlameResult, ConflictHunk, MergeOptions } from "../types.js";
-import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
+import type {
+  ConflictBlameResult,
+  ConflictFile,
+  ConflictHunk,
+  MergeOptions,
+} from "../types.js";
+import { mapProgress, reportProgress } from "../progress.js";
+import { mapLimit } from "../util/concurrency.js";
 import { conflictBlame } from "./blame.js";
 import { buildConflictContent } from "./conflictContent.js";
 import { previewMerge } from "./preview.js";
+
+/** 每个文件三次 git show + 一次 merge-file，几路并行即可 */
+const FILE_CONCURRENCY = 4;
 
 /**
  * 合并预演：冲突检测 + 冲突原文 + 来源溯源（不改工作区）。
@@ -34,30 +44,39 @@ export async function rehearseMerge(options: MergeOptions): Promise<ConflictBlam
 
   const maxFiles = options.maxBlameFiles ?? 20;
   const toLoad = withBlame.conflictFiles.slice(0, maxFiles);
-  const conflictFiles = [];
   await reportProgress(onProgress, 58, `生成冲突正文（0/${toLoad.length}）…`);
 
-  for (let i = 0; i < toLoad.length; i++) {
-    const file = toLoad[i]!;
-    const fromPct = 58 + (40 * i) / Math.max(1, toLoad.length);
-    const toPct = 58 + (40 * (i + 1)) / Math.max(1, toLoad.length);
-    const content = await withSoftProgress(
-      onProgress,
-      fromPct,
-      toPct,
-      `生成冲突正文（${i + 1}/${toLoad.length}）：${file.path}`,
-      () => buildConflictContent(repoRoot, base, intoSha, fromSha, file.path),
-    );
-    const hunks: ConflictHunk[] = withBlame.blamed.filter((h) => h.path === file.path);
-    conflictFiles.push({
-      ...file,
-      hunks,
-      conflictContent: content.conflictContent,
-      oursContent: content.oursContent,
-      theirsContent: content.theirsContent,
-      baseContent: content.baseContent,
-    });
-  }
+  let finished = 0;
+  const conflictFiles: ConflictFile[] = await mapLimit(
+    toLoad,
+    FILE_CONCURRENCY,
+    async (file) => {
+      const content = await buildConflictContent(
+        repoRoot,
+        base,
+        intoSha,
+        fromSha,
+        file.path,
+      );
+      finished += 1;
+      await mapProgress(
+        onProgress,
+        58,
+        98,
+        finished / toLoad.length,
+        `生成冲突正文（${finished}/${toLoad.length}）：${file.path}`,
+      );
+      const hunks: ConflictHunk[] = withBlame.blamed.filter((h) => h.path === file.path);
+      return {
+        ...file,
+        hunks,
+        conflictContent: content.conflictContent,
+        oursContent: content.oursContent,
+        theirsContent: content.theirsContent,
+        baseContent: content.baseContent,
+      };
+    },
+  );
 
   for (const file of withBlame.conflictFiles.slice(maxFiles)) {
     conflictFiles.push({
@@ -73,9 +92,6 @@ export async function rehearseMerge(options: MergeOptions): Promise<ConflictBlam
     conflictFiles,
   };
 }
-
-/** git hash-object -t tree --stdin </dev/null */
-const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d6927f6fb5fb496";
 
 /** Lightweight preview only (no content/blame) — kept for internal use. */
 export { previewMerge };

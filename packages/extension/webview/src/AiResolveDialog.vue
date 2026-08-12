@@ -11,6 +11,7 @@ export interface AiBridgeView {
   prompt: string;
   promptFile: string;
   conflictsFile?: string;
+  resultFile?: string;
   openedChat: boolean;
   copied: boolean;
   pasted?: boolean;
@@ -33,15 +34,14 @@ const emit = defineEmits<{
   confirm: [payload: { rules: AiResolveRuleId[]; extraNotes: string }];
   copyPrompt: [];
   cancelBridge: [];
-  submitPaste: [text: string];
 }>();
 
 const selected = ref<AiResolveRuleId[]>(["preferMine", "mergeWhenPossible"]);
 const extraNotes = ref("");
 const copiedErr = ref(false);
-const pasteText = ref("");
 const copiedPromptLocal = ref(false);
 const copiedUrlLocal = ref(false);
+const copiedResultLocal = ref(false);
 const showOps = ref(false);
 
 watch(
@@ -51,9 +51,9 @@ watch(
       selected.value = ["preferMine", "mergeWhenPossible"];
       extraNotes.value = "";
       copiedErr.value = false;
-      pasteText.value = "";
       copiedPromptLocal.value = false;
       copiedUrlLocal.value = false;
+      copiedResultLocal.value = false;
       showOps.value = false;
     }
   },
@@ -149,6 +149,10 @@ async function copyCallbackUrl(): Promise<void> {
   copiedUrlLocal.value = await copyText(props.bridge?.callbackUrl ?? "");
 }
 
+async function copyResultFile(): Promise<void> {
+  copiedResultLocal.value = await copyText(props.bridge?.resultFile ?? "");
+}
+
 function onCopyPrompt(): void {
   copiedPromptLocal.value = true;
   emit("copyPrompt");
@@ -176,14 +180,6 @@ const autoStatus = computed(() => {
   }
   return "自动唤起未完成；请用下方按钮复制后手动操作。";
 });
-
-function onSubmitPaste(): void {
-  const t = pasteText.value.trim();
-  if (!t) {
-    return;
-  }
-  emit("submitPaste", t);
-}
 </script>
 
 <template>
@@ -196,8 +192,8 @@ function onSubmitPaste(): void {
         </button>
       </div>
       <p class="muted">
-        优先走全流程：复制提示词 → 打开 Cursor Chat/Agent → 粘贴（尽量自动发送）→ 本地端口收结果。
-        任一环节失败时，用右侧「复制」按钮或「异常操作说明」手动兜底。
+        全流程：复制提示词 → 打开 Cursor Chat/Agent → 粘贴（尽量自动发送）→ Agent 把结果写回文件。
+        需要 Agent 模式；任一环节失败时，用右侧「复制」按钮或「异常操作说明」手动兜底。
       </p>
       <ul class="ai-rule-list">
         <li v-for="r in AI_RESOLVE_RULES" :key="r.id">
@@ -247,8 +243,11 @@ function onSubmitPaste(): void {
           自动分批：第 {{ bridge.batchIndex }}/{{ bridge.batchTotal }} 批（本批完成后会继续下一批）
         </p>
         <p class="muted" style="margin: 0">{{ autoStatus }}</p>
+        <p v-if="bridge.resultFile" class="muted" style="margin: 6px 0 0">
+          结果文件（Agent 写这里即完成）：<code>{{ bridge.resultFile }}</code>
+        </p>
         <p class="muted" style="margin: 6px 0 0">
-          监听：<code>{{ bridge.callbackUrl }}</code>
+          备用端口：<code>{{ bridge.callbackUrl }}</code>
         </p>
         <p v-if="bridge.conflictsFile" class="muted" style="margin: 6px 0 0">
           冲突数据文件：<code>{{ bridge.conflictsFile }}</code>
@@ -256,6 +255,14 @@ function onSubmitPaste(): void {
         <div class="ai-error-actions" style="margin-top: 8px">
           <button type="button" class="btn secondary tiny" @click="onCopyPrompt">
             {{ copiedPromptLocal || bridge.copied ? "已复制提示词" : "复制提示词" }}
+          </button>
+          <button
+            v-if="bridge.resultFile"
+            type="button"
+            class="btn secondary tiny"
+            @click="copyResultFile"
+          >
+            {{ copiedResultLocal ? "已复制结果文件路径" : "复制结果文件路径" }}
           </button>
           <button type="button" class="btn secondary tiny" @click="copyCallbackUrl">
             {{ copiedUrlLocal ? "已复制回调 URL" : "复制回调 URL" }}
@@ -268,36 +275,15 @@ function onSubmitPaste(): void {
           </button>
         </div>
         <ol v-if="showOps" class="config-steps" style="margin: 8px 0 0; padding-left: 18px">
-          <li>若 Chat 未打开：手动打开 Cursor Chat / Agent（可用当前模型）。</li>
+          <li>若 Chat 未打开：手动打开 Cursor Chat，切到 Agent 模式（要能读写文件）。</li>
           <li>点「复制提示词」→ 在 Chat 输入框 Ctrl+V → 发送。</li>
-          <li>Agent 模式：先 Read 冲突数据 JSON，再 curl POST 到回调 URL（必做）。</li>
-          <li>
-            若启用了 MCP feedback 等旁路工具：Agent 可能停在确认而不 curl——把最终 JSON
-            复制到下方「粘贴结果并应用」即可。
-          </li>
-          <li>普通 Chat：把模型输出的 JSON 贴到下方 →「粘贴结果并应用」。</li>
+          <li>Agent 先 Read 冲突数据 JSON，裁决后把结果 JSON 写入上面的结果文件即完成。</li>
+          <li>Agent 若停在 MCP feedback 等确认工具上：催它继续写结果文件，确认本身不算交付。</li>
           <li>仍无回传：输出面板选「Git Insight」看日志，或 Reload Window 后重试。</li>
         </ol>
         <p class="muted" style="margin: 8px 0 0">
-          提示：有 MCP feedback 时优先用下方粘贴兜底，扩展只认 HTTP 回传或粘贴。
+          扩展只认两条通道：Agent 写结果文件，或 POST 到备用端口。普通 Ask 会话两条都做不到，请用 Agent 模式。
         </p>
-        <label style="margin-top: 8px">
-          粘贴模型 JSON 结果（兜底）
-          <textarea
-            v-model="pasteText"
-            rows="4"
-            placeholder='{"hunks":[{"id":"…","path":"…","choice":"theirs","reason":"…"}]}'
-          />
-        </label>
-        <button
-          type="button"
-          class="btn"
-          style="align-self: flex-start"
-          :disabled="!pasteText.trim()"
-          @click="onSubmitPaste"
-        >
-          粘贴结果并应用
-        </button>
       </div>
 
       <div v-if="error && !busy" class="ai-error-box" role="alert">
@@ -316,8 +302,8 @@ function onSubmitPaste(): void {
         </div>
         <ol v-if="showOps" class="config-steps" style="margin: 8px 0 0; padding-left: 18px">
           <li>Reload Window 后重试「开始 AI 选边」。</li>
-          <li>手动打开 Chat，粘贴提示词并发送。</li>
-          <li>把模型返回的 JSON 贴回弹层「粘贴结果并应用」。</li>
+          <li>手动打开 Chat（Agent 模式），粘贴提示词并发送。</li>
+          <li>分批时某批失败只会把该批标成待定，其余批次的裁决仍然保留。</li>
           <li>输出面板选「Git Insight」查看宿主日志。</li>
         </ol>
       </div>

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   gitAuthConfigArgs,
   gitInteractiveEnv,
@@ -62,7 +63,10 @@ export async function runGit(
       },
     });
 
-    let stdout = "";
+    // 逐 chunk 调 toString 会把跨 chunk 边界的多字节字符切坏（中文提交信息、
+    // 中文文件内容都会变成 U+FFFD），所以 stdout 攒完再解码，stderr 用增量解码器。
+    const stdoutChunks: Buffer[] = [];
+    const stderrDecoder = new StringDecoder("utf8");
     let stderr = "";
     let stderrBuf = "";
 
@@ -82,10 +86,13 @@ export async function runGit(
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8");
+      const text = stderrDecoder.write(chunk);
+      if (!text) {
+        return;
+      }
       stderr += text;
       if (options?.onStderrLine) {
         flushStderrLines(text);
@@ -100,9 +107,17 @@ export async function runGit(
       );
     });
     child.on("close", (code) => {
+      const tail = stderrDecoder.end();
+      if (tail) {
+        stderr += tail;
+        if (options?.onStderrLine) {
+          flushStderrLines(tail);
+        }
+      }
       if (options?.onStderrLine && stderrBuf.trim()) {
         flushStderrLines("", true);
       }
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const exit = code ?? 1;
       if (exit !== 0 && !options?.allowFail) {
         reject(

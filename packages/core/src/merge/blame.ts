@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { EMPTY_TREE_SHA } from "../git/constants.js";
 import {
   ensureRev,
   resolveRepoRoot,
@@ -12,7 +13,12 @@ import type {
   MergeOptions,
 } from "../types.js";
 import { mapProgress, reportProgress } from "../progress.js";
+import { mapLimit } from "../util/concurrency.js";
 import { previewMerge } from "./preview.js";
+
+/** 每个文件要跑 cat-file / diff / blame，几路并行足够压掉串行等待又不至于压垮机器 */
+const FILE_CONCURRENCY = 4;
+const HUNK_CONCURRENCY = 4;
 
 async function fileExistsAt(repoRoot: string, rev: string, path: string): Promise<boolean> {
   const result = await runGit(repoRoot, ["cat-file", "-e", `${rev}:${path}`], {
@@ -126,40 +132,94 @@ async function blameRange(
   return [...bySha.values()];
 }
 
-async function lookupPrForCommit(cwd: string, shaShort: string): Promise<string | undefined> {
+const PR_LOOKUP_TIMEOUT_MS = 4_000;
+
+interface PrLookup {
+  /** false = gh 不可用 / 未登录 / 非 GitHub 仓库，调用方应停止后续尝试 */
+  ok: boolean;
+  pr?: string;
+}
+
+async function lookupPrForCommit(cwd: string, shaShort: string): Promise<PrLookup> {
   return new Promise((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    let settled = false;
+    const finish = (result: PrLookup): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+
     const child = spawn(
       "gh",
       ["pr", "list", "--search", shaShort, "--state", "all", "--json", "number", "--limit", "1"],
       { cwd, windowsHide: true, env: { ...process.env, GH_PROMPT_DISABLED: "1" } },
     );
+    timer = setTimeout(() => {
+      child.kill();
+      finish({ ok: false });
+    }, PR_LOOKUP_TIMEOUT_MS);
+
     let stdout = "";
     child.stdout.on("data", (b: Buffer) => {
       stdout += b.toString("utf8");
     });
-    child.on("error", () => resolve(undefined));
+    child.on("error", () => finish({ ok: false }));
     child.on("close", (code) => {
       if (code !== 0) {
-        resolve(undefined);
+        finish({ ok: false });
         return;
       }
       try {
         const arr = JSON.parse(stdout) as Array<{ number: number }>;
-        resolve(arr[0] ? `#${arr[0].number}` : undefined);
+        finish({ ok: true, pr: arr[0] ? `#${arr[0].number}` : undefined });
       } catch {
-        resolve(undefined);
+        finish({ ok: false });
       }
     });
   });
 }
 
-async function attachOptionalPr(repoRoot: string, commits: CommitRef[]): Promise<CommitRef[]> {
-  const out: CommitRef[] = [];
-  for (const c of commits) {
-    const pr = await lookupPrForCommit(repoRoot, c.sha.slice(0, 7));
-    out.push(pr ? { ...c, pr } : c);
-  }
-  return out;
+type AttachPr = (commits: CommitRef[]) => Promise<CommitRef[]>;
+
+/**
+ * 关联 PR 要为每个 commit 跑一次 `gh`（网络调用），冲突文件多时是预演里最慢的一环。
+ * 因此默认关闭；开启后单次预演内按 sha 去重，并在首次失败后熔断
+ * （GitLab 仓库、没装 gh、未登录都会立刻停手，而不是每个 commit 白等一遍）。
+ */
+function createPrResolver(cwd: string, enabled: boolean): AttachPr {
+  const cache = new Map<string, Promise<PrLookup>>();
+  let broken = false;
+
+  return async function attachPr(commits: CommitRef[]): Promise<CommitRef[]> {
+    if (!enabled || broken || commits.length === 0) {
+      return commits;
+    }
+    return Promise.all(
+      commits.map(async (c) => {
+        if (broken) {
+          return c;
+        }
+        const key = c.sha.slice(0, 7);
+        let pending = cache.get(key);
+        if (!pending) {
+          pending = lookupPrForCommit(cwd, key);
+          cache.set(key, pending);
+        }
+        const result = await pending;
+        if (!result.ok) {
+          broken = true;
+          return c;
+        }
+        return result.pr ? { ...c, pr: result.pr } : c;
+      }),
+    );
+  };
 }
 
 async function blameFile(
@@ -168,15 +228,21 @@ async function blameFile(
   fromSha: string,
   base: string,
   path: string,
+  attachPr: AttachPr,
 ): Promise<ConflictHunk[]> {
-  const intoExists = await fileExistsAt(repoRoot, intoSha, path);
-  const fromExists = await fileExistsAt(repoRoot, fromSha, path);
+  const [intoExists, fromExists] = await Promise.all([
+    fileExistsAt(repoRoot, intoSha, path),
+    fileExistsAt(repoRoot, fromSha, path),
+  ]);
   if (!intoExists && !fromExists) {
     return [];
   }
 
-  const oursRanges = intoExists ? await diffRanges(repoRoot, base, intoSha, path) : [];
-  const theirsRanges = fromExists ? await diffRanges(repoRoot, base, fromSha, path) : [];
+  const noRanges = async (): Promise<Array<[number, number]>> => [];
+  const [oursRanges, theirsRanges] = await Promise.all([
+    intoExists ? diffRanges(repoRoot, base, intoSha, path) : noRanges(),
+    fromExists ? diffRanges(repoRoot, base, fromSha, path) : noRanges(),
+  ]);
 
   const ours =
     oursRanges.length > 0 ? oursRanges : intoExists ? ([[1, 1]] as Array<[number, number]>) : [];
@@ -188,38 +254,34 @@ async function blameFile(
         : [];
 
   const max = Math.max(ours.length, theirs.length, 1);
-  const hunks: ConflictHunk[] = [];
 
-  for (let i = 0; i < max; i++) {
+  const sideCommits = async (
+    exists: boolean,
+    range: [number, number],
+    rev: string,
+  ): Promise<CommitRef[]> => {
+    if (!exists || range[0] <= 0) {
+      return [];
+    }
+    return attachPr(await blameRange(repoRoot, rev, path, range));
+  };
+
+  const indexes = Array.from({ length: max }, (_, i) => i);
+  return mapLimit(indexes, HUNK_CONCURRENCY, async (i) => {
     const oursRange = ours[i] ?? ours[0] ?? ([0, 0] as [number, number]);
     const theirsRange = theirs[i] ?? theirs[0] ?? ([0, 0] as [number, number]);
-
-    let oursCommits: CommitRef[] = [];
-    let theirsCommits: CommitRef[] = [];
-
-    if (intoExists && oursRange[0] > 0) {
-      oursCommits = await attachOptionalPr(
-        repoRoot,
-        await blameRange(repoRoot, intoSha, path, oursRange),
-      );
-    }
-    if (fromExists && theirsRange[0] > 0) {
-      theirsCommits = await attachOptionalPr(
-        repoRoot,
-        await blameRange(repoRoot, fromSha, path, theirsRange),
-      );
-    }
-
-    hunks.push({
+    const [oursCommits, theirsCommits] = await Promise.all([
+      sideCommits(intoExists, oursRange, intoSha),
+      sideCommits(fromExists, theirsRange, fromSha),
+    ]);
+    return {
       path,
       oursRange,
       theirsRange,
       oursCommits,
       theirsCommits,
-    });
-  }
-
-  return hunks;
+    };
+  });
 }
 
 /**
@@ -248,7 +310,7 @@ export async function conflictBlame(options: MergeOptions): Promise<ConflictBlam
   const base =
     preview.mergeBase ||
     (await tryMergeBase(repoRoot, intoSha, fromSha)) ||
-    "4b825dc642cb6eb9a060e54bf8d0927f6fb5fb496";
+    EMPTY_TREE_SHA;
 
   const maxFiles = options.maxBlameFiles ?? 20;
   const paths = preview.conflictFiles
@@ -257,19 +319,21 @@ export async function conflictBlame(options: MergeOptions): Promise<ConflictBlam
     .slice(0, maxFiles);
 
   await reportProgress(onProgress, 48, `溯源冲突文件（0/${paths.length}）…`);
-  const blamed: ConflictHunk[] = [];
-  for (let i = 0; i < paths.length; i++) {
-    const path = paths[i]!;
-    const hunks = await blameFile(repoRoot, intoSha, fromSha, base, path);
-    blamed.push(...hunks);
+  const attachPr = createPrResolver(repoRoot, options.lookupPr === true);
+  let finished = 0;
+  const perFile = await mapLimit(paths, FILE_CONCURRENCY, async (path) => {
+    const hunks = await blameFile(repoRoot, intoSha, fromSha, base, path, attachPr);
+    finished += 1;
     await mapProgress(
       onProgress,
       48,
       100,
-      paths.length === 0 ? 1 : (i + 1) / paths.length,
-      `溯源冲突文件（${i + 1}/${paths.length}）：${path}`,
+      finished / paths.length,
+      `溯源冲突文件（${finished}/${paths.length}）：${path}`,
     );
-  }
+    return hunks;
+  });
+  const blamed: ConflictHunk[] = perFile.flat();
 
   await reportProgress(onProgress, 100, "溯源完成");
   return {
