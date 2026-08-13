@@ -14,6 +14,7 @@ import type {
 import type { AiBridgeView } from "./AiResolveDialog.vue";
 import { normalizeBranches, type BranchOption } from "./graph/branchTree";
 import { overviewReport, pathReport } from "./graph/branchPathReport";
+import { applyTheme, initTheme } from "./theme";
 import type {
   BranchGraph,
   CliStatusPayload,
@@ -351,6 +352,10 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     return;
   }
 
+  if (msg.type === "theme") {
+    applyTheme(msg.theme);
+    return;
+  }
   if (msg.type === "focusTab") {
     tab.value =
       msg.tab === "preview" ? "preview" : msg.tab === "config" ? "config" : "graph";
@@ -709,6 +714,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
 }
 
 onMounted(() => {
+  initTheme();
   window.addEventListener("message", onHostMessage as EventListener);
   vscode.postMessage({ type: "ready" });
 });

@@ -1025,25 +1025,26 @@ const resultLineStarts = computed(() => {
 
           <!-- WebStorm：左 | gutter | 结果 | gutter | 右 -->
           <div class="merge-ws">
-            <header class="merge-ws-heads">
-              <div class="merge-ws-head merge-ws-head--ours">
-                线上（目标）{{ into }}
-              </div>
-              <div class="merge-ws-gutter-head" />
-              <div class="merge-ws-head merge-ws-head--result">
-                结果 [{{ activeFile.path.split("/").pop() }}]
-              </div>
-              <div class="merge-ws-gutter-head" />
-              <div class="merge-ws-head merge-ws-head--theirs">
-                我的分支 {{ from }}
-              </div>
-            </header>
-
             <div
               ref="scrollRootRef"
               class="merge-ws-body"
               @scroll="onMergeScroll"
             >
+              <!-- 表头放在滚动容器内并 sticky：否则滚动条宽度会让它和下面的列错位 -->
+              <header class="merge-ws-heads">
+                <div class="merge-ws-head merge-ws-head--ours">
+                  线上（目标）{{ into }}
+                </div>
+                <div class="merge-ws-gutter-head" />
+                <div class="merge-ws-head merge-ws-head--result">
+                  结果 [{{ activeFile.path.split("/").pop() }}]
+                </div>
+                <div class="merge-ws-gutter-head" />
+                <div class="merge-ws-head merge-ws-head--theirs">
+                  我的分支 {{ from }}
+                </div>
+              </header>
+
               <div
                 v-for="h in hunks"
                 :key="h.id"

@@ -52,6 +52,15 @@ export class GitInsightPanel {
       null,
       this.disposables,
     );
+
+    // 初始主题写在 HTML 上（避免首帧闪暗），之后靠这个事件热更新
+    vscode.window.onDidChangeActiveColorTheme(
+      (theme) => {
+        void this.post({ type: "theme", theme: themeKindToName(theme.kind) });
+      },
+      null,
+      this.disposables,
+    );
   }
 
   private log(line: string): void {
@@ -575,8 +584,10 @@ export class GitInsightPanel {
     );
     const nonce = getNonce();
 
+    const theme = themeKindToName(vscode.window.activeColorTheme.kind);
+
     return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="${theme}">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
@@ -603,4 +614,12 @@ export class GitInsightPanel {
 
 function getNonce(): string {
   return randomBytes(24).toString("base64");
+}
+
+/** 面板自带两套配色，只需知道深浅；高对比度各自归到对应的一侧 */
+function themeKindToName(kind: vscode.ColorThemeKind): "light" | "dark" {
+  return kind === vscode.ColorThemeKind.Light ||
+    kind === vscode.ColorThemeKind.HighContrastLight
+    ? "light"
+    : "dark";
 }

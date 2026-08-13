@@ -153,14 +153,17 @@ function submit(): void {
         </template>
       </p>
 
-      <label>
-        我的分支 / 源（source）
-        <input v-model="sourceBranch" type="text" :disabled="busy" />
-      </label>
-      <label>
-        线上目标 / 目标（target）
-        <input v-model="targetBranch" type="text" :disabled="busy" />
-      </label>
+      <div class="mr-route">
+        <label class="mr-route-side mr-route-side--mine">
+          <span class="mr-route-kicker">我的分支 / source</span>
+          <input v-model="sourceBranch" type="text" :disabled="busy" />
+        </label>
+        <span class="mr-route-arrow" aria-hidden="true">→</span>
+        <label class="mr-route-side mr-route-side--online">
+          <span class="mr-route-kicker">线上目标 / target</span>
+          <input v-model="targetBranch" type="text" :disabled="busy" />
+        </label>
+      </div>
       <label>
         标题
         <input v-model="title" type="text" :disabled="busy" />

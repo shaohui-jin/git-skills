@@ -234,7 +234,10 @@ const autoStatus = computed(() => {
       </div>
 
       <div v-if="bridge && busy" class="ai-bridge-box">
-        <div class="ai-error-title">正在等待 Cursor Chat 回传</div>
+        <div class="ai-bridge-title">
+          <span class="ai-bridge-dot" aria-hidden="true" />
+          正在等待 Cursor Chat 回传
+        </div>
         <p
           v-if="bridge.batchTotal && bridge.batchTotal > 1"
           class="muted"

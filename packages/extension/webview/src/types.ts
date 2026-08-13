@@ -128,6 +128,7 @@ export interface CliStatusPayload {
 }
 
 export type HostMessage =
+  | { type: "theme"; theme: "light" | "dark" }
   | {
       type: "workspace";
       cwd: string | null;

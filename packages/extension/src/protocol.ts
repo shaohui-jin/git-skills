@@ -133,6 +133,7 @@ export interface CliStatusPayload {
 
 /** Extension host / preview server -> Webview */
 export type HostMessage =
+  | { type: "theme"; theme: "light" | "dark" }
   | {
       type: "workspace";
       cwd: string | null;

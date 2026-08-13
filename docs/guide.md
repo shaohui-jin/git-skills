@@ -678,7 +678,7 @@ docs/guide.md                 本文（唯一完整说明）
 |----|------|
 | **core** | `runGit` / fetch / 分支图 / merge-tree 预演 / worktree 落盘 / gh·glab·Token 建 MR + CLI |
 | **extension** | Webview 桥接、确认框、globalState 配置、CLI 下载、终端登录、AI 选边桥、**Skill 全局同步** |
-| **webview** | 分支树、G6 图、冲突三栏、Git 配置、MR 对话框；**不直接 spawn git** |
+| **webview** | 分支树、G6 图、冲突三栏、Git 配置、MR 对话框、深浅双主题 token；**不直接 spawn git** |
 
 ### 3.2 @git-insight/core
 
@@ -729,13 +729,26 @@ const preview = await rehearseMerge({
 | 分支图 | tip 图 + 链路报告 | `graph` → `buildBranchGraph` |
 | 合并预演 | 冲突三栏、AI 选边、一键解决、申请 MR | `preview` / `applyResolve` / `prepareCreateMr` / `createMr` / `aiResolveConflicts` |
 
+**主题与视觉体系**
+
+面板自带深 / 浅两套配色，**不跟 IDE 的主题色，只跟它的明暗**。改样式前先看下面几条，违反了不会报错、只会某一套主题悄悄不生效：
+
+| 约定 | 说明 |
+|------|------|
+| 主题来源 | 宿主按 `vscode.window.activeColorTheme.kind` 把 `data-theme` 写进 `<html>`（首帧就正确，不闪暗色），之后靠 `theme` 消息热更新；浏览器预览无宿主，`initTheme()` 退回 `prefers-color-scheme` |
+| **原子值与派生值必须同元素声明** | `var()` 在声明它的元素上求值。`:root` 上的 `--surface: var(--ink-800)` 会当场固化成暗色，之后在 `body` 上改 `--ink-800` 不会让它重算。所以浅色覆盖挂 `:root[data-theme="light"]`，且**只覆盖原子值** |
+| canvas 读不到 CSS 变量 | 分支图（G6）用 `theme.ts` 的 `cssVar()` 把语义色读出来传进去，并 `onThemeChange` 时整个重建画布；新增画布色值不要在 JS 里写死 |
+| 两层视觉 | 外壳层（顶栏 / 卡片 / 按钮 / 表单 / 弹层）柔和面、圆角、动效；图纸层（MERGE MAP / 冲突三栏 / 分支图画布）网格底、等宽字、硬边。一个元素只属于一层 |
+
+语义色贯穿全局：**橙=我的（from）、蓝=线上（into）、紫=强调 / 选中、红=冲突、绿=干净**。加新 token 时，纯色值放原子区、`var()` 组合的放派生区，浅色块只改原子区。详见 `webview/src/styles.css` 文件头。
+
 开发：
 
 ```bash
 pnpm --filter @git-insight/core build
 pnpm --filter git-insight build
 # F5：Run Git Insight Extension
-# 浏览器只读预览：pnpm preview
+# 浏览器只读预览：pnpm preview（切系统深浅色即可验两套主题）
 ```
 
 打包：`pnpm package:vsix` → 仓库根目录 `git-insight.vsix`。  
@@ -757,6 +770,8 @@ pnpm --filter git-insight build
 | CLI 下载 | `packages/extension/src/cliBundle.ts` |
 | 配置存储 | `packages/extension/src/gitConfigStore.ts` |
 | 冲突 UI | `packages/extension/webview/src/ConflictResolvePanel.vue` |
+| 视觉 token | `packages/extension/webview/src/styles.css`（文件头有双主题约束） |
+| 主题切换 | `packages/extension/webview/src/theme.ts` · 宿主侧 `GitInsightPanel.getHtml` |
 | Skill 入口 | 扩展 `skills/git-branch-insight`（装完同步到 `~/.cursor/skills`）· 仓库副本见 §四 → 本文 §四 |
 
 ### 3.5 风险与约定

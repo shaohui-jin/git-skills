@@ -1,3 +1,4 @@
+import { cssVar, currentTheme, type ThemeName } from "../theme";
 import type { BranchGraph, BranchTip, CommitNode } from "../types";
 
 export type G6NodeKind = "base" | "tip" | "local-tip" | "remote-tip";
@@ -33,16 +34,55 @@ export interface TipsGraphOptions {
   remotes?: string[];
 }
 
-const LOCAL_COLOR = "#d19a66";
-const DEFAULT_REMOTE_COLOR = "#3d8bdb";
-const OTHER_REMOTE_PALETTE = [
+/*
+ * canvas 吃不到 CSS 变量，只能把 styles.css 的语义色读出来传给 G6，
+ * 否则深浅主题一切换，画布就和外壳对不上了。按主题缓存，避免每个节点都跑 getComputedStyle。
+ */
+type GraphPalette = {
+  local: string;
+  remote: string;
+  base: string;
+  lineage: string;
+  fallback: string;
+  others: readonly string[];
+};
+
+/** 非默认 remote 的区分色，纯装饰、CSS 里没有对应语义，所以就地按主题给两套 */
+const OTHER_REMOTES_DARK = [
   "#c678dd",
   "#56b6c2",
   "#e5c07b",
   "#98c379",
   "#e06c75",
   "#61afef",
-];
+] as const;
+const OTHER_REMOTES_LIGHT = [
+  "#8250df",
+  "#0f7490",
+  "#9a6700",
+  "#3a7d34",
+  "#c0392b",
+  "#1f6feb",
+] as const;
+
+let paletteCache: { theme: ThemeName; value: GraphPalette } | null = null;
+
+export function graphPalette(): GraphPalette {
+  const theme = currentTheme();
+  if (paletteCache?.theme === theme) {
+    return paletteCache.value;
+  }
+  const value: GraphPalette = {
+    local: cssVar("--mine", "#f0a35e"),
+    remote: cssVar("--online", "#4c9aff"),
+    base: cssVar("--base", "#9d8cff"),
+    lineage: cssVar("--clean", "#56d364"),
+    fallback: cssVar("--dim", "#5a5a5a"),
+    others: theme === "light" ? OTHER_REMOTES_LIGHT : OTHER_REMOTES_DARK,
+  };
+  paletteCache = { theme, value };
+  return value;
+}
 
 function short(sha: string): string {
   return sha.slice(0, 7);
@@ -90,34 +130,36 @@ function hashHue(name: string): number {
   return h;
 }
 
-/** 本地琥珀；默认远程蓝；其它 remote 稳定调色板 */
+/** 本地=我的橙；默认远程=线上蓝；其它 remote 走稳定调色板 */
 export function colorForTip(opts: {
   remote: boolean;
   remoteName?: string;
   defaultRemote: string;
 }): string {
+  const p = graphPalette();
   if (!opts.remote) {
-    return LOCAL_COLOR;
+    return p.local;
   }
   const rn = opts.remoteName || "";
   if (!rn || rn === opts.defaultRemote) {
-    return DEFAULT_REMOTE_COLOR;
+    return p.remote;
   }
-  return OTHER_REMOTE_PALETTE[hashHue(rn) % OTHER_REMOTE_PALETTE.length]!;
+  return p.others[hashHue(rn) % p.others.length]!;
 }
 
 export function kindColor(kind: G6NodeKind): string {
+  const p = graphPalette();
   switch (kind) {
     case "base":
-      return DEFAULT_REMOTE_COLOR;
+      return p.base;
     case "local-tip":
-      return LOCAL_COLOR;
+      return p.local;
     case "remote-tip":
-      return DEFAULT_REMOTE_COLOR;
+      return p.remote;
     case "tip":
-      return "#98c379";
+      return p.lineage;
     default:
-      return "#5a5a5a";
+      return p.fallback;
   }
 }
 
@@ -289,6 +331,7 @@ export function branchGraphToG6(
   options?: TipsGraphOptions,
 ): G6GraphData {
   if (graph.lineage) {
+    const p = graphPalette();
     const nodes: G6GraphData["nodes"] = [
       {
         id: "base",
@@ -297,7 +340,7 @@ export function branchGraphToG6(
           sub: "merge-base",
           kind: "base",
           sha: graph.lineage.mergeBase,
-          color: DEFAULT_REMOTE_COLOR,
+          color: p.base,
         },
       },
       {
@@ -306,7 +349,7 @@ export function branchGraphToG6(
           label: "线上（目标）",
           sub: `+${graph.lineage.intoOnlyCount} commits`,
           kind: "tip",
-          color: "#98c379",
+          color: p.remote,
         },
       },
       {
@@ -315,7 +358,7 @@ export function branchGraphToG6(
           label: "我的分支",
           sub: `+${graph.lineage.fromOnlyCount} commits`,
           kind: "tip",
-          color: "#98c379",
+          color: p.local,
         },
       },
     ];
@@ -342,7 +385,7 @@ export function legendItemsForGraph(
     options?.defaultRemote?.trim() ||
     (remotes.includes("origin") ? "origin" : remotes[0] || "origin");
   const items: Array<{ key: string; label: string; color: string }> = [
-    { key: "local", label: "本地", color: LOCAL_COLOR },
+    { key: "local", label: "本地", color: graphPalette().local },
   ];
   for (const r of remotes) {
     items.push({

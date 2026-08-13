@@ -10,6 +10,7 @@ import {
   type G6GraphData,
   type G6NodeKind,
 } from "./graph/toG6Data";
+import { cssVar, currentTheme, onThemeChange, theme } from "./theme";
 import type { BranchGraph } from "./types";
 
 const props = defineProps<{
@@ -22,6 +23,23 @@ const emit = defineEmits<{
   /** chain: tip node ids from selected → root；null 表示清除 */
   select: [payload: { tipName: string; chain: string[] } | null];
 }>();
+
+/** 节点宽 176、11px 等宽字，一行约放得下 22 个字符 */
+const NODE_LABEL_MAX = 22;
+
+/**
+ * G6 的 labelWordWrap 在 rect 节点上不生效，长分支名会直接画到框外。
+ * 分支名的尾巴（into-xxx / 版本号）信息量最大，所以掐中间而不是掐尾。
+ */
+function fitNodeLabel(text: string): string {
+  if (text.length <= NODE_LABEL_MAX) {
+    return text;
+  }
+  const keep = NODE_LABEL_MAX - 1;
+  const head = Math.ceil(keep * 0.45);
+  const tail = keep - head;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
 
 const stageRef = ref<HTMLDivElement | null>(null);
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -41,9 +59,11 @@ const graphOptions = computed(() => ({
   remotes: props.remotes,
 }));
 
-const legendItems = computed(() =>
-  legendItemsForGraph(props.graph, graphOptions.value),
-);
+/* 图例色值是建表时从 CSS 变量读出来的快照，得显式依赖 theme 才会跟着主题翻 */
+const legendItems = computed(() => {
+  void theme.value;
+  return legendItemsForGraph(props.graph, graphOptions.value);
+});
 
 const searchHits = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
@@ -259,6 +279,14 @@ async function renderGraph(): Promise<void> {
 
   const { width, height } = measureSize();
 
+  const ink = {
+    onSolid: cssVar("--on-solid", "#0b0f16"),
+    accent: cssVar("--accent", "#6f6bff"),
+    fg: cssVar("--fg", "#e6ecf5"),
+    dim: cssVar("--dim", "#61728a"),
+    nodeEdge: currentTheme() === "light" ? "rgba(16,24,40,0.22)" : "rgba(255,255,255,0.25)",
+  };
+
   const g = new Graph({
     container: el,
     width,
@@ -266,7 +294,7 @@ async function renderGraph(): Promise<void> {
     data,
     autoFit: "view",
     padding: 32,
-    theme: "dark",
+    theme: currentTheme() === "light" ? "light" : "dark",
     layout: {
       type: "dagre",
       rankdir: "LR",
@@ -277,16 +305,18 @@ async function renderGraph(): Promise<void> {
     node: {
       type: "rect",
       style: {
-        size: [168, 44],
-        radius: 6,
+        size: [176, 46],
+        radius: 4,
         labelText: (d) => {
           const sub = (d as { data?: { label?: string; sub?: string } }).data?.sub;
           const label = (d as { data?: { label?: string } }).data?.label ?? "";
-          return sub ? `${label}\n${sub}` : label;
+          const head = fitNodeLabel(label);
+          return sub ? `${head}\n${sub}` : head;
         },
-        labelFill: "#ddd",
+        labelFill: ink.onSolid,
         labelFontSize: 11,
-        labelFontFamily: "Consolas, monospace",
+        labelFontWeight: 600,
+        labelFontFamily: '"JetBrains Mono", Consolas, monospace',
         labelPlacement: "center",
         fill: (d) => {
           const data = (d as { data?: { color?: string; kind?: G6NodeKind } }).data;
@@ -296,20 +326,22 @@ async function renderGraph(): Promise<void> {
           const kind = (data?.kind ?? "local-tip") as G6NodeKind;
           return kindColor(kind);
         },
-        stroke: "rgba(255,255,255,0.25)",
+        stroke: ink.nodeEdge,
         lineWidth: 1,
         opacity: 1,
       },
       state: {
+        // 选中用外壳强调色（紫），不能用橙/蓝——那两个已经是节点自己的语义填充色
         selected: {
-          stroke: "#f0c674",
+          stroke: ink.accent,
           lineWidth: 3,
-          shadowColor: "#f0c674",
+          shadowColor: ink.accent,
           shadowBlur: 12,
           opacity: 1,
         },
+        // 血缘链路用中性描边，深浅主题下都能压住彩色填充
         highlight: {
-          stroke: "#61afef",
+          stroke: ink.fg,
           lineWidth: 2.5,
           opacity: 1,
         },
@@ -321,15 +353,14 @@ async function renderGraph(): Promise<void> {
     edge: {
       type: "cubic-horizontal",
       style: {
-        // 未选中时也要和深色背景拉开对比
-        stroke: "rgba(180, 198, 220, 0.85)",
+        stroke: ink.dim,
         lineWidth: 2,
         endArrow: true,
         opacity: 1,
       },
       state: {
         highlight: {
-          stroke: "#61afef",
+          stroke: ink.accent,
           lineWidth: 3,
           opacity: 1,
           endArrow: true,
@@ -411,16 +442,24 @@ function onWindowKeydown(ev: KeyboardEvent): void {
   onStageKeydown(ev);
 }
 
+/** 画布的颜色是建图时读进去的常量，主题一变只能整个重建 */
+let stopThemeWatch: (() => void) | null = null;
+
 onMounted(() => {
   void renderGraph().then(bindResize);
   stageRef.value?.addEventListener("keydown", onStageKeydown);
   window.addEventListener("keydown", onWindowKeydown);
+  stopThemeWatch = onThemeChange(() => {
+    void renderGraph();
+  });
 });
 
 onBeforeUnmount(() => {
   renderSeq += 1;
   stageRef.value?.removeEventListener("keydown", onStageKeydown);
   window.removeEventListener("keydown", onWindowKeydown);
+  stopThemeWatch?.();
+  stopThemeWatch = null;
   resizeObserver?.disconnect();
   resizeObserver = null;
   void destroyGraph();
