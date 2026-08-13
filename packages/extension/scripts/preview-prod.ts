@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WebSocketServer } from "ws";
 import {
+  busyLabelForRequest,
   handleWebviewRequest,
+  requestStreamsProgress,
   resolveWorkspaceCwd,
 } from "../src/coreBridge.js";
 import type { ConfigMemento } from "../src/gitConfigStore.js";
@@ -173,15 +175,7 @@ async function main(): Promise<void> {
         const label =
           req.type === "setCwd" && looksLikeRemoteRepo(req.path)
             ? "正在 git clone / fetch…"
-            : req.type === "fetch"
-              ? "正在 Fetch…"
-              : req.type === "graph"
-                ? "正在加载全量分支图…"
-                : req.type === "preview" || req.type === "blame"
-                  ? "合并预演中…"
-                  : req.type === "setCwd"
-                    ? "正在打开仓库…"
-                    : undefined;
+            : busyLabelForRequest(req);
 
         if (label) {
           send({ type: "busy", busy: true, label, percent: 0 });
@@ -190,17 +184,16 @@ async function main(): Promise<void> {
           const result = await handleWebviewRequest(req, repoCwd, {
             previewMode: true,
             configMemento: previewConfigMemento,
-            onProgress:
-              req.type === "graph" || req.type === "preview" || req.type === "blame"
-                ? async (u) => {
-                    send({
-                      type: "progress",
-                      percent: u.percent,
-                      label: u.label,
-                    });
-                    await new Promise<void>((r) => setImmediate(r));
-                  }
-                : undefined,
+            onProgress: requestStreamsProgress(req)
+              ? async (u) => {
+                  send({
+                    type: "progress",
+                    percent: u.percent,
+                    label: u.label,
+                  });
+                  await new Promise<void>((r) => setImmediate(r));
+                }
+              : undefined,
           });
           if (result.cwd !== undefined) {
             repoCwd = result.cwd;

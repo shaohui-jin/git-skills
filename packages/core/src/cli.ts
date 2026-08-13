@@ -10,10 +10,18 @@ import {
   prepareCreateMr,
 } from "./merge/createMr.js";
 import { isSameBranchForMr } from "./merge/branchName.js";
+import { crossPairs, surveyMerges } from "./merge/survey.js";
+import { suggestMergeOrder } from "./merge/chain.js";
 import type { MrMethod } from "./config/gitInsightConfig.js";
 import { GitError } from "./git/runner.js";
 import { listRemotes, resolveRemoteName } from "./git/remotes.js";
-import { reportFetch, reportGraph, reportMergeRehearsal } from "./report/chinese.js";
+import {
+  reportFetch,
+  reportGraph,
+  reportMergeOrder,
+  reportMergeRehearsal,
+  reportMergeSurvey,
+} from "./report/chinese.js";
 import { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
 import type { CliJsonError, CliJsonResult } from "./types.js";
 import type { StashFilePayload } from "./merge/applyResolve.js";
@@ -31,6 +39,8 @@ Usage (read-only):
   git-insight graph [--cwd <path>] [--max <n>] [--into <branch>] [--from <branch>] [--no-fetch]
   git-insight fetch [--cwd <path>] [--remote <name>]
   git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd <path>] [--no-fetch] [--pr]
+  git-insight survey --into <a,b> --from <x,y,z> [--cwd] [--no-fetch] [--concurrency <n>]
+  git-insight merge-order --into <线上目标> --branches <a,b,c> [--cwd] [--no-fetch]
 
 Usage (write / MR — 需确认后由 Agent 调用):
   git-insight apply-resolve --into <线上> --from <我的> --stash <file.json> [--cwd] [--no-push]
@@ -41,6 +51,8 @@ Usage (write / MR — 需确认后由 Agent 调用):
 Notes:
   - preview-merge: --into=线上合入目标（建议远程），--from=我的分支
   - preview-merge --pr: 额外为溯源 commit 关联 PR 号（每个 commit 一次 gh 调用，慢，默认关闭）
+  - survey: 批量预演 from × into 笛卡尔积，只报冲突文件路径、不生成正文，整批只 fetch 一次
+  - merge-order: 推演把多个分支依次合入 --into 的最佳顺序，全程在对象库内模拟，不改工作区
   - apply-resolve: stash JSON 为 { files: [{ path, resolvedContent }] }；干净合并可用 { "files": [] }
   - create-mr --method: cli（本机 gh/glab）| token（--token 或环境 GIT_INSIGHT_GITHUB_TOKEN / GIT_INSIGHT_GITLAB_TOKEN）
   - open-ui: 生成并尝试打开扩展预演面板（需已安装 Git Insight）
@@ -135,6 +147,74 @@ async function runMergeRehearsal(command: string, args: string[]): Promise<void>
     data,
     mermaid: mergeToMermaid(data),
     report: reportMergeRehearsal(data),
+  });
+}
+
+/** `--into a,b` / `--into a --into b` 都接受 */
+function getList(args: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== name) {
+      continue;
+    }
+    const raw = args[i + 1];
+    if (!raw || raw.startsWith("--")) {
+      continue;
+    }
+    out.push(...raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean));
+  }
+  return [...new Set(out)];
+}
+
+async function runSurvey(args: string[]): Promise<void> {
+  const intos = getList(args, "--into");
+  const froms = getList(args, "--from");
+  if (intos.length === 0 || froms.length === 0) {
+    throw new GitError(
+      "survey 需要 --into <目标,可多个> 与 --from <来源,可多个>",
+      { code: "USAGE" },
+    );
+  }
+  const cwd = getFlag(args, "--cwd");
+  const concurrency = Number(getFlag(args, "--concurrency"));
+  const data = await surveyMerges({
+    cwd,
+    pairs: crossPairs(intos, froms),
+    fetch: !hasSwitch(args, "--no-fetch"),
+    remote: await resolvedRemote(args, cwd),
+    // 非法值（NaN、0、负数）一律当没传，别把并发上限算成 0
+    concurrency: Number.isFinite(concurrency) && concurrency >= 1 ? concurrency : undefined,
+  });
+  printJson({
+    ok: true,
+    command: "survey",
+    data,
+    report: reportMergeSurvey(data),
+  });
+}
+
+async function runMergeOrder(args: string[]): Promise<void> {
+  const into = getFlag(args, "--into");
+  const branches = getList(args, "--branches");
+  if (!into || branches.length === 0) {
+    throw new GitError(
+      "merge-order 需要 --into <线上目标> 与 --branches <a,b,c>",
+      { code: "USAGE" },
+    );
+  }
+  const cwd = getFlag(args, "--cwd");
+  const data = await suggestMergeOrder({
+    cwd,
+    into,
+    branches,
+    fetch: !hasSwitch(args, "--no-fetch"),
+    remote: await resolvedRemote(args, cwd),
+  });
+  printJson({
+    ok: true,
+    command: "merge-order",
+    data,
+    report: reportMergeOrder(data),
   });
 }
 
@@ -416,6 +496,16 @@ async function main(): Promise<void> {
       command === "merge-rehearsal"
     ) {
       await runMergeRehearsal(command, args);
+      return;
+    }
+
+    if (command === "survey") {
+      await runSurvey(args);
+      return;
+    }
+
+    if (command === "merge-order") {
+      await runMergeOrder(args);
       return;
     }
 

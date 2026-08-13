@@ -9,7 +9,8 @@ export async function mapLimit<T, R>(
 ): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
-  const width = Math.max(1, Math.min(limit, items.length));
+  // NaN 会一路穿过 Math.min/max 变成 Array.from({ length: NaN })，静默产出空结果
+  const width = Number.isFinite(limit) ? Math.max(1, Math.min(limit, items.length)) : 1;
   const workers = Array.from({ length: width }, async () => {
     for (;;) {
       const i = next;

@@ -3,7 +3,12 @@ import * as vscode from "vscode";
 import { AiBridgeCancelledError, type AiBridgeSession } from "./aiResolveBridge.js";
 import { runAiResolve } from "./aiResolveLm.js";
 import { bundledCliPath, shellExecCommand } from "./cliBundle.js";
-import { handleWebviewRequest, resolveWorkspaceCwd } from "./coreBridge.js";
+import {
+  busyLabelForRequest,
+  handleWebviewRequest,
+  requestStreamsProgress,
+  resolveWorkspaceCwd,
+} from "./coreBridge.js";
 import { loadUserConfig } from "./gitConfigStore.js";
 import type { HostMessage, WebviewRequest } from "./protocol.js";
 
@@ -269,7 +274,7 @@ export class GitInsightPanel {
       });
       term.show();
       term.sendText(cmd);
-      await vscode.window.showInformationMessage(
+      void vscode.window.showInformationMessage(
         `已在终端启动「${kind} auth login」。完成后请回到面板点击「重新检测 CLI」。`,
       );
       return;
@@ -483,30 +488,7 @@ export class GitInsightPanel {
       }
     }
 
-    const label =
-      req.type === "fetch"
-        ? "正在 Fetch…"
-        : req.type === "graph"
-          ? "正在加载全量分支图…"
-          : req.type === "preview" || req.type === "blame"
-            ? "合并预演中…"
-            : req.type === "applyResolve"
-              ? !req.files?.length
-                ? "正在推送临时分支…"
-                : "一键解决并推送…"
-              : req.type === "prepareCreateMr"
-                ? "准备申请 MR（识别平台 / 拉取成员）…"
-                : req.type === "createMr"
-                  ? "正在创建 MR…"
-                  : req.type === "downloadCli"
-                    ? "正在下载 CLI 到扩展目录…"
-                    : req.type === "validateToken"
-                      ? "正在校验 Token…"
-                      : req.type === "saveGitConfig" && req.config.mrMethod === "token"
-                        ? "保存配置并校验 Token…"
-                        : req.type === "setCwd"
-                          ? "正在打开仓库…"
-                          : undefined;
+    const label = busyLabelForRequest(req);
 
     if (label) {
       await this.post({ type: "busy", busy: true, label, percent: 0 });
@@ -518,28 +500,25 @@ export class GitInsightPanel {
         previewMode: false,
         cliStorageDir: this.cliStorageDir,
         configMemento: this.configMemento,
-        onProgress:
-          req.type === "graph" ||
-          req.type === "preview" ||
-          req.type === "blame" ||
-          req.type === "applyResolve" ||
-          req.type === "downloadCli" ||
-          req.type === "validateToken" ||
-          (req.type === "saveGitConfig" && req.config.mrMethod === "token")
-            ? async (u) => {
-                await this.post({
-                  type: "progress",
-                  percent: u.percent,
-                  label: u.label,
-                });
-                // 让出事件循环，确保 webview 能刷新百分比（否则易一直停在 0）
-                await new Promise<void>((r) => setImmediate(r));
-              }
-            : undefined,
+        onProgress: requestStreamsProgress(req)
+          ? async (u) => {
+              await this.post({
+                type: "progress",
+                percent: u.percent,
+                label: u.label,
+              });
+              // 让出事件循环，确保 webview 能刷新百分比（否则易一直停在 0）
+              await new Promise<void>((r) => setImmediate(r));
+            }
+          : undefined,
       });
       if (result.cwd !== undefined) {
         this.overrideCwd = result.cwd;
       }
+      // 这里的通知一律不能 await：showInformationMessage 要等用户关掉才 resolve
+      // （带按钮的那条压根不会自动消失），await 下去会把 finally 里的 busy:false
+      // 一起卡住，面板上每一颗绑 :disabled="busy" 的按钮就永远停在禁用态，
+      // 而人只看到「点不动」，根本联想不到是角落里那条通知没关。
       for (const msg of result.messages) {
         await this.post(msg);
         if (msg.type === "applyResolveResult") {
@@ -547,7 +526,7 @@ export class GitInsightPanel {
             msg.previousBranch != null
               ? `\n当前工作区仍在「${msg.previousBranch}」（独立 worktree 已清理）`
               : "\n主工作区未切换分支（独立 worktree 已清理）";
-          await vscode.window.showInformationMessage(
+          void vscode.window.showInformationMessage(
             `临时分支已就绪：${msg.tempBranch} @ ${msg.commitSha.slice(0, 7)}` +
               (msg.pushed ? "（已推送）" : "（未推送）") +
               stay +
@@ -555,14 +534,19 @@ export class GitInsightPanel {
           );
         }
         if (msg.type === "createMrResult" && msg.url) {
-          const open = await vscode.window.showInformationMessage(
-            `MR/PR 已创建：${msg.sourceBranch} → ${msg.targetBranch}`,
-            "打开链接",
-            "关闭",
-          );
-          if (open === "打开链接") {
-            await vscode.env.openExternal(vscode.Uri.parse(msg.url));
-          }
+          const url = msg.url;
+          void vscode.window
+            .showInformationMessage(
+              `MR/PR 已创建：${msg.sourceBranch} → ${msg.targetBranch}`,
+              "打开链接",
+              "关闭",
+            )
+            .then((open) => {
+              if (open === "打开链接") {
+                return vscode.env.openExternal(vscode.Uri.parse(url));
+              }
+              return undefined;
+            });
         }
       }
       if (req.type === "ready") {

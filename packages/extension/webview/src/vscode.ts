@@ -13,6 +13,8 @@ export type WebviewRequest =
     }
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
   | { type: "blame"; into: string; from: string; noFetch?: boolean }
+  | { type: "survey"; intos: string[]; froms: string[]; noFetch?: boolean }
+  | { type: "mergeOrder"; into: string; branches: string[]; noFetch?: boolean }
   | {
       type: "applyResolve";
       into: string;

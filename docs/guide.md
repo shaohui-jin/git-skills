@@ -1,6 +1,8 @@
 # Git Insight · 技术分享与操作手册
 
 > **本文是仓库唯一完整说明。** 面向日常操作与技术分享：先讲主流程，再按模块列出实际调用的 `git` / `gh` / `glab` 指令，最后是核心实现与 Agent Skill。
+>
+> 本文只描述**已实现**的行为。更远的拓展设想见 [`design-next.md`](./design-next.md)。
 
 ---
 
@@ -25,7 +27,9 @@
 
 | 能力 | 交付面 | 是否改工作区 |
 |------|--------|--------------|
-| 分支图 / 合并预演 | Agent Skill（`/git-branch-insight`）+ 扩展 Webview | **否**（`merge-tree` 等只读） |
+| 分支图 / 合并预演 | Agent Skill（`/git-branch-insight`）+ 扩展 Webview + MCP | **否**（`merge-tree` 等只读） |
+| 合并矩阵 / 合入顺序 | 扩展「分支图」Tab + CLI + MCP | **否**（结果树只在对象库里流转） |
+| 冲突预警常驻 | 扩展状态栏 + 通知（默认关闭） | 否 |
 | 冲突选边 / AI 选边 | 扩展 Webview；Skill 对话确认 | 否（仅 UI / 暂存） |
 | 一键解决并推送 | 扩展或 Skill → core `apply-resolve` | **是**（独立 **worktree**，主工作区不 checkout） |
 | 一键申请 MR/PR | 扩展或 Skill（cli / token / ui）→ core | 否（`gh` / `glab` / Token API / 浏览器） |
@@ -74,6 +78,8 @@ flowchart TD
 | 源/目标规范化后同名 | 否（自行 push / pull） |
 | 预演有冲突 | 须先「一键解决并推送」成功 |
 | 预演可干净合并且不同名 | 可直接申请（源一般为已推送的我的分支） |
+
+上面是**单条**的走法。手上一次有好几条要合时，走[合并矩阵](#231-合并矩阵与合入顺序)：同样是 ③④⑤ 这三步，只是由矩阵盯着「哪几条还没走完」，不用自己记。
 
 ### 1.4 安装与打开面板
 
@@ -292,6 +298,105 @@ git-insight graph --no-fetch
 
 ---
 
+### 2.3.1 合并矩阵与合入顺序
+
+分支图 Tab 顶部可切到「合并矩阵」。它回答的是单对预演答不了的两个问题：**这批分支现在谁合得进去**，以及**按什么顺序合最省事**。
+
+**操作要点**
+
+1. 用上方的分段开关选「线上目标」或「我的分支」，挑一条点「加入」；不确定时点「一键填入」（线上主干 + 手上的本地分支）
+2. 「跑矩阵」：行=我的分支、列=线上目标，格子里是结论和冲突文件数。点格子在右侧看具体是哪些文件，冲突的可以直接「去完整预演」
+3. 「算顺序」需要恰好 1 个线上目标 + 2 个以上我的分支。结果给出建议次序、能连续干净合入几个、从哪一个开始要人工
+
+**和单对预演的取舍**：矩阵**不生成冲突正文、不做溯源**，只报路径——N×M 组都做正文的话一次要跑上百个 `git show`。要看正文就点进单对预演。
+
+**代价**：整批只 fetch 一次；结果按 `(intoSha, fromSha)` 缓存，两侧 sha 没变时重跑几乎免费。
+
+**顺序推演不落地**：全程 `merge-tree` 结果树 + `commit-tree` 在对象库内串行模拟，不 checkout、不建分支、不动工作区，原理见 §3.2。
+
+**逐条处理这批冲突**
+
+冲突不止一条时，矩阵是个待办清单，不用自己记处理到哪了。
+
+点头部的「开始逐条处理」（或任意一格的「去完整预演」），预演页顶部会出现一条回程条：
+
+```text
+← 合并矩阵  2 / 3  feature/x → origin/master  待申请 MR  剩 2 条待处理   申请 MR  上一条  下一条  处理下一条
+```
+
+「处理下一条」跳到下一条**还没处理**的，全处理完就自动回矩阵。人在侧栏手动改了分支就说明脱离了这趟批处理，回程条会自动消失。
+
+**每一格都要走到「已提 MR」才算完**，两条路径汇到同一个终点：
+
+```text
+冲突 ──解决──> 已处理 ──提 MR──> 已提 MR
+干净 ─────────────────提 MR──> 已提 MR
+```
+
+格子上的文字就是当前档位：
+
+| 档位 | 格子 | 含义 |
+|------|------|------|
+| 冲突 | 红底 + 冲突文件数 | 还没动 |
+| 干净 | 绿底 | 不用解决，点开格子可直接提 MR |
+| 未推送 | 橙色虚线边 + ! | 临时分支只在本地，**提不了 MR**，得回预演页重推一次 |
+| 已处理 | 橙色虚线边 + ✓ | 临时分支已推，**还欠一个 MR** |
+| 已开创建页 | 橙色虚线边 + ↗ | 浏览器方式；页开了，但提没提我们看不见，要你自己确认 |
+| 已提 MR | 绿色虚线边 + ↗ | 走完了 |
+
+只有真的建出 MR 才配虚线绿。「已处理」用橙——绿色会让人以为这条完事了，而它其实还欠一步。
+
+**头部那颗按钮从头带到尾。** 分两段：先清冲突，「处理下一条（剩 N）」逐条送进预演页解决（含「未推送」那档，它也得回去重推一次）；冲突清完进第二段，「申请 MR（剩 N）」按矩阵顺序从上往下逐条提，**冲突和干净的在这一段合流**——冲突走完解决拿到临时分支，干净的本来就能直接提，没理由让你清完冲突之后再挨个点开干净格子。头部的 `已提 MR M` 统计的是实际提过的，两种都算。
+
+单独提某一格也行：点开格子，详情里有「申请 MR」。
+
+> 只有「未推送」不进 MR 队列——那条临时分支没推上远端，提不了，得先回预演页补一次推送。
+
+「已开创建页」同样不计进待办——看不见结果就不该反复催。
+
+申请 MR 的入口见 [§2.7](#27-一键申请-mr)。
+
+> **「已处理」不等于「合得进去」。** 一键解决产出的是临时分支 `merge/<from>-into-<into>`，`from` 本身没动，所以那一格重跑 `merge-tree` 照样冲突——它是一个独立状态，不是把格子重算成绿。真正变干净要等 MR 合入、`into` 前进之后重跑矩阵。
+>
+> 反过来说这带来一个好处：一键解决从不动 `into`，所以**批处理期间矩阵里其它格子的结论不会失效**，可以放心一条条处理完再统一提 MR。
+
+**档位以 git 为准，不靠面板记忆。** 每次 survey 都会 `for-each-ref` 列一遍 `merge/*`（本地 + 远程各一趟，整批只查一次），查到同名临时分支就说明这一对解决过。**这条兜底只对冲突格子生效**——干净格子压根不需要临时分支，仓库里恰好有条同名的多半是早先试出来的，拿它改档位会平白把一个本可直接提 MR 的格子推进死胡同。曾经只认内存里的进度记录，于是推送失败、面板重建、`into`/`from` 移动这三种情况都会让标记凭空消失，而「上次已经解决过」和「从没碰过」在矩阵里长得一模一样——那正是「我到底处理过没有」看不出来的根源。
+
+内存记录仍然保留，作用是**补充精度**：它记着当时的 `intoSha` / `fromSha`，能确认这条临时分支确实是基于两侧当前提交建的。只从 git 查到、没有对应记录的分支，档位照常显示，但详情里会提示「不保证基于最新提交」。记录本身只活在当前面板，关掉即清。
+
+**解决完回矩阵会自动重跑一遍**（跳过 fetch）。不重跑就只能看见解决之前的旧结果。重跑很便宜：两侧 sha 没变，预演结果全部命中 sha 缓存，实际多出来的只有那一次分支列举。
+
+CLI：
+
+```bash
+git-insight survey --into origin/master,origin/release --from a,b,c
+git-insight merge-order --into origin/master --branches a,b,c
+```
+
+---
+
+### 2.3.2 冲突预警常驻（默认关闭）
+
+后台定期算一遍「我的分支现在还能干净合进目标吗」，**只在变糟时**提醒。设置里搜 `gitInsight.conflictWatcher`：
+
+| 配置 | 默认 | 说明 |
+|------|------|------|
+| `.enabled` | `false` | 开关。开了才起定时器和状态栏 |
+| `.intervalMinutes` | `10` | 检查间隔；窗口重新获得焦点时也顺带查一次 |
+| `.into` | 空 | 留空则取远程 HEAD，再依次回退 `main` / `master` / `develop` |
+| `.branches` | `[]` | 留空则只看当前所在分支 |
+| `.notify` | `worse` | `worse` 只在新出现冲突或冲突文件变多时弹；`always` 每轮都弹；`never` 只更新状态栏 |
+
+三条不会变的行为约定：
+
+1. **只在变糟时打扰**。变好、持平都只更新状态栏——否则每 10 分钟弹一次「还是那 3 个冲突」，两轮就被关掉了。
+2. **绝不弹登录框**。后台用的是 `fetchRemoteQuiet`（非交互），拿不到凭据就退避重试，不抢焦点；此时仍会用本地缓存的 refs 给结论，状态栏会标明。
+3. 检查全程 `merge-tree`，**不改工作区**。
+
+命令面板 `Git Insight: 立即检查合并冲突` 可无视开关和退避手动跑一次；点状态栏同效。
+
+---
+
 ### 2.4 合并预演
 
 <img src="https://shaohui-jin.github.io/picx-images-hosting/git-skill/image.msiplcgy.webp" style="height: 100px" />
@@ -445,7 +550,20 @@ Windows 注意：PowerShell 里 `curl` 是 `Invoke-WebRequest` 的别名，直�
 | 同名分支已在**其他** worktree 检出 | `worktree add` 失败（扩展会提示） |
 | 同名分支已在**主工作区**检出 | 同样拒绝，避免抢检出 |
 
-代码：`packages/core/src/merge/applyResolve.ts`。
+**可插拔 resolver**
+
+有些冲突不该让人一行行看：`.gitignore` 两边各加了几行、lockfile 两边各装了几个包。落盘时会先让 resolver 过一遍**没有暂存裁决的**冲突文件（人已经选过边的，人说了算），处理掉的会写进 `messages`（如「自动解决 .gitignore（union）」）。
+
+内置只启用 `union`：命中 `.gitignore` / `.dockerignore` 一类的行集合文件，取并集去重。两条刻意的取舍：
+
+- **只在两边都是纯增量时接手。** 任一侧删掉了 base 里的行，说明那是有意的移除，并集会把它悄悄加回来，这种情况直接交还给人。
+- **保持线上一侧的原有顺序**，只把「我的」独有的行追加到末尾，不排序。排序能得到与哪边是 ours 无关的规范结果，听着更正确，但会给「一次加两行」生成一份整文件重排的 diff，review 的人看不出发生了什么。
+
+`take-ours` / `take-theirs` / `regenerate`（用命令重算，如 lockfile）需要调用方通过 `ApplyResolveOptions.resolvers` 显式传入。
+
+> **安全边界**：`regenerate` 会在 worktree 里执行命令，所以 resolver 配置**绝不能来自被检出的仓库内容**——不能读 `.git-insight/resolvers.json`、`package.json` 字段或任何随分支切换的文件。否则任何人推一个分支，就能在预演它的人机器上执行任意命令，而「预演别人的分支」恰恰是本工具鼓励的动作。配置只能来自调用方代码或用户级配置（`~/.git-insight/`）。执行时走 `spawn(shell: false)`，参数原样传给 execve，构造不出注入。
+
+代码：`packages/core/src/merge/applyResolve.ts`、`resolvers.ts`。
 
 ---
 ### 2.7 一键申请 MR
@@ -461,6 +579,16 @@ Windows 注意：PowerShell 里 `curl` 是 `Invoke-WebRequest` 的别名，直�
 3. 有冲突须先「一键解决并推送」成功；干净合并且不同名可直接申请
 4. MR 方向：临时分支（或我的分支）→ **线上目标（into 短名）**
 5. 对话框多选 = **指派人 + 审核人**（同一批人两种角色；指派有邮件提醒）
+
+三个入口：预演页工具条的「一键申请 MR」、预演页回程条上的「申请 MR」、矩阵里点开某一格的「申请 MR」（冲突和干净的格子都有）。
+
+> **源分支只认「这一对自己的」临时分支**，不是最近一次解决产生的那条。批量处理时这两者会分岔——处理完第三条再回头给第一条提 MR，取错就会把第三条的分支提上去。
+>
+> 落点在 `App.vue` 的 `askCreateMr()`：优先用调用方指明的 `sourceBranch`，其次按 `(into, from)` 查这一对的记录，都没有才不传、交给 core 的 `resolveDefaultSource()` 推。这里最忌讳拿「上一次的临时分支」兜底：core 本来能推对，一个错的 explicit 反而把它覆盖掉。
+>
+> **能定死的地方要定死。** `resolveDefaultSource()` 按 `(into, from)` 算出临时分支名后是「存在就用，不存在才回落到 `from`」，它分不清这一格是干净直合还是解决过冲突。仓库里躺着一条早先试出来的同名 `merge/*` 时，一个说好了「直接用 `from`」的干净格子会被悄悄换成那条陈旧分支提上去。矩阵因此在 `createMrFor()` 里显式传源分支：干净格子传 `from`，其余传这一格自己的临时分支。
+>
+> 回来的 `createMrResult` 只带源分支名，认不回是哪一对（干净格子的源分支就是 `from`，重名风险更大）。所以发起时把那一对记在 `mrRequestPair` 上，回来直接往它身上盖 —— 别靠分支名反查。
 
 源/目标分支名经 `branchNameForMr` 去掉 `origin/` 等前缀；同名拦截见 `isSameBranchForMr`（`merge/branchName.ts`）。GitHub Token 建 PR 失败时会附带 API `errors[]` 详情。
 
@@ -667,6 +795,7 @@ glab mr create --source-branch feature/x --target-branch develop \
 
 ```text
 packages/core                 @git-insight/core   — 唯一 Git/MR 引擎 + CLI
+packages/mcp                  @git-insight/mcp    — MCP server（把 core 开放给任意 Agent）
 packages/extension            git-insight         — Cursor/VS Code 宿主
 packages/extension/webview    @git-insight/webview — Vue3 UI（G6 分支图）
 skills/git-branch-insight     Agent Skill 仓库副本（与 .cursor/skills 同步）
@@ -676,9 +805,10 @@ docs/guide.md                 本文（唯一完整说明）
 
 | 包 | 职责 |
 |----|------|
-| **core** | `runGit` / fetch / 分支图 / merge-tree 预演 / worktree 落盘 / gh·glab·Token 建 MR + CLI |
-| **extension** | Webview 桥接、确认框、globalState 配置、CLI 下载、终端登录、AI 选边桥、**Skill 全局同步** |
-| **webview** | 分支树、G6 图、冲突三栏、Git 配置、MR 对话框、深浅双主题 token；**不直接 spawn git** |
+| **core** | `runGit` / fetch / 分支图 / merge-tree 预演 / 批量矩阵 / 顺序推演 / worktree 落盘 / gh·glab·Token 建 MR + CLI |
+| **mcp** | stdio MCP server，默认只读；写操作需环境变量 + `confirm` 两道门 |
+| **extension** | Webview 桥接、确认框、globalState 配置、CLI 下载、终端登录、AI 选边桥、冲突预警常驻、**Skill 全局同步** |
+| **webview** | 分支树、G6 图、合并矩阵、冲突三栏、Git 配置、MR 对话框、深浅双主题 token；**不直接 spawn git** |
 
 ### 3.2 @git-insight/core
 
@@ -689,9 +819,27 @@ pnpm --filter @git-insight/core build
 pnpm --filter @git-insight/core exec node dist/cli.js graph
 pnpm --filter @git-insight/core exec node dist/cli.js preview-merge --into <线上> --from <我的>
 pnpm --filter @git-insight/core exec node dist/cli.js fetch
+# 批量：froms × intos 笛卡尔积，整批只 fetch 一次，只报冲突文件路径
+pnpm --filter @git-insight/core exec node dist/cli.js survey --into origin/master --from a,b,c
+# 顺序：多个分支合进同一目标，推演最省事的次序
+pnpm --filter @git-insight/core exec node dist/cli.js merge-order --into origin/master --branches a,b,c
 ```
 
 输出 JSON：`{ ok, command, data, report?, mermaid? }`。
+
+**三档预演，按代价从轻到重挑**：
+
+| API / 命令 | 代价 | 给什么 |
+|------------|------|--------|
+| `surveyMerges` / `survey` | 最轻。整批一次 fetch，命中 sha 缓存时近乎免费 | 每对的结论 + 冲突文件路径 |
+| `previewMerge` / — | 中。单对，一次 fetch | 冲突文件列表 |
+| `rehearseMerge` / `preview-merge` | 最重。逐文件 `git show` + `merge-file` + `blame` | 冲突正文 + 逐块溯源 |
+
+`previewMergeBySha` 是三者共用的纯计算核：已知两侧 sha，不 fetch、不解析 ref。批量场景直接用它，避免 N×M 次重复开销。
+
+**顺序推演怎么做到不落地的**：`merge-tree --write-tree` 除了报冲突，还会输出**合并后的结果树 OID**（以前被丢掉了，现在挂在 `MergePreviewResult.resultTree`）。把它交给 `git commit-tree` 造一个游离 commit，就能当作下一次 merge-tree 的一侧，从而模拟「先合 A、再合 B」。游离 commit 不被任何 ref 引用，之后由 git gc 自然回收。
+
+目标函数是 **cleanPrefix**（从头能连续干净合入几个），不是「总冲突数最少」：一旦某步冲突，结果树里的 blob 就带着冲突标记，再往下推出来的数字是失真的。所以遇到第一处冲突就停，报「前 k 个能干净合入，第 k+1 个起要人工」。搜索用贪心不做全排列——干净合入不会让后续更难，所以每步取任意一个可行分支都不牺牲 cleanPrefix 的上界。
 
 CLI 另含写操作（供 Skill 闭环，须用户确认后调用）：
 
@@ -726,8 +874,11 @@ const preview = await rehearseMerge({
 | Tab / 面板 | 功能 | 主要协议 |
 |------------|------|----------|
 | Git 配置 | A–D、Token、下载 CLI、登录、AI 模型回退 | `getGitConfig` / `saveGitConfig` / `downloadCli` / `cliAuthLogin` |
-| 分支图 | tip 图 + 链路报告 | `graph` → `buildBranchGraph` |
+| 分支图 · 分支图 | tip 图 + 链路报告 | `graph` → `buildBranchGraph` |
+| 分支图 · 合并矩阵 | N×M 结论表 + 合入顺序建议 | `survey` → `surveyMerges`；`mergeOrder` → `suggestMergeOrder` |
 | 合并预演 | 冲突三栏、AI 选边、一键解决、申请 MR | `preview` / `applyResolve` / `prepareCreateMr` / `createMr` / `aiResolveConflicts` |
+
+新增请求类型时记得同步四处，漏一处只会在运行时静默不响应：`src/protocol.ts`、`webview/src/vscode.ts`（webview 侧的请求联合）、`webview/src/types.ts`（HostMessage 镜像）、以及 `coreBridge.ts` 的 `busyLabelForRequest` / `requestStreamsProgress`（宿主与两个浏览器预览服务共用，不必各写一条三元链）。
 
 **主题与视觉体系**
 
@@ -740,7 +891,9 @@ const preview = await rehearseMerge({
 | canvas 读不到 CSS 变量 | 分支图（G6）用 `theme.ts` 的 `cssVar()` 把语义色读出来传进去，并 `onThemeChange` 时整个重建画布；新增画布色值不要在 JS 里写死 |
 | 两层视觉 | 外壳层（顶栏 / 卡片 / 按钮 / 表单 / 弹层）柔和面、圆角、动效；图纸层（MERGE MAP / 冲突三栏 / 分支图画布）网格底、等宽字、硬边。一个元素只属于一层 |
 
-语义色贯穿全局：**橙=我的（from）、蓝=线上（into）、紫=强调 / 选中、红=冲突、绿=干净**。加新 token 时，纯色值放原子区、`var()` 组合的放派生区，浅色块只改原子区。详见 `webview/src/styles.css` 文件头。
+语义色贯穿全局：**橙=我的（from）、蓝=线上（into）、紫=强调 / 选中、红=冲突、绿=干净**。另有一个 `--warn` 表示「还差一步 / 要你确认」（矩阵的「已处理」「已开创建页」用它）——它和 `--mine` 色相接近但**是两个 token**，浅色主题下取值也不同，别混用。
+
+加新 token 时，纯色值放原子区、`var()` 组合的放派生区，浅色块只改原子区。详见 `webview/src/styles.css` 文件头。
 
 开发：
 
@@ -762,10 +915,16 @@ pnpm --filter git-insight build
 | Fetch / 鉴权 | `packages/core/src/git/fetch.ts`、`auth.ts` |
 | 分支图 | `packages/core/src/graph/builder.ts` |
 | 合并预演 | `packages/core/src/merge/preview.ts`、`rehearsal.ts` |
+| 批量矩阵 | `packages/core/src/merge/survey.ts` |
+| 顺序推演 | `packages/core/src/merge/chain.ts` |
 | 一键落盘 | `packages/core/src/merge/applyResolve.ts` |
+| 可插拔 resolver | `packages/core/src/merge/resolvers.ts`（文件头有安全边界） |
 | 创建 MR | `packages/core/src/merge/createMr.ts`、`branchName.ts` |
 | CLI | `packages/core/src/cli.ts` |
+| MCP server | `packages/mcp/src/index.ts` |
 | 宿主桥接 | `packages/extension/src/coreBridge.ts` |
+| 冲突预警 | `packages/extension/src/mergeWatcher.ts` |
+| 合并矩阵 UI | `packages/extension/webview/src/MergeMatrix.vue` |
 | AI 选边 | `packages/extension/src/aiResolveBridge.ts`、`aiResolveLm.ts`、`aiResolveBatch.ts` |
 | CLI 下载 | `packages/extension/src/cliBundle.ts` |
 | 配置存储 | `packages/extension/src/gitConfigStore.ts` |
@@ -773,6 +932,28 @@ pnpm --filter git-insight build
 | 视觉 token | `packages/extension/webview/src/styles.css`（文件头有双主题约束） |
 | 主题切换 | `packages/extension/webview/src/theme.ts` · 宿主侧 `GitInsightPanel.getHtml` |
 | Skill 入口 | 扩展 `skills/git-branch-insight`（装完同步到 `~/.cursor/skills`）· 仓库副本见 §四 → 本文 §四 |
+
+### 3.4.1 MCP server（`@git-insight/mcp`）
+
+把 core 开放给任意 MCP 宿主，不必装扩展。stdio 传输，stdout 是协议流所以日志一律走 stderr。
+
+```json
+{
+  "mcpServers": {
+    "git-insight": {
+      "command": "npx",
+      "args": ["-y", "@git-insight/mcp"],
+      "env": { "GIT_INSIGHT_MCP_CWD": "<你的仓库>" }
+    }
+  }
+}
+```
+
+开发时用 `pnpm build:mcp`，把 `command` / `args` 换成 `node` + `<仓库>/packages/mcp/dist/index.js`。
+
+默认注册的都是只读工具：`git_branch_graph`、`merge_preview`（`detail: true` 才出正文与溯源）、`merge_survey`、`merge_order`、`mr_prepare`。
+
+写操作（`apply_resolve`、`create_mr`）要**两道门**同时满足才可用：启动时 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，且每次调用显式传 `confirm: true`。这不是冗余——模型编不出环境变量，人也不会被一次工具调用不小心推了分支。
 
 ### 3.5 风险与约定
 
@@ -782,13 +963,24 @@ pnpm --filter git-insight build
 4. 临时分支必须基于 **线上 into**；误从我的分支拉出再 merge 线上会左右对调。
 5. tip 变化后应重新预演再一键解决。
 6. 主工作区可有未提交改动（worktree 隔离）；临时分支名已在主仓检出则拒绝。
-7. 冲突文件须全部有选边，否则 worktree 内 `merge --abort`。
+7. 冲突文件须全部有选边（或被 resolver 自动处理），否则 worktree 内 `merge --abort`。
 8. PowerShell 执行扩展内 CLI：`& "…\gh.exe" auth login`（不可省略 `&`）。
+9. **resolver 配置绝不来自仓库内容**；后台预警**绝不弹登录框**。两条都是安全 / 体验红线，详见 §2.6、§2.3.2。
 
 ### 3.6 发布到 Cursor 市场（Open VSX）
 
-Cursor 扩展市场上游是 **[Open VSX](https://open-vsx.org)**（不是 Microsoft VS Code Marketplace）。  
-**现行唯一发版流程**：改扩展 `version` → 更新 `CHANGELOG.md` → push 到 `master`/`main` → GitHub Actions 自动打 tag 并发布到 Open VSX → Cursor 市场稍后同步。
+仓库有**两个各自独立**的交付物，版本号不联动：
+
+| 交付物 | 发到哪 | 怎么发 |
+|--------|--------|--------|
+| 扩展 `git-insight` | Open VSX（Cursor 市场上游） | 改 `version` 推 master，CI 自动发。见下 |
+| `@git-insight/mcp` | npm | 本地 `pnpm publish:mcp`，**未接 CI** |
+
+`@git-insight/core` **不单独发布**：扩展用 esbuild 把它打进 VSIX，MCP 用 esbuild 把它打进 `dist/index.js`。所以 core 改了之后，两个交付物都得各自重新发一次才生效——换来的是不用对外承诺 core 的 API 兼容。
+
+> MCP 包发布后其 `devDependencies` 里会留一条 `@git-insight/core: 0.1.0`（pnpm 把 `workspace:*` 改写成了实际版本）。consumer 不装 devDependencies，不影响使用。
+
+**扩展发版**（现行唯一自动流程）：改扩展 `version` → 更新 `CHANGELOG.md` → push 到 `master`/`main` → GitHub Actions 自动打 tag 并发布到 Open VSX → Cursor 市场稍后同步。CI 只监听 `packages/extension/package.json`，动 MCP 不会触发它。
 
 | 项 | 值 |
 |----|-----|
@@ -1075,6 +1267,7 @@ pnpm --filter @git-insight/core exec node dist/cli.js <command> …
 | Git Insight: 合并预演 | `gitInsight.previewMerge` | 打开面板 → **合并预演** |
 | Git Insight: 打开预演（可带 into/from） | `gitInsight.openPreview` | 打开预演并种入分支；供 Skill / 程序 / URI 调用 |
 | Git Insight: 同步 Agent Skill 到全局 | `gitInsight.syncSkill` | 同步 Skill 到 `~/.cursor/skills` 与 `~/.agents/skills` |
+| Git Insight: 立即检查合并冲突 | `gitInsight.checkConflicts` | 手动跑一次冲突预警（无视开关与退避）；点状态栏同效 |
 
 `gitInsight.openPreview` 参数：
 
@@ -1217,6 +1410,8 @@ git-insight graph [--cwd] [--max] [--into] [--from] [--no-fetch] [--remote]
 git-insight fetch [--cwd] [--remote]
 git-insight preview-merge --into <线上目标> --from <我的分支> [--cwd] [--no-fetch]
 git-insight conflict-blame|merge-rehearsal …   # 同 preview-merge（仅 CLI 别名）
+git-insight survey --into <a,b> --from <x,y,z> [--cwd] [--no-fetch] [--concurrency]
+git-insight merge-order --into <线上目标> --branches <a,b,c> [--cwd] [--no-fetch]
 git-insight apply-resolve --into … --from … --stash <json> [--cwd] [--no-push]
 git-insight prepare-mr --into … --from … [--source] [--method] [--token] [--cwd]
 git-insight create-mr --source … --target … --method cli|token [--token] [--title] [--body] [--reviewers] [--cwd]
@@ -1234,6 +1429,9 @@ git-insight open-ui --into … --from … [--cwd] [--no-open]
 | 分支列表 | `git for-each-ref … refs/heads refs/remotes` |
 | 分支图 | `for-each-ref` · `rev-list --parents` · `log --no-walk` · `merge-base` · `rev-list --count` |
 | 合并预演 | `merge-tree --write-tree` · `show` · `merge-file` · `diff -U0` · `blame` · 可选 `gh pr list` |
+| 合并矩阵 | `merge-tree --write-tree`（每组一次，整批一次 fetch，按 sha 缓存） |
+| 合入顺序 | `merge-tree --write-tree` 取结果树 · `commit-tree` 串下一步（游离 commit，不进 ref） |
+| 冲突预警 | `fetch --prune`（非交互，不弹窗） · `merge-tree --write-tree` · `symbolic-ref refs/remotes/<r>/HEAD` |
 | AI 选边 | 无 git/gh/glab |
 | 一键解决推送 | `worktree add -B` · `merge --no-ff --no-commit` · `add` · `commit` · `push -u` · `worktree remove` |
 | 申请 MR · gh | `gh api …/collaborators` · `gh pr create --assignee --reviewer` |

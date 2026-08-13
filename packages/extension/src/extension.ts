@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { GitInsightPanel } from "./GitInsightPanel.js";
+import { registerMergeWatcher } from "./mergeWatcher.js";
 import { syncBundledSkill } from "./skillSync.js";
 
 export type OpenPreviewArgs = {
@@ -40,6 +41,9 @@ export function activate(context: vscode.ExtensionContext): void {
       console.warn("[git-insight] skill sync failed:", r.error);
     }
   });
+
+  // 默认关闭；开了才起定时器与状态栏（见 gitInsight.conflictWatcher.enabled）
+  registerMergeWatcher(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("gitInsight.openWeb", () => {

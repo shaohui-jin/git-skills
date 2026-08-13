@@ -6,13 +6,29 @@ import {
   runGit,
   tryMergeBase,
 } from "../git/runner.js";
-import type { ConflictFile, MergeOptions, MergePreviewResult } from "../types.js";
+import type {
+  ConflictFile,
+  MergeOptions,
+  MergePreviewResult,
+  ProgressReporter,
+} from "../types.js";
 import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
 
 interface ParsedMergeTree {
   clean: boolean;
   conflictFiles: ConflictFile[];
   messages: string[];
+  /**
+   * `merge-tree --write-tree` 产出的结果树 OID（冲突时也有，树里的 blob 带冲突标记）。
+   * 串行模拟合并顺序时用它接 `commit-tree` 继续往下推，见 merge/chain.ts。
+   * 走 classic merge-tree 兜底时拿不到，为 undefined。
+   */
+  resultTree?: string;
+}
+
+/** merge-tree --write-tree 的首个 -z 字段就是结果树 */
+function isTreeOid(text: string): boolean {
+  return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(text);
 }
 
 function collectConflictPaths(text: string): Set<string> {
@@ -79,6 +95,8 @@ async function runMergeTree(
   const fromMessages = collectConflictPaths(combined);
 
   const zParts = modern.stdout.split("\0").map((p) => p.trim()).filter(Boolean);
+  const head = zParts[0];
+  const resultTree = head && isTreeOid(head) ? head : undefined;
   for (let i = 1; i < zParts.length; i++) {
     const part = zParts[i];
     if (!part) {
@@ -96,6 +114,7 @@ async function runMergeTree(
       clean: false,
       conflictFiles: toConflictFiles(fromMessages),
       messages: zParts.length > 0 ? zParts : combined.split("\n").filter(Boolean),
+      resultTree,
     };
   }
 
@@ -104,6 +123,7 @@ async function runMergeTree(
       clean: true,
       conflictFiles: [],
       messages: zParts,
+      resultTree,
     };
   }
 
@@ -132,6 +152,74 @@ async function runMergeTree(
 }
 
 /**
+ * 已知两侧 sha 时的纯计算部分：merge-base + merge-tree，不 fetch、不解析 ref。
+ *
+ * 批量场景（矩阵预演、合并顺序模拟、后台预警）直接用它：整批只 fetch 一次、
+ * ref→sha 只解析一次，避免 N×M 次重复网络与进程开销。
+ */
+export async function previewMergeBySha(
+  repoRoot: string,
+  intoSha: string,
+  fromSha: string,
+  options: {
+    /** 仅用于回填结果里的展示名，不参与计算 */
+    into?: string;
+    from?: string;
+    onProgress?: ProgressReporter;
+    /** 进度区间，默认 [38, 100] */
+    progressFrom?: number;
+    progressTo?: number;
+  } = {},
+): Promise<MergePreviewResult> {
+  const onProgress = options.onProgress;
+  const p0 = options.progressFrom ?? 38;
+  const p1 = options.progressTo ?? 100;
+  const pMid = p0 + (p1 - p0) * 0.15;
+
+  await reportProgress(onProgress, p0, "计算 merge-base…");
+  const base = await tryMergeBase(repoRoot, intoSha, fromSha);
+  const unrelated = base === null;
+
+  const parsed = await withSoftProgress(
+    onProgress,
+    pMid,
+    p1,
+    "merge-tree 分析冲突中…",
+    () =>
+      runMergeTree(repoRoot, intoSha, fromSha, {
+        allowUnrelated: unrelated,
+        mergeBaseSha: base,
+      }),
+  );
+
+  const messages = [...parsed.messages];
+  if (unrelated) {
+    messages.unshift(
+      "两条分支没有共同祖先（unrelated histories），git merge-base 无法计算。",
+      "已使用 --allow-unrelated-histories 继续预演合并结果。",
+    );
+  }
+
+  const clean = unrelated ? false : parsed.clean;
+
+  return {
+    repoRoot,
+    into: options.into ?? intoSha,
+    from: options.from ?? fromSha,
+    intoSha,
+    fromSha,
+    mergeBase: base ?? "",
+    clean,
+    fetched: false,
+    conflictFiles: parsed.conflictFiles,
+    messages,
+    unrelatedHistories: unrelated,
+    outcome: unrelated ? "unrelated" : clean ? "clean" : "conflicts",
+    resultTree: parsed.resultTree,
+  };
+}
+
+/**
  * Preview merging `from` into `into` without touching the worktree.
  * Defaults to fetch first so local remote-tracking branches stay fresh.
  * merge-base 失败时不抛错，返回结构化结果（unrelatedHistories）。
@@ -148,53 +236,20 @@ export async function previewMerge(options: MergeOptions): Promise<MergePreviewR
       true,
       options.remote ?? "origin",
       (u) => mapProgress(onProgress, 2, 28, u.percent / 100, u.label),
+      options.authToken ? { token: options.authToken, provider: options.authProvider } : undefined,
     );
   }
   await reportProgress(onProgress, 30, "解析分支…");
 
   const intoSha = await ensureRev(repoRoot, options.into);
   const fromSha = await ensureRev(repoRoot, options.from);
-  await reportProgress(onProgress, 38, "计算 merge-base…");
-  const base = await tryMergeBase(repoRoot, intoSha, fromSha);
-  const unrelated = base === null;
 
-  await reportProgress(onProgress, 45, "执行 merge-tree（不改工作区）…");
-  const parsed = await withSoftProgress(
-    onProgress,
-    45,
-    92,
-    "merge-tree 分析冲突中…",
-    () =>
-      runMergeTree(repoRoot, intoSha, fromSha, {
-        allowUnrelated: unrelated,
-        mergeBaseSha: base,
-      }),
-  );
-  await reportProgress(onProgress, 100, "冲突检测完成");
-
-  const messages = [...parsed.messages];
-  if (unrelated) {
-    messages.unshift(
-      "两条分支没有共同祖先（unrelated histories），git merge-base 无法计算。",
-      "已使用 --allow-unrelated-histories 继续预演合并结果。",
-    );
-  }
-
-  const clean = unrelated ? false : parsed.clean;
-  const outcome = unrelated ? "unrelated" : clean ? "clean" : "conflicts";
-
-  return {
-    repoRoot,
+  const result = await previewMergeBySha(repoRoot, intoSha, fromSha, {
     into: options.into,
     from: options.from,
-    intoSha,
-    fromSha,
-    mergeBase: base ?? "",
-    clean,
-    fetched,
-    conflictFiles: parsed.conflictFiles,
-    messages,
-    unrelatedHistories: unrelated,
-    outcome,
-  };
+    onProgress,
+  });
+  await reportProgress(onProgress, 100, "冲突检测完成");
+
+  return { ...result, fetched };
 }

@@ -92,6 +92,11 @@ export interface MergePreviewResult {
   outcome?: MergeOutcome;
   /** 两条历史没有共同祖先 */
   unrelatedHistories?: boolean;
+  /**
+   * `merge-tree --write-tree` 产出的结果树 OID。冲突时同样有值，只是树里的
+   * blob 带冲突标记。合并顺序模拟靠它接 `commit-tree` 串起下一步。
+   */
+  resultTree?: string;
 }
 
 /** Full merge rehearsal: preview + conflict contents + blame provenance. */

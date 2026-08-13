@@ -92,6 +92,98 @@ export interface FetchResult {
   stderr: string;
 }
 
+/** 比 MergeOutcome 多两个只在批量场景出现的结论 */
+export type SurveyOutcome = "clean" | "conflicts" | "unrelated" | "same" | "error";
+
+export interface TempBranchState {
+  name: string;
+  local: boolean;
+  /** 推上去了才谈得上申请 MR */
+  remote: boolean;
+}
+
+export interface MergeSurveyCell {
+  into: string;
+  from: string;
+  intoSha: string;
+  fromSha: string;
+  outcome: SurveyOutcome;
+  /** 批量场景只给路径，不生成正文 */
+  conflictPaths: string[];
+  resultTree?: string;
+  /** 同名临时分支已存在，说明之前解决过；由 core 查 git 得出 */
+  tempBranch?: TempBranchState;
+  error?: string;
+}
+
+export interface MergeSurveyResult {
+  repoRoot: string;
+  fetched: boolean;
+  generatedAt: number;
+  cells: MergeSurveyCell[];
+}
+
+export interface MergeChainStep {
+  from: string;
+  fromSha: string;
+  outcome: SurveyOutcome;
+  conflictPaths: string[];
+  commit: string;
+}
+
+export interface MergeChainResult {
+  into: string;
+  intoSha: string;
+  order: string[];
+  steps: MergeChainStep[];
+  /** 从头开始能连续干净合入的分支数 */
+  cleanPrefix: number;
+  blockedAt: string | null;
+  blockedPaths: string[];
+  /** 不是冲突而是别的原因卡住时（ref 解析失败等）的说明 */
+  blockedReason?: string;
+}
+
+export interface SuggestOrderResult {
+  best: MergeChainResult;
+  baseline: MergeChainResult;
+  tried: number;
+}
+
+/**
+ * 一对分支「已一键解决并推送」的记录。
+ *
+ * 注意它不代表这一对已经能干净合并了：一键解决产出的是临时分支
+ * `merge/<from>-into-<into>`，from 本身没动，重跑 merge-tree 照样冲突。
+ * 所以矩阵里这是一个独立状态，不是把格子重算成绿。
+ */
+/**
+ * 一对分支在「冲突 → 已处理 → 已提 MR」这条链路上走到哪了。
+ *
+ * 两条路径都用它：冲突的先 tempBranch 后 mr；干净的没有 tempBranch，直接提 MR。
+ */
+export interface PairProgress {
+  into: string;
+  from: string;
+  /** 记录时两侧的 sha；重跑矩阵后对不上就说明这条记录过期了 */
+  intoSha: string;
+  fromSha: string;
+  /** 一键解决产出的临时分支；干净直合没有这一步 */
+  tempBranch?: string;
+  /** MR 进展；没有表示还没申请过 */
+  mr?: {
+    url: string | null;
+    /** browser 只是打开了创建页，MR 还没真的建出来，不能当已提交算 */
+    via: "gh" | "glab" | "token" | "browser";
+  };
+}
+
+/** 从矩阵跳进预演时带着的批处理上下文，让人知道自己在整批里的哪一步 */
+export interface MatrixTrail {
+  pairs: Array<{ into: string; from: string }>;
+  index: number;
+}
+
 export type MrMethod = "cli" | "download-cli" | "token" | "browser";
 
 export interface GitInsightConfigView {
@@ -144,6 +236,8 @@ export type HostMessage =
   | { type: "fetchResult"; data: FetchResult; report: string }
   | { type: "graphResult"; data: BranchGraph; report: string; mermaid: string }
   | { type: "previewResult"; data: ConflictBlameResult; report: string; mermaid: string }
+  | { type: "surveyResult"; data: MergeSurveyResult; report: string }
+  | { type: "mergeOrderResult"; data: SuggestOrderResult; report: string }
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
@@ -163,6 +257,9 @@ export type HostMessage =
       messages: string[];
       into: string;
       from: string;
+      /** 两侧当时的 sha：矩阵靠它判断「已处理」标记还算不算数 */
+      intoSha: string;
+      fromSha: string;
       previousBranch: string | null;
       usedWorktree: boolean;
     }

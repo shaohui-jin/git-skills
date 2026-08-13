@@ -100,6 +100,31 @@ export async function fetchRemote(
   };
 }
 
+/**
+ * 后台用的静默 fetch：**绝不弹登录框**。
+ *
+ * 前台的 fetchRemote 允许弹窗，因为用户正盯着结果等；后台轮询不行——
+ * 人在写代码时被 GCM / Connect to GitHub 抢走焦点是不能接受的。
+ * 拿不到凭据就让这一轮失败，调用方据此退避即可。
+ */
+export async function fetchRemoteQuiet(
+  cwd?: string,
+  remote = "origin",
+): Promise<FetchResult> {
+  const repoRoot = await resolveRepoRoot(cwd);
+  const result = await runGit(repoRoot, ["fetch", "--prune", remote], {
+    allowFail: true,
+    interactive: false,
+  });
+  return {
+    repoRoot,
+    remote,
+    ok: result.code === 0,
+    stdout: result.stdout.trim(),
+    stderr: result.stderr.trim(),
+  };
+}
+
 export async function maybeFetch(
   cwd: string,
   enabled: boolean,

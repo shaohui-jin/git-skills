@@ -2,6 +2,7 @@ import {
   applyStashedResolve,
   buildBranchGraph,
   createMergeRequest,
+  crossPairs,
   detectMrPlatform,
   fetchRemote,
   listRemotes,
@@ -10,8 +11,12 @@ import {
   rehearseMerge,
   reportFetch,
   reportGraph,
+  reportMergeOrder,
   reportMergeRehearsal,
+  reportMergeSurvey,
   resolveDefaultRemote,
+  suggestMergeOrder,
+  surveyMerges,
   resolveRepoRoot,
   runGit,
   graphToMermaid,
@@ -290,6 +295,61 @@ function tokenResultPayload(result: TokenValidateResult) {
     summary: titleSideStatus(result),
     titleStatus: titleSideStatus(result),
   };
+}
+
+/**
+ * 顶部状态条的忙碌文案。返回 undefined 表示这个请求快到不值得显示进度。
+ * 宿主与浏览器预览服务共用，避免两边各写一条越来越长的三元链。
+ */
+export function busyLabelForRequest(req: WebviewRequest): string | undefined {
+  switch (req.type) {
+    case "fetch":
+      return "正在 Fetch…";
+    case "graph":
+      return "正在加载全量分支图…";
+    case "preview":
+    case "blame":
+      return "合并预演中…";
+    case "survey":
+      return "批量预演中…";
+    case "mergeOrder":
+      return "推演合并顺序中…";
+    case "applyResolve":
+      return req.files?.length ? "一键解决并推送…" : "正在推送临时分支…";
+    case "prepareCreateMr":
+      return "准备申请 MR（识别平台 / 拉取成员）…";
+    case "createMr":
+      return "正在创建 MR…";
+    case "downloadCli":
+      return "正在下载 CLI 到扩展目录…";
+    case "validateToken":
+      return "正在校验 Token…";
+    case "saveGitConfig":
+      return req.config.mrMethod === "token" ? "保存配置并校验 Token…" : undefined;
+    case "setCwd":
+      return "正在打开仓库…";
+    default:
+      return undefined;
+  }
+}
+
+/** 这些请求会流式上报进度，值得把 onProgress 接上 */
+export function requestStreamsProgress(req: WebviewRequest): boolean {
+  switch (req.type) {
+    case "graph":
+    case "preview":
+    case "blame":
+    case "survey":
+    case "mergeOrder":
+    case "applyResolve":
+    case "downloadCli":
+    case "validateToken":
+      return true;
+    case "saveGitConfig":
+      return req.config.mrMethod === "token";
+    default:
+      return false;
+  }
 }
 
 export async function handleWebviewRequest(
@@ -610,6 +670,60 @@ export async function handleWebviewRequest(
       };
     }
 
+    if (req.type === "survey") {
+      const intos = (req.intos ?? []).filter(Boolean);
+      const froms = (req.froms ?? []).filter(Boolean);
+      if (intos.length === 0 || froms.length === 0) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "矩阵预演需要至少一个线上目标与一个我的分支",
+              code: "USAGE",
+            },
+          ],
+        };
+      }
+      const remote = await resolveOpRemote(cwd, undefined, loadCfg);
+      const data = await surveyMerges({
+        cwd,
+        pairs: crossPairs(intos, froms),
+        fetch: !req.noFetch,
+        remote,
+        onProgress,
+      });
+      return {
+        messages: [{ type: "surveyResult", data, report: reportMergeSurvey(data) }],
+      };
+    }
+
+    if (req.type === "mergeOrder") {
+      const branches = (req.branches ?? []).filter(Boolean);
+      if (!req.into || branches.length === 0) {
+        return {
+          messages: [
+            {
+              type: "error",
+              message: "顺序推演需要线上目标与至少一个待合入分支",
+              code: "USAGE",
+            },
+          ],
+        };
+      }
+      const remote = await resolveOpRemote(cwd, undefined, loadCfg);
+      const data = await suggestMergeOrder({
+        cwd,
+        into: req.into,
+        branches,
+        fetch: !req.noFetch,
+        remote,
+        onProgress,
+      });
+      return {
+        messages: [{ type: "mergeOrderResult", data, report: reportMergeOrder(data) }],
+      };
+    }
+
     if (req.type === "applyResolve") {
       if (previewMode) {
         return {
@@ -656,6 +770,8 @@ export async function handleWebviewRequest(
             messages: data.messages,
             into: data.into,
             from: data.from,
+            intoSha: data.intoSha,
+            fromSha: data.fromSha,
             previousBranch: data.previousBranch,
             usedWorktree: data.usedWorktree,
           },

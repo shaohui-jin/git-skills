@@ -572,7 +572,8 @@ body {
 }
 
 .content:has(> .panel-stack),
-.content:has(> .preview-host) {
+.content:has(> .preview-host),
+.content:has(> .matrix) {
   overflow: hidden;
 }
 
@@ -1528,6 +1529,9 @@ button.btn {
   font: inherit;
   font-size: var(--fs-sm);
   font-weight: 600;
+  /* 按钮文案永远不换行：宁可让同行的输入框让位，也不能出现「加/入」两行 */
+  white-space: nowrap;
+  flex: 0 0 auto;
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--accent) 92%, #fff) 0%,
@@ -3492,5 +3496,559 @@ button.btn.tiny {
   .merge-ws-gutter,
   .merge-ws-gutter-head {
     display: none;
+  }
+}
+
+/* ========== 分段切换（外壳层通用） ========== */
+.seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.seg-btn {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-4);
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.seg-btn:hover:not(.active) {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: var(--elev-1);
+}
+
+/* ========== 从矩阵跳进预演时的回程条 ========== */
+.trail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+.trail-back {
+  appearance: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.trail-back:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.trail-pos {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.trail-pair {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--fs-xs);
+  overflow: hidden;
+}
+
+.trail-pair .mine {
+  color: var(--mine);
+}
+
+.trail-pair .online {
+  color: var(--online);
+}
+
+.trail-pair > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trail-arrow {
+  flex: 0 0 auto;
+  color: var(--dim);
+}
+
+.trail-spacer {
+  flex: 1 1 auto;
+}
+
+/* ========== 分支图 tab：视角切换条 ========== */
+.graph-modes {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+  padding-bottom: var(--space-4);
+}
+
+/* ========== 合并矩阵 ========== */
+.matrix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.matrix-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+.matrix-setup-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.matrix-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* seg 与「加入」都不收缩，min-width 要留够，否则挤扁的是中间的分支选择器 */
+  flex: 1 1 420px;
+  min-width: 400px;
+}
+
+/* BranchTreeSelect 自身不带宽度，靠这里在行内撑开 */
+.matrix-picker > .tree-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.matrix-setup-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.matrix-chips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.matrix-chip-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+
+.matrix-chip-label {
+  flex: 0 0 auto;
+  width: 44px;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-wide);
+}
+
+.matrix-chip-label.online {
+  color: var(--online);
+}
+
+.matrix-chip-label.mine {
+  color: var(--mine);
+}
+
+.chip {
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.chip--online {
+  border-color: color-mix(in srgb, var(--online) 40%, transparent);
+  background: var(--online-soft);
+}
+
+.chip--mine {
+  border-color: color-mix(in srgb, var(--mine) 40%, transparent);
+  background: var(--mine-soft);
+}
+
+.chip:hover {
+  border-color: var(--danger);
+}
+
+.chip-x {
+  color: var(--dim);
+  font-size: var(--fs-sm);
+}
+
+.chip:hover .chip-x {
+  color: var(--danger);
+}
+
+.matrix-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.matrix-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.matrix-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+/* 图纸层：网格底、硬边 */
+.matrix-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-plot);
+  background:
+    linear-gradient(var(--plot-grid) 1px, transparent 1px) 0 0 /
+      var(--plot-grid-size) var(--plot-grid-size),
+    linear-gradient(90deg, var(--plot-grid) 1px, transparent 1px) 0 0 /
+      var(--plot-grid-size) var(--plot-grid-size),
+    var(--plot-bg);
+}
+
+.matrix-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: var(--fs-xs);
+}
+
+.matrix-corner,
+.matrix-col-head,
+.matrix-row-head {
+  position: sticky;
+  z-index: 2;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-family: var(--mono);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--plot-bg);
+}
+
+.matrix-corner {
+  top: 0;
+  left: 0;
+  z-index: 3;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.matrix-col-head {
+  top: 0;
+  color: var(--online);
+  border-bottom: 1px solid var(--border-strong);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--online) 45%, transparent);
+}
+
+.matrix-row-head {
+  left: 0;
+  color: var(--mine);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: inset -2px 0 0 color-mix(in srgb, var(--mine) 45%, transparent);
+}
+
+.matrix-td {
+  padding: 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.matrix-cell {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-plot);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition:
+    box-shadow var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.matrix-cell-n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.matrix-cell--clean {
+  color: var(--clean);
+  border-color: color-mix(in srgb, var(--clean) 40%, transparent);
+  background: var(--clean-soft);
+}
+
+.matrix-cell--clean:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--clean) 62%, transparent);
+}
+
+.matrix-cell--conflicts {
+  color: var(--conflict);
+  border-color: color-mix(in srgb, var(--conflict) 45%, transparent);
+  background: var(--conflict-soft);
+}
+
+.matrix-cell--conflicts:hover {
+  box-shadow: var(--glow-conflict);
+}
+
+.matrix-cell--unrelated,
+.matrix-cell--error {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.matrix-cell--same {
+  color: var(--dim);
+  background: var(--plot-sunken);
+  cursor: default;
+}
+
+/*
+ * 处理过的格子压过冲突红：已经安排上了就不该继续抢注意力。
+ * 但底层结论仍是冲突（from 没动），所以一律用虚线边提示「还没真的合进去」。
+ *
+ * 三档：待申请 MR（橙，还欠一步）→ 创建页已开（橙虚，待人确认）→ 已提 MR（绿，走完了）。
+ */
+.matrix-cell.is-resolved,
+.matrix-cell.is-local,
+.matrix-cell.is-page {
+  color: var(--warn);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.matrix-cell.is-mr {
+  color: var(--clean);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--clean) 55%, transparent);
+  background: var(--clean-soft);
+}
+
+.matrix-cell.is-resolved:hover,
+.matrix-cell.is-local:hover,
+.matrix-cell.is-page:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 62%, transparent);
+}
+
+.matrix-cell.is-mr:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--clean) 62%, transparent);
+}
+
+/* 阶段色交给里面的 stat-pill，块本身保持中性，免得三档状态各配一套背景 */
+.matrix-done {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.matrix-done .hint {
+  margin: 0;
+}
+
+.matrix-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+.matrix-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: var(--track-mono);
+  overflow-wrap: anywhere;
+}
+
+.matrix-detail-title .online {
+  color: var(--online);
+}
+
+.matrix-detail-title .mine {
+  color: var(--mine);
+}
+
+.matrix-detail-arrow {
+  color: var(--dim);
+}
+
+.matrix-paths {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.matrix-paths li {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-plot);
+  background: var(--plot-sunken);
+  overflow-wrap: anywhere;
+}
+
+.matrix-order {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.matrix-order-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-plot);
+  background: var(--surface-soft);
+  font-size: var(--fs-xs);
+}
+
+.matrix-order-step.is-clean {
+  border-left-color: var(--clean);
+}
+
+.matrix-order-step.is-conflicts {
+  border-left-color: var(--conflict);
+  background: var(--conflict-soft);
+}
+
+.matrix-order-step.is-pending {
+  opacity: 0.55;
+}
+
+.matrix-order-n {
+  flex: 0 0 auto;
+  width: 16px;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix-order-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matrix-order-n2 {
+  flex: 0 0 auto;
+  color: var(--conflict);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1100px) {
+  .matrix-body {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

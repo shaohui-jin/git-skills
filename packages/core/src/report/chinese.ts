@@ -1,3 +1,5 @@
+import type { MergeChainResult, SuggestOrderResult } from "../merge/chain.js";
+import type { MergeSurveyResult, SurveyOutcome } from "../merge/survey.js";
 import type {
   BranchGraph,
   ConflictBlameResult,
@@ -183,6 +185,133 @@ export function reportMerge(result: MergePreviewResult): string {
 
 export function reportBlame(result: ConflictBlameResult): string {
   return reportMergeRehearsal(result);
+}
+
+const OUTCOME_MARK: Record<SurveyOutcome, string> = {
+  clean: "✅",
+  conflicts: "⚠️",
+  unrelated: "🚫",
+  same: "—",
+  error: "❌",
+};
+
+const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
+  clean: "干净",
+  conflicts: "冲突",
+  unrelated: "无共同祖先",
+  same: "同名，跳过",
+  error: "失败",
+};
+
+/** 矩阵：行 = 我的分支(from)，列 = 线上目标(into)，格子里是结论 + 冲突文件数 */
+export function reportMergeSurvey(result: MergeSurveyResult): string {
+  const intos: string[] = [];
+  const froms: string[] = [];
+  for (const c of result.cells) {
+    if (!intos.includes(c.into)) {
+      intos.push(c.into);
+    }
+    if (!froms.includes(c.from)) {
+      froms.push(c.from);
+    }
+  }
+  const byKey = new Map(result.cells.map((c) => [`${c.into}\0${c.from}`, c]));
+
+  const lines: string[] = [
+    `# 批量合并预演`,
+    ``,
+    `- 仓库：${result.repoRoot}`,
+    `- 组合数：${result.cells.length}（${froms.length} 个来源 × ${intos.length} 个目标）`,
+    `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
+    ``,
+    `| from \\ into | ${intos.map((i) => `\`${i}\``).join(" | ")} |`,
+    `| --- | ${intos.map(() => "---").join(" | ")} |`,
+  ];
+
+  for (const from of froms) {
+    const cells = intos.map((into) => {
+      const c = byKey.get(`${into}\0${from}`);
+      if (!c) {
+        return "";
+      }
+      const n = c.conflictPaths.length;
+      return `${OUTCOME_MARK[c.outcome]} ${OUTCOME_TEXT[c.outcome]}${n > 0 ? ` (${n})` : ""}`;
+    });
+    lines.push(`| \`${from}\` | ${cells.join(" | ")} |`);
+  }
+
+  const dirty = result.cells.filter((c) => c.conflictPaths.length > 0);
+  if (dirty.length > 0) {
+    lines.push(``, `## 冲突明细`);
+    for (const c of dirty) {
+      lines.push(``, `### \`${c.from}\` → \`${c.into}\`（${c.conflictPaths.length} 个文件）`);
+      for (const p of c.conflictPaths) {
+        lines.push(`- \`${p}\``);
+      }
+    }
+  }
+
+  const failed = result.cells.filter((c) => c.outcome === "error");
+  if (failed.length > 0) {
+    lines.push(``, `## 未能预演`);
+    for (const c of failed) {
+      lines.push(`- \`${c.from}\` → \`${c.into}\`：${c.error ?? "未知原因"}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function chainLines(result: MergeChainResult, title: string): string[] {
+  const lines = [`### ${title}`, ``];
+  result.steps.forEach((s, i) => {
+    const mark = OUTCOME_MARK[s.outcome];
+    const n = s.conflictPaths.length;
+    lines.push(
+      `${i + 1}. ${mark} \`${s.from}\` — ${OUTCOME_TEXT[s.outcome]}${n > 0 ? `（${n} 个文件）` : ""}`,
+    );
+  });
+  result.order.slice(result.steps.length).forEach((from, i) => {
+    lines.push(`${result.steps.length + i + 1}. ⏸ \`${from}\` — 未推演（前面已卡住）`);
+  });
+  return lines;
+}
+
+export function reportMergeOrder(result: SuggestOrderResult): string {
+  const { best, baseline } = result;
+  const total = best.order.length;
+  const lines: string[] = [
+    `# 合并顺序建议`,
+    ``,
+    `- 目标分支：\`${best.into}\` @ \`${short(best.intoSha)}\``,
+    `- 待合入：${total} 个`,
+    `- 建议顺序可连续干净合入：**${best.cleanPrefix} / ${total}**（原顺序 ${baseline.cleanPrefix} / ${total}）`,
+    best.blockedAt
+      ? `- 从 \`${best.blockedAt}\` 开始需要人工处理${
+          best.blockedPaths.length > 0
+            ? `（${best.blockedPaths.length} 个文件）`
+            : best.blockedReason
+              ? `：${best.blockedReason}`
+              : ""
+        }`
+      : `- 全部可干净合入`,
+    ``,
+    `> 模拟全程在对象库内完成，不改工作区、不建分支。`,
+    ``,
+  ];
+
+  lines.push(...chainLines(best, "建议顺序"));
+  if (best.cleanPrefix > baseline.cleanPrefix) {
+    lines.push(``, ...chainLines(baseline, "原顺序（对比）"));
+  }
+
+  if (best.blockedPaths.length > 0) {
+    lines.push(``, `## 卡住那一步的冲突文件`);
+    for (const p of best.blockedPaths) {
+      lines.push(`- \`${p}\``);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function reportFetch(result: FetchResult): string {

@@ -3,7 +3,9 @@ import type {
   ConflictBlameResult,
   FetchResult,
   GitInsightProjectConfig,
+  MergeSurveyResult,
   MrMethod,
+  SuggestOrderResult,
 } from "@git-insight/core";
 
 /** Webview -> Extension host / preview server */
@@ -24,6 +26,20 @@ export type WebviewRequest =
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
   /** @deprecated 同 preview（合并预演） */
   | { type: "blame"; into: string; from: string; noFetch?: boolean }
+  | {
+      type: "survey";
+      /** 列：线上目标 */
+      intos: string[];
+      /** 行：我的分支 */
+      froms: string[];
+      noFetch?: boolean;
+    }
+  | {
+      type: "mergeOrder";
+      into: string;
+      branches: string[];
+      noFetch?: boolean;
+    }
   | {
       type: "applyResolve";
       into: string;
@@ -159,6 +175,8 @@ export type HostMessage =
       report: string;
       mermaid: string;
     }
+  | { type: "surveyResult"; data: MergeSurveyResult; report: string }
+  | { type: "mergeOrderResult"; data: SuggestOrderResult; report: string }
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
@@ -179,6 +197,9 @@ export type HostMessage =
       messages: string[];
       into: string;
       from: string;
+      /** 两侧当时的 sha：矩阵靠它判断「已处理」标记还算不算数 */
+      intoSha: string;
+      fromSha: string;
       previousBranch: string | null;
       usedWorktree: boolean;
     }

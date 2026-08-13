@@ -48,6 +48,7 @@ export { GitError, resolveRepoRoot, runGit, tryMergeBase } from "./git/runner.js
 export { getGitVersion, assertMergeTreeSupported } from "./git/version.js";
 export {
   fetchRemote,
+  fetchRemoteQuiet,
   maybeFetch,
   probeRemoteAccess,
   resolveFetchAuth,
@@ -70,7 +71,28 @@ export {
 } from "./git/auth.js";
 export type { GitAuthOptions, GitAuthProvider } from "./git/auth.js";
 export { buildBranchGraph } from "./graph/builder.js";
-export { previewMerge } from "./merge/preview.js";
+export { previewMerge, previewMergeBySha } from "./merge/preview.js";
+export {
+  clearMergeSurveyCache,
+  crossPairs,
+  surveyMerges,
+} from "./merge/survey.js";
+export type {
+  MergeSurveyCell,
+  MergeSurveyOptions,
+  MergeSurveyPair,
+  MergeSurveyResult,
+  SurveyOutcome,
+  TempBranchState,
+} from "./merge/survey.js";
+export { simulateMergeChain, suggestMergeOrder } from "./merge/chain.js";
+export type {
+  MergeChainResult,
+  MergeChainStep,
+  SimulateChainOptions,
+  SuggestOrderOptions,
+  SuggestOrderResult,
+} from "./merge/chain.js";
 export { conflictBlame } from "./merge/blame.js";
 export { rehearseMerge } from "./merge/rehearsal.js";
 export {
@@ -83,6 +105,20 @@ export type {
   ApplyResolveResult,
   StashFilePayload,
 } from "./merge/applyResolve.js";
+export {
+  autoResolveConflicts,
+  builtinResolvers,
+  readThreeWay,
+  regenerate,
+  takeOurs,
+  takeTheirs,
+  union,
+} from "./merge/resolvers.js";
+export type {
+  AutoResolveOutcome,
+  ConflictResolver,
+  ResolveContext,
+} from "./merge/resolvers.js";
 export {
   branchNameForMr,
   isSameBranchForMr,
@@ -107,6 +143,8 @@ export {
   reportGraph,
   reportMerge,
   reportBlame,
+  reportMergeOrder,
   reportMergeRehearsal,
+  reportMergeSurvey,
   reportFetch,
 } from "./report/chinese.js";

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -6,6 +7,11 @@ import type { ProgressReporter } from "../types.js";
 import { GitError, ensureRev, resolveRepoRoot, runGit } from "../git/runner.js";
 import { branchNameForMr } from "./branchName.js";
 import { listRemotes } from "../git/remotes.js";
+import {
+  autoResolveConflicts,
+  builtinResolvers,
+  type ConflictResolver,
+} from "./resolvers.js";
 
 export interface StashFilePayload {
   path: string;
@@ -29,6 +35,13 @@ export interface ApplyResolveOptions {
   push?: boolean;
   /** 自定义临时分支名；默认 merge/<from>-into-<into> */
   tempBranch?: string;
+  /**
+   * 机械冲突的自动解法（.gitignore 并集、lockfile 重算…）。默认只用内置的无副作用集合。
+   *
+   * 安全约束：**永远不要用仓库里的文件来组装这个数组**。regenerate 类 resolver 会执行命令，
+   * 而预演别人的分支正是本工具的主要用法。详见 merge/resolvers.ts 文件头。
+   */
+  resolvers?: readonly ConflictResolver[];
   onProgress?: ProgressReporter;
 }
 
@@ -140,6 +153,39 @@ async function listUnmerged(cwd: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+/**
+ * regenerate 类 resolver 的执行入口。刻意不走 shell：参数原样传给 execve，
+ * 路径里的空格、引号、`&&` 都只是普通字符，构造不出注入。
+ */
+function runInWorktree(
+  workDir: string,
+  cmd: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(cmd, args, {
+      cwd: workDir,
+      windowsHide: true,
+      shell: false,
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (b: Buffer) => {
+      stdout += b.toString("utf8");
+    });
+    child.stderr?.on("data", (b: Buffer) => {
+      stderr += b.toString("utf8");
+    });
+    child.on("error", (err) => {
+      resolvePromise({ code: 127, stdout: "", stderr: err.message });
+    });
+    child.on("close", (code) => {
+      resolvePromise({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
 async function writeStashFiles(
   workDir: string,
   files: StashFilePayload[],
@@ -172,6 +218,7 @@ export async function applyStashedResolve(
   const from = options.from.trim();
   const tempBranch =
     options.tempBranch?.trim() || defaultTempBranchName(into, from, remotes);
+  const resolvers = options.resolvers ?? builtinResolvers;
 
   if (!into || !from) {
     throw new GitError("into / from 不能为空", { code: "USAGE" });
@@ -231,17 +278,47 @@ export async function applyStashedResolve(
 
     const unmerged = await listUnmerged(wtPath);
     const stashPaths = new Set(files.map((f) => f.path.replace(/\\/g, "/")));
+    /** resolver 处理掉的文件，形如 `.gitignore (union)`；进 commit message 好留痕 */
+    const autoNotes: string[] = [];
 
     if (mergeRun.code !== 0 || unmerged.length > 0) {
-      if (files.length === 0) {
+      // resolver 先过一遍：.gitignore、lockfile 这类机械冲突不该占用人的注意力。
+      // 只处理没暂存裁决的文件——人已经选过边的，人说了算。
+      const autoTargets = unmerged
+        .map((p) => p.replace(/\\/g, "/"))
+        .filter((p) => !stashPaths.has(p));
+      const auto =
+        resolvers.length > 0 && autoTargets.length > 0
+          ? await autoResolveConflicts({
+              workDir: wtPath,
+              paths: autoTargets,
+              resolvers,
+              run: (cmd, args) => runInWorktree(wtPath, cmd, args),
+            })
+          : [];
+      if (auto.length > 0) {
+        await writeStashFiles(
+          wtPath,
+          auto.map((a) => ({ path: a.path, resolvedContent: a.content })),
+        );
+        for (const a of auto) {
+          stashPaths.add(a.path);
+          messages.push(`自动解决 ${a.path}（${a.resolverId}）`);
+          autoNotes.push(`${a.path} (${a.resolverId})`);
+        }
+      }
+
+      if (files.length === 0 && auto.length === 0) {
         await runGit(wtPath, ["merge", "--abort"], { allowFail: true });
         throw new GitError(
           "合并存在冲突，请先在预演中完成选边，再使用「一键解决并推送」",
           { code: "HAS_CONFLICTS" },
         );
       }
-      reportProgress(onProgress, 50, `写入暂存解决结果（${files.length} 文件）…`);
-      await writeStashFiles(wtPath, files);
+      if (files.length > 0) {
+        reportProgress(onProgress, 50, `写入暂存解决结果（${files.length} 文件）…`);
+        await writeStashFiles(wtPath, files);
+      }
 
       const still = await listUnmerged(wtPath);
       const missing = still.filter((p) => !stashPaths.has(p.replace(/\\/g, "/")));
@@ -252,7 +329,9 @@ export async function applyStashedResolve(
           { code: "UNRESOLVED_LEFT", args: missing },
         );
       }
-      messages.push(`已按暂存覆盖 ${files.length} 个冲突文件`);
+      if (files.length > 0) {
+        messages.push(`已按暂存覆盖 ${files.length} 个冲突文件`);
+      }
     } else if (files.length > 0) {
       reportProgress(onProgress, 50, "合并无冲突，同步写入暂存文件…");
       await writeStashFiles(wtPath, files);
@@ -262,13 +341,19 @@ export async function applyStashedResolve(
       messages.push("git merge 无冲突；将提交合并结果到临时分支");
     }
 
-    reportProgress(onProgress, 70, files.length ? "提交解决冲突…" : "提交合并…");
-    const commitMsg = files.length
+    const resolvedAny = files.length > 0 || autoNotes.length > 0;
+    reportProgress(onProgress, 70, resolvedAny ? "提交解决冲突…" : "提交合并…");
+    const commitMsg = resolvedAny
       ? [
           `resolve: merge ${from} into ${into} via ${tempBranch}`,
           "",
           "Applied stash choices from Git Insight merge preview (scheme A, worktree).",
-        ].join("\n")
+          autoNotes.length > 0
+            ? `Auto-resolved by resolver: ${autoNotes.join(", ")}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
       : [
           `merge: ${from} into ${into} via ${tempBranch}`,
           "",

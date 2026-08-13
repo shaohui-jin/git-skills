@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { isSameBranchForMr as coreIsSameBranchForMr } from "@git-insight/core/merge/branchName";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";
 import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
 import GitConfigPanel from "./GitConfigPanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
+import MergeMatrix from "./MergeMatrix.vue";
 import type {
   AiResolveHunkResult,
   AiResolveRequestPayload,
@@ -21,6 +22,10 @@ import type {
   ConflictBlameResult,
   GitInsightConfigView,
   HostMessage,
+  MatrixTrail,
+  MergeSurveyResult,
+  PairProgress,
+  SuggestOrderResult,
   TabId,
   TokenValidateView,
 } from "./types";
@@ -189,13 +194,77 @@ function onRequestCreateMr(payload: { into: string; from: string }): void {
     status.value = createMrBlockReason.value;
     return;
   }
+  askCreateMr(payload);
+}
+
+/** 正在申请 MR 的是哪一对；createMrResult 回来时靠它认回去记进度 */
+const mrRequestPair = ref<PairProgress | null>(null);
+
+/**
+ * 发起「准备申请 MR」。
+ *
+ * 源分支优先用调用方指明的，其次是**这一对自己**的临时分支。都没有才不传，
+ * 让 core 的 resolveDefaultSource 去推：它按 (into, from) 算出临时分支名、
+ * 存在就用，不存在才回落到 from 本身。
+ *
+ * 这个「存在就用」是个坑：仓库里躺着一条早先试出来的同名 `merge/*` 时，本该
+ * 直接用 from 的干净合并会被悄悄换成那条陈旧分支。所以能定死的地方就定死，
+ * 矩阵那边正是这么做的。
+ *
+ * 反过来，这里绝不能拿「最近一次解决产生的分支」兜底：批量处理时它指向的是别的分支对，
+ * 传上去等于用一个错的 explicit 覆盖掉 core 本来能推对的结果。
+ */
+function askCreateMr(pair: {
+  into: string;
+  from: string;
+  intoSha?: string;
+  fromSha?: string;
+  sourceBranch?: string;
+}): void {
+  const known = progressIndex.value.get(pairKey(pair.into, pair.from));
+  const intoSha = pair.intoSha ?? known?.intoSha ?? preview.value?.intoSha;
+  const fromSha = pair.fromSha ?? known?.fromSha ?? preview.value?.fromSha;
+  // sha 齐了才记得住进度；缺了就只发请求，不留一条无法判新旧的记录
+  mrRequestPair.value =
+    intoSha && fromSha
+      ? { ...known, into: pair.into, from: pair.from, intoSha, fromSha }
+      : null;
   mrBusy.value = true;
   vscode.postMessage({
     type: "prepareCreateMr",
-    into: payload.into,
-    from: payload.from,
-    sourceBranch: lastTempBranch.value || undefined,
+    into: pair.into,
+    from: pair.from,
+    sourceBranch: pair.sourceBranch || known?.tempBranch || undefined,
   });
+}
+
+/**
+ * 矩阵里对某一格直接申请 MR。冲突格子走的是已推的临时分支，干净格子直接用 from。
+ *
+ * 不走 createMrBlockReason：那套判断依赖当前 preview 的冲突状态，而从矩阵点过来时
+ * preview 可能是空的、或者是别的分支对的。这里该拦的只有预览模式和 MR 方式没配好，
+ * 其余交给宿主侧再校验一次（coreBridge 对这两条也有独立判断）。
+ */
+function requestMrFromMatrix(pair: {
+  into: string;
+  from: string;
+  intoSha?: string;
+  fromSha?: string;
+  sourceBranch?: string;
+}): void {
+  if (previewMode.value) {
+    error.value = "预览模式不支持申请 MR";
+    status.value = error.value;
+    return;
+  }
+  if (!methodReady.value) {
+    error.value =
+      methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
+    status.value = error.value;
+    tab.value = "config";
+    return;
+  }
+  askCreateMr(pair);
 }
 
 function submitCreateMr(payload: {
@@ -239,9 +308,11 @@ const graph = ref<BranchGraph | null>(null);
 /** 服务端中文报告（备用）；画布交互以 overview / path 为准 */
 const graphReport = ref("");
 const selectedPath = ref<{ tipName: string; chain: string[] } | null>(null);
+/** 分支图 tab 的两种视角：单条链路的图，或多分支两两合并的矩阵 */
+const graphMode = ref<"graph" | "matrix">("graph");
+const survey = ref<MergeSurveyResult | null>(null);
+const mergeOrder = ref<SuggestOrderResult | null>(null);
 const preview = ref<ConflictBlameResult | null>(null);
-/** 最近一次一键解决产生的临时分支，供申请 MR 默认源分支 */
-const lastTempBranch = ref<string | null>(null);
 const aiBusy = ref(false);
 const aiProgressPercent = ref<number | null>(null);
 const aiProgressLabel = ref("");
@@ -257,10 +328,53 @@ function clearAiWatchdog(): void {
     aiWatchdog = null;
   }
 }
-/** 一键解决并推送是否已成功（与 into/from 绑定） */
-const resolvePushDone = ref<{ into: string; from: string; tempBranch: string } | null>(
-  null,
+/**
+ * 每一对分支走到哪了（已推临时分支 / 已提 MR）。
+ *
+ * 做成一张表而不是单个值，是因为矩阵会一条条处理多对：换到下一对预演时，
+ * 上一对的成果不该被忘掉，否则回矩阵就看不出哪些已经安排过了。
+ */
+const pairProgress = ref<PairProgress[]>([]);
+
+function pairKey(intoRef: string, fromRef: string): string {
+  return `${intoRef}\u0000${fromRef}`;
+}
+
+const progressIndex = computed(
+  () => new Map(pairProgress.value.map((p) => [pairKey(p.into, p.from), p])),
 );
+
+/** 按 (into, from) 增改一条进度；已有字段不传就保留 */
+function upsertProgress(entry: PairProgress): void {
+  const key = pairKey(entry.into, entry.from);
+  pairProgress.value = [
+    ...pairProgress.value.filter((p) => pairKey(p.into, p.from) !== key),
+    entry,
+  ];
+}
+
+function rememberResolved(entry: PairProgress): void {
+  const prev = progressIndex.value.get(pairKey(entry.into, entry.from));
+  // 重新解决一遍推的还是同一条临时分支，已建的 MR 会跟着更新，别倒退回「待申请」
+  const mr = prev?.tempBranch === entry.tempBranch ? prev?.mr : undefined;
+  upsertProgress({ ...entry, mr });
+}
+
+/**
+ * 临时分支已推、但还没走过申请 MR 的条数。只给预演页的回程条用。
+ *
+ * 只算冲突那条路径（有 tempBranch 的），因为回程条本身就只串冲突那趟批处理。
+ * 干净格子进的是矩阵头部那条 MR 队列，两个计数各管各的场景，别混。
+ *
+ * 浏览器方式只是打开创建页、提没提我们看不见，但也不能因此一直催，
+ * 所以算「走过了」，只在矩阵里用另一个措辞标出来提醒确认。
+ */
+const mrPendingCount = computed(
+  () => pairProgress.value.filter((p) => p.tempBranch && !p.mr).length,
+);
+
+/** 从矩阵跳进预演时的批处理上下文；null 表示不是从矩阵来的 */
+const matrixTrail = ref<MatrixTrail | null>(null);
 const mrDialogOpen = ref(false);
 const mrDraft = ref<MrDialogDraft | null>(null);
 const mrBusy = ref(false);
@@ -287,14 +401,9 @@ const graphRemotes = computed(() =>
   (cliStatus.value?.remotes ?? []).map((r) => r.name),
 );
 
-const tempPushDoneForPair = computed(() => {
-  return (
-    !!resolvePushDone.value &&
-    resolvePushDone.value.into === into.value &&
-    resolvePushDone.value.from === from.value &&
-    !!resolvePushDone.value.tempBranch
-  );
-});
+const tempPushDoneForPair = computed(
+  () => !!progressIndex.value.get(pairKey(into.value, from.value))?.tempBranch,
+);
 
 const previewBlockReason = computed(() => {
   if (!into.value || !from.value) {
@@ -470,6 +579,10 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     status.value = msg.message;
     loadingAction.value = "";
     mrBusy.value = false;
+    // 报错即这趟请求结束。busy 卡住的后果是整个面板所有按钮一起变灰，
+    // 而人只看到「点不动」，不值得赌宿主每条错误路径都记得收尾
+    busy.value = false;
+    busyPercent.value = null;
     if (aiBusy.value) {
       clearAiWatchdog();
       aiBusy.value = false;
@@ -557,14 +670,48 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     busyPercent.value = null;
     return;
   }
+  if (msg.type === "surveyResult") {
+    survey.value = msg.data;
+    // 顺序结果是针对旧那批分支算的，换了矩阵就不该再挂着
+    mergeOrder.value = null;
+    const cells = msg.data.cells;
+    // 重跑后 sha 变了的「已处理」标记要清掉：临时分支是基于旧提交建的，
+    // 留着会让人以为那一格已经安排妥了
+    const fresh = new Map(cells.map((c) => [pairKey(c.into, c.from), c]));
+    pairProgress.value = pairProgress.value.filter((p) => {
+      const cell = fresh.get(pairKey(p.into, p.from));
+      return !cell || (cell.intoSha === p.intoSha && cell.fromSha === p.fromSha);
+    });
+    const dirty = cells.filter((c) => c.outcome === "conflicts").length;
+    status.value =
+      dirty === 0
+        ? `矩阵预演完成：${cells.length} 组全部可干净合并`
+        : `矩阵预演完成：${cells.length} 组中 ${dirty} 组有冲突`;
+    error.value = null;
+    busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "mergeOrderResult") {
+    mergeOrder.value = msg.data;
+    const best = msg.data.best;
+    status.value = best.blockedAt
+      ? `顺序推演完成：前 ${best.cleanPrefix}/${best.order.length} 个可干净合入，之后从 ${best.blockedAt} 起需人工`
+      : `顺序推演完成：${best.order.length} 个分支可依次干净合入`;
+    error.value = null;
+    busyPercent.value = null;
+    return;
+  }
   if (msg.type === "applyResolveResult") {
-    lastTempBranch.value = msg.tempBranch;
+    // 推没推成功都建了临时分支，矩阵那批结果都已过时
+    matrixStale.value = true;
     if (msg.pushed) {
-      resolvePushDone.value = {
+      rememberResolved({
         into: msg.into,
         from: msg.from,
+        intoSha: msg.intoSha,
+        fromSha: msg.fromSha,
         tempBranch: msg.tempBranch,
-      };
+      });
       into.value = msg.into;
       from.value = msg.from;
     }
@@ -578,6 +725,9 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
           : "工作区未切换"
         : null,
       msg.pushed ? "可继续「一键申请 MR」" : "推送未成功，暂不可申请 MR",
+      msg.pushed && trailRemaining.value > 0
+        ? `矩阵还剩 ${trailRemaining.value} 条待处理`
+        : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -676,9 +826,19 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "createMrResult") {
     mrBusy.value = false;
     mrDialogOpen.value = false;
+    // 记到发起时那一对上，矩阵才能把这一格标成「已提 MR」
+    if (mrRequestPair.value) {
+      upsertProgress({
+        ...mrRequestPair.value,
+        mr: { url: msg.url, via: msg.via },
+      });
+      mrRequestPair.value = null;
+    }
+    const created = msg.via === "browser" ? "已打开创建页" : "MR 已创建";
     status.value = [
-      `MR 已创建：${msg.sourceBranch} → ${msg.targetBranch}`,
+      `${created}：${msg.sourceBranch} → ${msg.targetBranch}`,
       msg.url ?? "",
+      mrPendingCount.value > 0 ? `矩阵还剩 ${mrPendingCount.value} 条待申请` : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -687,13 +847,10 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   }
   if (msg.type === "previewResult") {
     preview.value = msg.data;
-    // 换了一对分支预演时，需重新走一键推送才能申请 MR
-    if (
-      resolvePushDone.value &&
-      (resolvePushDone.value.into !== msg.data.into ||
-        resolvePushDone.value.from !== msg.data.from)
-    ) {
-      resolvePushDone.value = null;
+    // 这一对之前处理过、但两侧 sha 已经变了：临时分支是基于旧提交建的，作废重来
+    const prior = progressIndex.value.get(pairKey(msg.data.into, msg.data.from));
+    if (prior && (prior.intoSha !== msg.data.intoSha || prior.fromSha !== msg.data.fromSha)) {
+      pairProgress.value = pairProgress.value.filter((p) => p !== prior);
     }
     into.value = msg.data.into;
     from.value = msg.data.from;
@@ -760,6 +917,152 @@ function runPreview() {
     from: from.value,
   });
 }
+
+/** 上一批矩阵的行列，供解决完之后原样重跑 */
+const lastSurvey = ref<{ intos: string[]; froms: string[] } | null>(null);
+/** 解决过之后矩阵数据就旧了：临时分支是新建的，那批结果里还没有 */
+const matrixStale = ref(false);
+
+function runSurvey(payload: { intos: string[]; froms: string[] }): void {
+  lastSurvey.value = payload;
+  matrixStale.value = false;
+  busy.value = true;
+  busyLabel.value = "批量预演中…";
+  busyPercent.value = 0;
+  vscode.postMessage({ type: "survey", intos: payload.intos, froms: payload.froms });
+}
+
+function runMergeOrder(payload: { into: string; branches: string[] }): void {
+  busy.value = true;
+  busyLabel.value = "推演合并顺序中…";
+  busyPercent.value = 0;
+  vscode.postMessage({
+    type: "mergeOrder",
+    into: payload.into,
+    branches: payload.branches,
+  });
+}
+
+/**
+ * 矩阵里点某一格「去完整预演」：带着这对分支切到预演 tab。
+ *
+ * 同时把整批待办和当前位置记下来（trail），预演页顶部才能显示
+ * 「第 2/3 条 · 上一条 / 下一条 / 返回矩阵」——否则跳过去就断了线索。
+ */
+function goPreviewFromMatrix(payload: {
+  into: string;
+  from: string;
+  queue?: Array<{ into: string; from: string }>;
+}): void {
+  const queue = payload.queue ?? [];
+  const at = queue.findIndex(
+    (p) => p.into === payload.into && p.from === payload.from,
+  );
+  matrixTrail.value = queue.length > 0 && at >= 0 ? { pairs: queue, index: at } : null;
+  into.value = payload.into;
+  from.value = payload.from;
+  // 别让上一对的冲突正文在新结果回来之前继续挂着
+  preview.value = null;
+  tab.value = "preview";
+  if (!previewBlockReason.value) {
+    runPreview();
+  }
+}
+
+/**
+ * 这一对是否已「一键解决并推送」过。
+ *
+ * 认 tempBranch 而不是「表里有没有这条记录」：干净格子提完 MR 也会留一条记录，
+ * 但它压根没走过解决这一步。
+ */
+function isResolved(pair: { into: string; from: string }): boolean {
+  return !!progressIndex.value.get(pairKey(pair.into, pair.from))?.tempBranch;
+}
+
+/** 这批里还有几条没「一键解决并推送」过 */
+const trailRemaining = computed(() => {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return 0;
+  }
+  return trail.pairs.filter((p) => !isResolved(p)).length;
+});
+
+const trailCurrent = computed(() => {
+  const trail = matrixTrail.value;
+  return trail ? trail.pairs[trail.index] : undefined;
+});
+
+/** 当前这一对的 MR 进展 */
+const trailMr = computed(
+  () => progressIndex.value.get(pairKey(into.value, from.value))?.mr,
+);
+
+function trailGo(delta: number): void {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return;
+  }
+  const next = trail.index + delta;
+  const pair = trail.pairs[next];
+  if (!pair) {
+    return;
+  }
+  matrixTrail.value = { pairs: trail.pairs, index: next };
+  into.value = pair.into;
+  from.value = pair.from;
+  preview.value = null;
+  if (!previewBlockReason.value) {
+    runPreview();
+  }
+}
+
+/** 跳到下一条还没处理的；没有了就回矩阵 */
+function trailNextPending(): void {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return;
+  }
+  const at = trail.pairs.findIndex((p, i) => i > trail.index && !isResolved(p));
+  if (at < 0) {
+    backToMatrix();
+    return;
+  }
+  trailGo(at - trail.index);
+}
+
+/**
+ * 回矩阵。若期间解决过，顺手原样重跑一遍。
+ *
+ * 不重跑就会看见解决之前的旧结果——那正是「我到底处理过没有」看不出来的根源。
+ * 重跑很便宜：两侧 sha 没变，预演结果全部命中缓存，实际只多查一次分支列表。
+ * 跳过 fetch，回个矩阵不该等网络。
+ */
+function backToMatrix(): void {
+  tab.value = "graph";
+  graphMode.value = "matrix";
+  const last = lastSurvey.value;
+  if (!matrixStale.value || !last || busy.value) {
+    return;
+  }
+  matrixStale.value = false;
+  // busy 交给宿主置位。这趟是切 tab 时自动发的，不是人点出来的：万一宿主没回，
+  // 本地抢先置的 busy 会把矩阵上所有按钮永久禁用，而人根本不知道自己在等什么
+  vscode.postMessage({
+    type: "survey",
+    intos: last.intos,
+    froms: last.froms,
+    noFetch: true,
+  });
+}
+
+// 人在侧栏手动换了分支，就不再是矩阵那趟批处理了，回程条继续挂着只会误导
+watch([into, from], ([nextInto, nextFrom]) => {
+  const cur = trailCurrent.value;
+  if (cur && (cur.into !== nextInto || cur.from !== nextFrom)) {
+    matrixTrail.value = null;
+  }
+});
 
 function actionButtonText(kind: "graph" | "preview"): string {
   if (loadingAction.value !== kind) {
@@ -1079,29 +1382,144 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
         </template>
 
         <template v-if="tab === 'graph'">
-          <div v-if="graph" class="panel-stack panel-stack--split">
-            <div class="card card--viz">
-              <h3>可视化（仅分支）</h3>
-              <GraphView
-                :graph="graph"
-                :default-remote="graphDefaultRemote"
-                :remotes="graphRemotes"
-                @select="onGraphSelect"
-              />
+          <div class="graph-modes">
+            <div class="seg" role="group" aria-label="分支图视角">
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: graphMode === 'graph' }"
+                @click="graphMode = 'graph'"
+              >
+                分支图
+              </button>
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: graphMode === 'matrix' }"
+                @click="graphMode = 'matrix'"
+              >
+                合并矩阵
+              </button>
             </div>
-            <div class="card card--report">
-              <h3>{{ selectedPath ? "链路报告" : "总览报告" }}</h3>
-              <div class="report-scroll">
-                <MarkdownView :source="displayGraphReport" />
+            <p class="hint">
+              {{
+                graphMode === "graph"
+                  ? "点分支 tip 看它到目标的链路"
+                  : "一次预演多条分支两两合并的结果，并推演最省事的合入顺序"
+              }}
+            </p>
+          </div>
+
+          <template v-if="graphMode === 'graph'">
+            <div v-if="graph" class="panel-stack panel-stack--split">
+              <div class="card card--viz">
+                <h3>可视化（仅分支）</h3>
+                <GraphView
+                  :graph="graph"
+                  :default-remote="graphDefaultRemote"
+                  :remotes="graphRemotes"
+                  @select="onGraphSelect"
+                />
+              </div>
+              <div class="card card--report">
+                <h3>{{ selectedPath ? "链路报告" : "总览报告" }}</h3>
+                <div class="report-scroll">
+                  <MarkdownView :source="displayGraphReport" />
+                </div>
               </div>
             </div>
-          </div>
-          <div v-else class="empty empty--fill">
-            打开仓库后，点击右上角「加载分支图」
-          </div>
+            <div v-else class="empty empty--fill">
+              打开仓库后，点击右上角「加载分支图」
+            </div>
+          </template>
+
+          <MergeMatrix
+            v-else
+            :branches="branches"
+            :survey="survey"
+            :order="mergeOrder"
+            :busy="busy"
+            :default-remote="graphDefaultRemote"
+            :progress="pairProgress"
+            @survey="runSurvey"
+            @order="runMergeOrder"
+            @go-preview="goPreviewFromMatrix"
+            @create-mr="requestMrFromMatrix"
+            @open-url="openExternalUrl"
+          />
         </template>
 
         <template v-if="tab === 'preview'">
+          <!-- 从矩阵跳过来时的回程条：始终能看出自己在整批里的哪一步 -->
+          <div v-if="matrixTrail && trailCurrent" class="trail">
+            <button class="trail-back" type="button" @click="backToMatrix">
+              ← 合并矩阵
+            </button>
+            <span class="trail-pos mono">
+              {{ matrixTrail.index + 1 }} / {{ matrixTrail.pairs.length }}
+            </span>
+            <span class="trail-pair mono">
+              <span class="mine">{{ trailCurrent.from }}</span>
+              <span class="trail-arrow" aria-hidden="true">→</span>
+              <span class="online">{{ trailCurrent.into }}</span>
+            </span>
+            <span v-if="trailMr" class="stat-pill ok">
+              {{ trailMr.via === "browser" ? "已开创建页" : "已提 MR" }}
+            </span>
+            <span
+              v-else-if="tempPushDoneForPair"
+              class="stat-pill warn"
+              title="临时分支已推送，还没申请 MR"
+            >
+              待申请 MR
+            </span>
+            <span v-if="trailRemaining > 0" class="stat-pill warn">
+              剩 <strong>{{ trailRemaining }}</strong> 条待处理
+            </span>
+            <span v-else-if="mrPendingCount > 0" class="stat-pill warn">
+              剩 <strong>{{ mrPendingCount }}</strong> 条待申请 MR
+            </span>
+            <span v-else class="stat-pill ok">这批都走完了</span>
+            <span class="trail-spacer" />
+            <button
+              v-if="tempPushDoneForPair && !trailMr"
+              class="btn btn-sm"
+              type="button"
+              :disabled="busy || mrBusy"
+              title="用这一对自己的临时分支申请 MR"
+              @click="requestMrFromMatrix({ into, from })"
+            >
+              申请 MR
+            </button>
+            <button
+              class="btn secondary btn-sm"
+              type="button"
+              :disabled="busy || matrixTrail.index === 0"
+              @click="trailGo(-1)"
+            >
+              上一条
+            </button>
+            <button
+              class="btn secondary btn-sm"
+              type="button"
+              :disabled="busy || matrixTrail.index >= matrixTrail.pairs.length - 1"
+              @click="trailGo(1)"
+            >
+              下一条
+            </button>
+            <button
+              class="btn btn-sm"
+              type="button"
+              :disabled="busy"
+              :title="
+                trailRemaining > 0 ? '跳到下一条还没处理的' : '这批都处理完了，回矩阵'
+              "
+              @click="trailNextPending"
+            >
+              {{ trailRemaining > 0 ? "处理下一条" : "回矩阵" }}
+            </button>
+          </div>
+
           <div v-if="preview" class="preview-host">
             <!-- 正常：纵向全宽 -->
             <div
