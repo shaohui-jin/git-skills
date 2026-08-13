@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { rehearseMerge } from "./merge/rehearsal.js";
 import { fetchRemote } from "./git/fetch.js";
 import { buildBranchGraph } from "./graph/builder.js";
@@ -23,10 +22,9 @@ import {
   reportMergeSurvey,
 } from "./report/chinese.js";
 import { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
+import { openInsightPanel } from "./ui/openPanel.js";
 import type { CliJsonError, CliJsonResult } from "./types.js";
 import type { StashFilePayload } from "./merge/applyResolve.js";
-
-const EXT_ID = "jinshaohui.git-insight";
 
 function printJson(payload: CliJsonResult<unknown> | CliJsonError): void {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -345,104 +343,25 @@ async function runCreateMr(args: string[]): Promise<void> {
   });
 }
 
-function runCmdCapture(
-  cmd: string,
-  cmdArgs: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, cmdArgs, {
-      windowsHide: true,
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (b: Buffer) => {
-      stdout += b.toString("utf8");
-    });
-    child.stderr?.on("data", (b: Buffer) => {
-      stderr += b.toString("utf8");
-    });
-    child.on("error", (err) => {
-      resolve({ code: 127, stdout: "", stderr: err.message });
-    });
-    child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
-  });
-}
-
 async function runOpenUi(args: string[]): Promise<void> {
   const into = getFlag(args, "--into");
   const from = getFlag(args, "--from");
   if (!into || !from) {
     throw new GitError("open-ui 需要 --into 与 --from", { code: "USAGE" });
   }
-  const cwd = getFlag(args, "--cwd") ?? process.cwd();
-  const q = new URLSearchParams({
+  const data = await openInsightPanel({
+    cwd: getFlag(args, "--cwd"),
     into,
     from,
-    cwd,
-    autoPreview: "1",
+    open: !hasSwitch(args, "--no-open"),
   });
-  const uri = `vscode://${EXT_ID}/preview?${q.toString()}`;
-  const cursorUri = `cursor://${EXT_ID}/preview?${q.toString()}`;
-  const messages: string[] = [];
-  let opened = false;
-  let openedWith: string | null = null;
-
-  if (!hasSwitch(args, "--no-open")) {
-    const attempts: Array<{ bin: string; args: string[] }> =
-      process.platform === "win32"
-        ? [
-            { bin: "cursor", args: ["--open-url", uri] },
-            { bin: "cursor", args: [uri] },
-            { bin: "cmd", args: ["/c", "start", "", uri] },
-            { bin: "cmd", args: ["/c", "start", "", cursorUri] },
-          ]
-        : [
-            { bin: "cursor", args: ["--open-url", uri] },
-            { bin: "cursor", args: [uri] },
-            { bin: "code", args: ["--open-url", uri] },
-            { bin: "open", args: [uri] },
-          ];
-
-    for (const a of attempts) {
-      const r = await runCmdCapture(a.bin, a.args);
-      if (r.code === 0) {
-        opened = true;
-        openedWith = `${a.bin} ${a.args.join(" ")}`;
-        messages.push(`已尝试打开：${openedWith}`);
-        break;
-      }
-      messages.push(`尝试失败：${a.bin}（${(r.stderr || r.stdout).trim() || r.code}）`);
-    }
-  } else {
-    messages.push("已跳过自动打开（--no-open）");
-  }
-
   printJson({
     ok: true,
     command: "open-ui",
-    data: {
-      extensionId: EXT_ID,
-      uri,
-      cursorUri,
-      vscodeCommand: "gitInsight.openPreview",
-      commandArgs: { into, from, cwd, autoPreview: true },
-      opened,
-      openedWith,
-      howTo: [
-        "方式 A：本机已装扩展时执行本命令（默认会尝试拉起 Cursor/VS Code）",
-        "方式 B：在 Cursor 命令面板运行 Git Insight: 打开预演（带参）",
-        `方式 C：打开 URI：${uri}`,
-        "方式 D：Agent 在扩展宿主内 executeCommand('gitInsight.openPreview', { into, from })",
-      ],
-      messages,
-    },
-    report: opened
+    data,
+    report: data.opened
       ? `已尝试唤起扩展预演：${into} ← ${from}`
-      : `未能自动打开 UI。请手动打开 URI 或命令面板：\n${uri}`,
+      : `未能自动打开 UI。请手动打开 URI 或命令面板：\n${data.uri}`,
   });
 }
 

@@ -148,3 +148,5 @@ export {
   reportMergeSurvey,
   reportFetch,
 } from "./report/chinese.js";
+export { GIT_INSIGHT_EXTENSION_ID, openInsightPanel } from "./ui/openPanel.js";
+export type { OpenPanelOptions, OpenPanelResult } from "./ui/openPanel.js";

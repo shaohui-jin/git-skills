@@ -33,6 +33,7 @@
 | 冲突选边 / AI 选边 | 扩展 Webview；Skill 对话确认 | 否（仅 UI / 暂存） |
 | 一键解决并推送 | 扩展或 Skill → core `apply-resolve` | **是**（独立 **worktree**，主工作区不 checkout） |
 | 一键申请 MR/PR | 扩展或 Skill（cli / token / ui）→ core | 否（`gh` / `glab` / Token API / 浏览器） |
+| 从对话交接回面板 | Skill `open-ui` + MCP `open_ui` → 扩展面板 | 否（只拉起窗口并种入分支） |
 
 前置：**系统 Git ≥ 2.38**（依赖新版 `merge-tree --write-tree`）。
 
@@ -920,6 +921,7 @@ pnpm --filter git-insight build
 | 一键落盘 | `packages/core/src/merge/applyResolve.ts` |
 | 可插拔 resolver | `packages/core/src/merge/resolvers.ts`（文件头有安全边界） |
 | 创建 MR | `packages/core/src/merge/createMr.ts`、`branchName.ts` |
+| 唤起面板 | `packages/core/src/ui/openPanel.ts`（CLI 与 MCP 共用） |
 | CLI | `packages/core/src/cli.ts` |
 | MCP server | `packages/mcp/src/index.ts` |
 | 宿主桥接 | `packages/extension/src/coreBridge.ts` |
@@ -960,7 +962,9 @@ pnpm build:mcp    # 产出单文件 packages/mcp/dist/index.js
 
 SDK 用的是 **v2**（`@modelcontextprotocol/server`，2026-07-28 spec）：`registerTool` 的 `inputSchema` 收的是 `z.object({...})` 整个 schema 而不是 v1 的裸 shape，`serveStdio(factory)` 取代了 v1 的 `new StdioServerTransport()` + `server.connect()`。照 v1 的写法改会编不过。
 
-默认注册的都是只读工具：`git_branch_graph`、`merge_preview`（`detail: true` 才出正文与溯源）、`merge_survey`、`merge_order`、`mr_prepare`。
+默认注册的只读工具：`git_branch_graph`、`merge_preview`（`detail: true` 才出正文与溯源）、`merge_survey`、`merge_order`、`mr_prepare`。
+
+还有一个 `open_ui`，默认也注册，但**没标只读**——它不碰仓库，却会在桌面上弹窗口。它把 `into`/`from` 种进扩展的预演面板并拉起窗口，是「Agent 查完之后我要动手」那一步的交接口：模型扫完矩阵报出哪几对会撞，调它就能让人直接在面板里选边、一键解决、申请 MR，省掉手工复述分支名。实现与 CLI 的 `open-ui` 共用 core 的 `openInsightPanel()`（`packages/core/src/ui/openPanel.ts`），拼 URI 的规则和候选命令的尝试顺序只有一份。本机没装扩展时它不会假装成功，而是把 `vscode://` URI 和每个候选命令的失败原因一并返回。
 
 写操作（`apply_resolve`、`create_mr`）要**两道门**同时满足才可用：启动时 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，且每次调用显式传 `confirm: true`。这不是冗余——模型编不出环境变量，人也不会被一次工具调用不小心推了分支。
 
@@ -1360,7 +1364,7 @@ fetch / graph → preview-merge
 | 合并预演 | `previewMerge`；带参用 `openPreview` / URI `/preview` | `preview-merge` |
 | 冲突解决落盘 | 面板「一键解决并推送」 | `apply-resolve` |
 | 准备 / 创建 MR | 面板内 | `prepare-mr` / `create-mr` |
-| 唤起 UI | `openPreview` | `open-ui` |
+| 唤起 UI | `openPreview` | `open-ui`（MCP 同能力叫 `open_ui`） |
 | 同步 Skill | `syncSkill` | — |
 
 ### 5.4 FAQ

@@ -15,6 +15,7 @@ import {
   buildBranchGraph,
   createMergeRequest,
   crossPairs,
+  openInsightPanel,
   prepareCreateMr,
   previewMerge,
   rehearseMerge,
@@ -55,6 +56,8 @@ const noFetchArg = z
  */
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
 const WRITES = { readOnlyHint: false, destructiveHint: true } as const;
+/** 不碰仓库，但会在用户桌面上弹窗口，所以不能标 readOnly */
+const OPENS_WINDOW = { readOnlyHint: false, destructiveHint: false } as const;
 
 function repo(cwd?: string): string {
   return cwd?.trim() || DEFAULT_CWD;
@@ -260,6 +263,48 @@ function createServer(): McpServer {
           ...data.messages,
         ].filter(Boolean);
         return text(lines.join("\n"));
+      } catch (err) {
+        return failed(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "open_ui",
+    {
+      title: "在编辑器里打开预演面板",
+      description:
+        "把 into/from 种进 Git Insight 扩展的预演面板并拉起窗口，让人接手选边、一键解决、申请 MR。分析完发现要动手时用它交接。需要本机装了扩展；没装则返回 URI 让用户自己打开。",
+      annotations: OPENS_WINDOW,
+      inputSchema: z.object({
+        cwd: cwdArg,
+        into: z.string().describe("线上目标分支，如 origin/master"),
+        from: z.string().describe("我的分支"),
+        autoPreview: z
+          .boolean()
+          .optional()
+          .describe("默认 true：打开后立刻跑一次预演"),
+      }),
+    },
+    async ({ cwd, into, from, autoPreview }) => {
+      try {
+        const data = await openInsightPanel({
+          cwd: repo(cwd),
+          into,
+          from,
+          autoPreview,
+        });
+        return text(
+          data.opened
+            ? `已唤起预演面板：${into} ← ${from}（${data.openedWith}）`
+            : [
+                "没能自动打开窗口，可能本机没装扩展或 cursor 命令不在 PATH。",
+                "请手动打开这个链接：",
+                data.uri,
+                "",
+                ...data.messages,
+              ].join("\n"),
+        );
       } catch (err) {
         return failed(err);
       }

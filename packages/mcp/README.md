@@ -13,8 +13,11 @@
 | `merge_survey` | 批量矩阵：`froms × intos` 每种组合各预演一次，整批只 fetch 一次 |
 | `merge_order` | 多分支合进同一目标时，推演最省事的合入顺序 |
 | `mr_prepare` | 识别平台 / CLI / 默认标题 / 可选审核人，只读 |
+| `open_ui` | 把 `into` / `from` 种进扩展的预演面板并拉起窗口，交给人接手 |
 
-上面五个都标了 `readOnlyHint`，宿主可以免确认直接调。
+前面五个都标了 `readOnlyHint`，宿主可以免确认直接调。
+
+`open_ui` 不碰仓库，但会在桌面上弹窗口，所以没标只读。它是「Agent 查完之后我要动手」那一步的交接口：模型扫出哪几对会撞之后调它，人直接在面板里选边、一键解决、申请 MR，不用再手动找分支名。**前提是本机装了扩展**；没装的话它会把 `vscode://` URI 返回给你，自己贴到浏览器里也能打开。
 
 写操作默认**不注册**。需要时启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，此时多出 `apply_resolve` 与 `create_mr`，且每次调用还必须显式传 `confirm: true`。两道门是有意的：模型编不出环境变量，人也不会被一次工具调用不小心推了分支。
 
@@ -45,7 +48,7 @@ pnpm build:mcp      # 产出单文件 packages/mcp/dist/index.js
 }
 ```
 
-改完重启宿主，工具列表里就能看到 `git_branch_graph` 等五个。
+改完重启宿主，工具列表里就能看到 `git_branch_graph` 等六个。
 
 想先单测一遍、不碰宿主配置：
 
