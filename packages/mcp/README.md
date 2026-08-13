@@ -18,38 +18,49 @@
 
 写操作默认**不注册**。需要时启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，此时多出 `apply_resolve` 与 `create_mr`，且每次调用还必须显式传 `confirm: true`。两道门是有意的：模型编不出环境变量，人也不会被一次工具调用不小心推了分支。
 
-## 配置
+## 用起来
 
-Cursor（`~/.cursor/mcp.json`）或其他宿主：
+> 本包**尚未发布到 npm**，所以现在只能从源码构建后用绝对路径接入。发布之后才能换成下面的 `npx` 写法。
+
+先构建（仓库根目录）：
+
+```bash
+pnpm install        # 首次或改过依赖后必须跑：装 MCP SDK 与 esbuild
+pnpm build:mcp      # 产出单文件 packages/mcp/dist/index.js
+```
+
+再接进宿主。Cursor 是 `~/.cursor/mcp.json`：
 
 ```json
 {
   "mcpServers": {
     "git-insight": {
-      "command": "npx",
-      "args": ["-y", "@git-insight/mcp"],
+      "command": "node",
+      "args": ["D:/_myproject/git-skill/packages/mcp/dist/index.js"],
       "env": {
-        "GIT_INSIGHT_MCP_CWD": "/绝对路径/你的仓库"
+        "GIT_INSIGHT_MCP_CWD": "D:/你的/仓库"
       }
     }
   }
 }
 ```
 
+改完重启宿主，工具列表里就能看到 `git_branch_graph` 等五个。
+
+想先单测一遍、不碰宿主配置：
+
+```bash
+npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js
+```
+
 `GIT_INSIGHT_MCP_CWD` 可以不填，此时以进程启动目录为准；每个工具也都接受 `cwd` 参数覆盖。
 
 需要 Node ≥ 20 和系统 Git ≥ 2.38（依赖 `merge-tree --write-tree`）。
 
-## 从源码跑（开发用）
-
-```bash
-pnpm build:mcp
-```
-
-然后把上面的 `command` / `args` 换成绝对路径：
+发布之后可以改成免构建的写法：
 
 ```json
-{ "command": "node", "args": ["/绝对路径/packages/mcp/dist/index.js"] }
+{ "command": "npx", "args": ["-y", "@git-insight/mcp"] }
 ```
 
 ## 发布

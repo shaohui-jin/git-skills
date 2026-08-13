@@ -937,19 +937,28 @@ pnpm --filter git-insight build
 
 把 core 开放给任意 MCP 宿主，不必装扩展。stdio 传输，stdout 是协议流所以日志一律走 stderr。
 
+> **当前状态：尚未发布 npm。** 只能构建后用绝对路径接入；`npx -y @git-insight/mcp` 要等发布之后才可用。
+
+```bash
+pnpm install      # 装 MCP SDK 与 esbuild
+pnpm build:mcp    # 产出单文件 packages/mcp/dist/index.js
+```
+
 ```json
 {
   "mcpServers": {
     "git-insight": {
-      "command": "npx",
-      "args": ["-y", "@git-insight/mcp"],
+      "command": "node",
+      "args": ["<仓库绝对路径>/packages/mcp/dist/index.js"],
       "env": { "GIT_INSIGHT_MCP_CWD": "<你的仓库>" }
     }
   }
 }
 ```
 
-开发时用 `pnpm build:mcp`，把 `command` / `args` 换成 `node` + `<仓库>/packages/mcp/dist/index.js`。
+不想动宿主配置就先用官方 Inspector 单测：`npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js`。
+
+SDK 用的是 **v2**（`@modelcontextprotocol/server`，2026-07-28 spec）：`registerTool` 的 `inputSchema` 收的是 `z.object({...})` 整个 schema 而不是 v1 的裸 shape，`serveStdio(factory)` 取代了 v1 的 `new StdioServerTransport()` + `server.connect()`。照 v1 的写法改会编不过。
 
 默认注册的都是只读工具：`git_branch_graph`、`merge_preview`（`detail: true` 才出正文与溯源）、`merge_survey`、`merge_order`、`mr_prepare`。
 
@@ -980,7 +989,13 @@ pnpm --filter git-insight build
 
 > MCP 包发布后其 `devDependencies` 里会留一条 `@git-insight/core: 0.1.0`（pnpm 把 `workspace:*` 改写成了实际版本）。consumer 不装 devDependencies，不影响使用。
 
-**扩展发版**（现行唯一自动流程）：改扩展 `version` → 更新 `CHANGELOG.md` → push 到 `master`/`main` → GitHub Actions 自动打 tag 并发布到 Open VSX → Cursor 市场稍后同步。CI 只监听 `packages/extension/package.json`，动 MCP 不会触发它。
+**扩展发版**（现行唯一自动流程）：改扩展 `version` → 更新 `CHANGELOG.md` → push 到 `master`/`main` → GitHub Actions 构建、发布到 Open VSX、最后打 tag → Cursor 市场稍后同步。也可在 Actions 页面手动 `workflow_dispatch` 触发。
+
+> **发不发由「这个版本发过没有」决定**，判据是远程有没有 `v{version}` 这个 tag，不是 version 相对上一提交变没变。每次推 master 都会跑，但没新版本时几秒就退出。
+>
+> 这么改是因为老判据踩过坑：`pnpm install --frozen-lockfile` 因为别的包（`packages/mcp`）锁文件没同步而失败，而修复提交里 version 不会再变一次，那个版本号就永久发不出去了，只能跳版或改写历史。同理 **tag 放在发布成功之后才打**——它代表「已发布」，前面任何一步挂了都应该能原样重试。
+>
+> CI 的 `pnpm install` 覆盖**全部 workspace 包**，所以改了 `packages/mcp` 之类的依赖也要把 `pnpm-lock.yaml` 一起提交，否则会挡住扩展发版。
 
 | 项 | 值 |
 |----|-----|
@@ -998,11 +1013,11 @@ pnpm --filter git-insight build
                               ↓
               git commit && git push origin master
                               ↓
-         CI：version 相对上一提交有变化？
-                    ↓ 是
-         打 tag v{version} 并 push
-                    ↓
-         pnpm package:vsix → ovsx publish
+         CI：远程已存在 tag v{version}？
+                    ↓ 否（已存在则几秒退出）
+         pnpm install → pnpm package:vsix → ovsx publish
+                    ↓ 发布成功
+         打 tag v{version} 并 push（「已发布」的标记）
                     ↓
          Open VSX 有新版本 → Cursor 扩展市场同步（数小时内）
 ```

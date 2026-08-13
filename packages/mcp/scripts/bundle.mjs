@@ -20,6 +20,10 @@ const pkg = JSON.parse(await readFile(resolve(pkgRoot, "package.json"), "utf8"))
 
 await rm(distDir, { recursive: true, force: true });
 
+// 子路径也得标外部：入口 import 的是 @modelcontextprotocol/server/stdio，
+// 只写包名的话内联与否取决于 esbuild 的匹配细节，写出来就不用赌
+const external = Object.keys(pkg.dependencies ?? {}).flatMap((dep) => [dep, `${dep}/*`]);
+
 await esbuild.build({
   entryPoints: [resolve(pkgRoot, "src/index.ts")],
   outfile: resolve(distDir, "index.js"),
@@ -27,7 +31,7 @@ await esbuild.build({
   platform: "node",
   format: "esm",
   target: "node20",
-  external: Object.keys(pkg.dependencies ?? {}),
+  external,
   // 握手里报的版本号得跟包版本一致，别靠人手动同步
   define: { __MCP_VERSION__: JSON.stringify(pkg.version) },
   sourcemap: true,

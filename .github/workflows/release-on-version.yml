@@ -1,5 +1,9 @@
-# 唯一发版流程：改 packages/extension/package.json 的 version 并推到 master/main 后
-# → 检测 version 相对上一提交有变化 → 打 tag v{version} 并推送 → 同 Job 发布 Open VSX
+# 唯一发版流程：改 packages/extension/package.json 的 version 并推到 master/main
+# → 远程还没有 v{version} 这个 tag 就构建、发布 Open VSX、最后打 tag
+#
+# 判据是「这个版本发过没有」，不是「version 相对上一提交变了没有」。后者会让
+# 任何一次失败都白白废掉一个版本号：修复提交里 version 不会再变一次，检测就跳过了。
+# 同理 tag 放在发布成功之后才打，它代表「已发布」而不是「试过了」。
 #
 # 需 Secret：OVSX_PAT（open-vsx.org Access Token）
 # 文档：docs/guide.md §3.6（现行唯一发版流程）
@@ -11,8 +15,7 @@ on:
     branches:
       - master
       - main
-    paths:
-      - "packages/extension/package.json"
+  workflow_dispatch:
 
 jobs:
   release:
@@ -22,77 +25,51 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
-      - name: Detect version bump
-        id: bump
+      - name: Decide whether to release
+        id: gate
         run: |
           PKG="packages/extension/package.json"
-          NEW="$(jq -r .version "$PKG")"
-          if [ -z "$NEW" ] || [ "$NEW" = "null" ]; then
+          VERSION="$(jq -r .version "$PKG")"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
             echo "::error::无法读取 $PKG 的 version"
             exit 1
           fi
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-          OLD=""
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            if git cat-file -e "HEAD^:$PKG" 2>/dev/null; then
-              OLD="$(git show "HEAD^:$PKG" | jq -r .version)"
-            fi
-          fi
-
-          echo "old_version=${OLD}"
-          echo "new_version=${NEW}"
-          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
-
-          if [ "$OLD" = "$NEW" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "version 未变化（${NEW}），跳过打 tag / 发布"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "${TAG} 已发布过，跳过。要发新版请提高 ${PKG} 的 version。"
           else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "检测到 version 变更：'${OLD}' → '${NEW}'"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} 尚未发布，开始构建。"
           fi
 
       - name: Setup pnpm
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10.13.1
 
       - name: Setup Node.js
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
 
       - name: Install dependencies
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Package VSIX
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         run: pnpm package:vsix
 
-      - name: Create and push tag
-        if: steps.bump.outputs.changed == 'true'
-        env:
-          TAG: ${{ steps.bump.outputs.tag }}
-        run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::远程已存在 ${TAG}。请提高 package.json version 后再推，或先删除误打的远程 tag。"
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin "${TAG}"
-          echo "已推送 tag ${TAG}"
-
       - name: Upload VSIX artifact
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: git-insight-vsix
@@ -100,10 +77,10 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to Open VSX
-        if: steps.bump.outputs.changed == 'true'
+        if: steps.gate.outputs.should_release == 'true'
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-          TAG: ${{ steps.bump.outputs.tag }}
+          TAG: ${{ steps.gate.outputs.tag }}
         run: |
           if [ -z "${OVSX_PAT}" ]; then
             echo "::error::未配置 GitHub Secret OVSX_PAT。见 docs/guide.md §3.6.1"
@@ -111,3 +88,15 @@ jobs:
           fi
           npx --yes ovsx@0.10.5 publish git-insight.vsix -p "${OVSX_PAT}"
           echo "已发布 ${TAG} → Open VSX（jinshaohui.git-insight）"
+
+      # 发布成功才打 tag：它是「已发布」的标记，前面任何一步挂了都应该能原样重试
+      - name: Create and push tag
+        if: steps.gate.outputs.should_release == 'true'
+        env:
+          TAG: ${{ steps.gate.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "已推送 tag ${TAG}"
