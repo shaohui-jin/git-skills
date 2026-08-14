@@ -2,13 +2,19 @@
 
 > **本文只放尚未实现的东西。** 已发布行为以 [`guide.md`](./guide.md) 为唯一准确来源；落地后相应内容迁进 `guide.md` 并从这里删掉。
 
+## 进行中的方案（详见专文）
+
+**MCP 浏览器面板 + `@git-insight/mcp-server` npm 发版**（auto 唤起 UI、固定端口 17341、GitHub Actions、`mcp-server-v*` tag）→ 完整设计、scope 检查命令、首次发版步骤、实施清单见 **[`mcp-ui-and-release.md`](./mcp-ui-and-release.md)**。
+
+---
+
 ## 已落地（说明已迁至 guide.md）
 
 | 方向 | 落点 | guide 章节 |
 |------|------|-----------|
 | 批量预演原语 | `core/src/merge/survey.ts`、`previewMergeBySha`、`MergePreviewResult.resultTree` | §3.2 |
 | 矩阵与合入顺序 | `core/src/merge/chain.ts`、`webview/src/MergeMatrix.vue`、CLI `survey` / `merge-order` | §2.3.1、§3.2 |
-| MCP server | `packages/mcp` | §3.4.1 |
+| MCP server（只读工具 + open_ui 扩展 URI） | `packages/mcp` | §3.4.1 |
 | 冲突预警常驻 | `extension/src/mergeWatcher.ts` | §2.3.2 |
 | 可插拔 resolver | `core/src/merge/resolvers.ts` | §2.6 |
 
@@ -47,3 +53,9 @@
 ### E. MCP 的结构化输出
 
 现在所有工具都返回 markdown 报告文本。MCP v2 支持 `outputSchema` + `structuredContent`，对 `merge_survey` / `merge_order` 这种结构性强的结果，给模型结构化数据比让它解析表格更可靠。代价是响应变大，需要权衡。
+
+### F. 浏览器面板体验补齐（依赖 [`mcp-ui-and-release.md`](./mcp-ui-and-release.md) 落地后）
+
+- Git 配置持久化（localStorage）
+- `open_ui` 深链到矩阵 / 分支图 Tab
+- 浏览器内 AI 选边（HTTP 桥）
