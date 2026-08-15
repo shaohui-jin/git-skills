@@ -2,9 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src/**/*"],
-  "exclude": ["src/browserUi.ts"]
+  "include": ["src/**/*"]
 }
