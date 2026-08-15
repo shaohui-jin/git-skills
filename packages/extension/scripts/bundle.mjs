@@ -33,7 +33,7 @@ const stubPlugin = {
       path: args.path,
       namespace: "ui-server-stub",
     }));
-    build.onResolve({ filter: /^@git-insight\/core\/ui\/server$/ }, () => ({
+    build.onResolve({ filter: /^@shaohui_jin\/git-insight-core\/ui\/server$/ }, () => ({
       path: "ui-server-stub",
       namespace: "ui-server-stub",
     }));

@@ -6,8 +6,8 @@ import { join } from "node:path";
 import {
   defaultMcpWebviewRoot,
   startUiServer,
-} from "@git-insight/core/ui/server";
-import { GIT_INSIGHT_UI_PORT } from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core/ui/server";
+import { GIT_INSIGHT_UI_PORT } from "@shaohui_jin/git-insight-core";
 import {
   busyLabelForRequest,
   handleWebviewRequest,

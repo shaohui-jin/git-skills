@@ -8,8 +8,8 @@
 | 组件 | 版本 | 发布渠道 |
 |------|------|----------|
 | 扩展 `git-insight` | 0.3.0 | Open VSX / Cursor 市场 |
-| 引擎 `@git-insight/core` | 0.1.0 | monorepo 内 / CLI |
-| MCP `@git-insight/mcp-server` | 0.1.0 | npm（CI 发版） |
+| 引擎 `@shaohui_jin/git-insight-core` | 0.1.0 | monorepo 内 / CLI |
+| MCP `@shaohui_jin/git-insight-mcp-server` | 0.1.0 | npm（CI 发版） |
 
 ---
 
@@ -55,7 +55,7 @@
 | Agent Skill `/git-branch-insight` | ✅ | — | — | ✅ | ✅ |
 | `open_ui` 唤起扩展预演面板 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `open_ui` auto → 浏览器面板 fallback | — | 🔶 | ✅ | — | ✅ |
-| MCP `npx @git-insight/mcp-server` 接入 | — | — | ✅ | — | ✅ |
+| MCP `npx @shaohui_jin/git-insight-mcp-server` 接入 | — | — | ✅ | — | ✅ |
 
 ### 本期新完成（v0.3.1 候选）
 

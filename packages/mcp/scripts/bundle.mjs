@@ -1,5 +1,5 @@
 /**
- * 把 MCP server、@git-insight/core 与 extension coreBridge 打成可独立发布的包；
+ * 把 MCP server、@shaohui_jin/git-insight-core 与 extension coreBridge 打成可独立发布的包；
  * 并复制 Webview 静态资源到 dist/webview。
  */
 import * as esbuild from "esbuild";

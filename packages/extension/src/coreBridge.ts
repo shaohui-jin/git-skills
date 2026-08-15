@@ -27,7 +27,7 @@ import {
   GitError,
   type TokenPlatform,
   type TokenValidateResult,
-} from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core";
 import type { CliStatusPayload, HostMessage, WebviewRequest } from "./protocol.js";
 import {
   bundledCliPath,

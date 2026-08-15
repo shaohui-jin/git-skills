@@ -1,4 +1,4 @@
-# @git-insight/mcp-server
+# @shaohui_jin/git-insight-mcp-server
 
 把 git-insight 的「不落地合并预演」开放成 MCP server，任何 MCP 宿主（Cursor、Claude Code、VS Code…）都能直接调用。
 
@@ -28,7 +28,7 @@
   "mcpServers": {
     "git-insight": {
       "command": "npx",
-      "args": ["-y", "@git-insight/mcp-server@latest"],
+      "args": ["-y", "@shaohui_jin/git-insight-mcp-server@latest"],
       "env": {
         "GIT_INSIGHT_MCP_CWD": "D:/你的/仓库"
       }
@@ -60,7 +60,7 @@ npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js
 
 ## 发版
 
-- npm 包名：`@git-insight/mcp-server`
+- npm 包名：`@shaohui_jin/git-insight-mcp-server`
 - Git tag：`mcp-server-v{version}`（与扩展 `v*` tag 独立）
 - CI：`.github/workflows/release-mcp-server.yml`（Secret：`NPM_TOKEN`）
 
@@ -68,9 +68,9 @@ npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js
 pnpm publish:mcp
 ```
 
-构建时用 esbuild 内联 `@git-insight/core` 与 extension `coreBridge`；`@modelcontextprotocol/server`、`zod`、`ws` 为外部依赖。Webview 静态资源在 `dist/webview/`。
+构建时用 esbuild 内联 `@shaohui_jin/git-insight-core` 与 extension `coreBridge`；`@modelcontextprotocol/server`、`zod`、`ws` 为外部依赖。Webview 静态资源在 `dist/webview/`。
 
-功能进度见仓库 [`docs/features.md`](../../docs/features.md)。
+功能进度见仓库 [`docs/roadmap.md`](../../docs/roadmap.md)。
 
 ## 注意
 

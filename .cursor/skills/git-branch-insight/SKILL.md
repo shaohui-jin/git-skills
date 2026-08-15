@@ -35,10 +35,10 @@ fetch/graph → preview-merge →（冲突：确认选边 + apply-resolve）→ 
 
 ## CLI
 
-先：`pnpm --filter @git-insight/core build`
+先：`pnpm --filter @shaohui_jin/git-insight-core build`
 
 ```bash
-pnpm --filter @git-insight/core exec node dist/cli.js <command> …
+pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js <command> …
 ```
 
 | 阶段 | 命令 |

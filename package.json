@@ -4,16 +4,16 @@
   "version": "0.1.7",
   "description": "Git branch insight monorepo: core engine + Cursor skill + extension shell",
   "scripts": {
-    "build": "pnpm --filter @git-insight/core build && pnpm --filter git-insight build",
+    "build": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight build",
     "build:all": "pnpm -r run build",
-    "dev": "pnpm --filter @git-insight/core run build --watch",
-    "preview": "pnpm --filter @git-insight/core build && pnpm --filter git-insight preview",
-    "build:mcp": "pnpm --filter @git-insight/core build && pnpm --filter git-insight build:webview && pnpm --filter @git-insight/mcp-server build",
-    "publish:mcp": "pnpm --filter @git-insight/core build && pnpm --filter git-insight build:webview && pnpm --filter @git-insight/mcp-server publish",
-    "package:vsix": "pnpm --filter @git-insight/core build && pnpm --filter git-insight package:vsix",
-    "publish:ovsx": "pnpm --filter @git-insight/core build && pnpm --filter git-insight publish:ovsx",
-    "git-insight": "pnpm --filter @git-insight/core exec node dist/cli.js",
-    "test": "pnpm --filter @git-insight/core run test"
+    "dev": "pnpm --filter @shaohui_jin/git-insight-core run build --watch",
+    "preview": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight preview",
+    "build:mcp": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight build:webview && pnpm --filter @shaohui_jin/git-insight-mcp-server build",
+    "publish:mcp": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight build:webview && pnpm --filter @shaohui_jin/git-insight-mcp-server publish",
+    "package:vsix": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight package:vsix",
+    "publish:ovsx": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight publish:ovsx",
+    "git-insight": "pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js",
+    "test": "pnpm --filter @shaohui_jin/git-insight-core run test"
   },
   "engines": {
     "node": ">=20"

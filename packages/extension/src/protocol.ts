@@ -6,7 +6,7 @@ import type {
   MergeSurveyResult,
   MrMethod,
   SuggestOrderResult,
-} from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core";
 
 /** Webview -> Extension host / preview server */
 export type WebviewRequest =

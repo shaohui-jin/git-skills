@@ -7,7 +7,7 @@ import {
   userConfigHomePath,
   type GitInsightProjectConfig,
   type MrMethod,
-} from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core";
 
 /** Cursor/VS Code globalState 键：Token 与 MR 方式全仓库共用 */
 export const GLOBAL_CONFIG_KEY = "gitInsight.userConfig";

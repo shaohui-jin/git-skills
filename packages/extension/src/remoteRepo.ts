@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { httpsUrlWithToken, runGit } from "@git-insight/core";
+import { httpsUrlWithToken, runGit } from "@shaohui_jin/git-insight-core";
 
 export interface RemoteRepoSpec {
   host: string;

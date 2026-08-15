@@ -1,5 +1,5 @@
 {
-  "name": "@git-insight/mcp-server",
+  "name": "@shaohui_jin/git-insight-mcp-server",
   "version": "0.1.1",
   "description": "MCP server exposing git-insight branch graph, merge preview, batch survey, merge-order planning and browser UI",
   "type": "module",
@@ -36,7 +36,7 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
-    "@git-insight/core": "workspace:*",
+    "@shaohui_jin/git-insight-core": "workspace:*",
     "@types/node": "^22.15.21",
     "esbuild": "^0.25.5",
     "typescript": "^5.8.3"

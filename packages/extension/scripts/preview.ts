@@ -12,7 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import { WebSocketServer } from "ws";
-import { resolveWebviewRoot, startUiServer } from "@git-insight/core";
+import { resolveWebviewRoot, startUiServer } from "@shaohui_jin/git-insight-core";
 import {
   busyLabelForRequest,
   handleWebviewRequest,

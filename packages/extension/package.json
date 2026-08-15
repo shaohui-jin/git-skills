@@ -2,7 +2,7 @@
   "name": "git-insight",
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, merge matrix, one-click resolve & push, and create MR/PR. See docs/features.md for capability matrix.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "jinshaohui",
   "license": "MIT",
   "repository": {
@@ -120,7 +120,7 @@
     "publish:ovsx": "pnpm run package:vsix && ovsx publish ../../git-insight.vsix"
   },
   "devDependencies": {
-    "@git-insight/core": "workspace:*",
+    "@shaohui_jin/git-insight-core": "workspace:*",
     "@types/node": "^22.15.21",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.18.1",

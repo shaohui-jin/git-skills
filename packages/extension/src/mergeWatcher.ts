@@ -16,7 +16,7 @@ import {
   runGit,
   surveyMerges,
   type MergeSurveyCell,
-} from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core";
 import * as vscode from "vscode";
 import { resolveWorkspaceCwd } from "./coreBridge.js";
 

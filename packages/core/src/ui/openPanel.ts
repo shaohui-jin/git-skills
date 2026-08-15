@@ -314,7 +314,7 @@ export async function openInsightUi(
   if (mode === "browser") {
     if (!options.ensureBrowserServer) {
       throw new GitError(
-        "browser 模式需要 UI 服务（请通过 @git-insight/mcp-server 或 pnpm preview 提供）",
+        "browser 模式需要 UI 服务（请通过 @shaohui_jin/git-insight-mcp-server 或 pnpm preview 提供）",
         { code: "BROWSER_UI_UNAVAILABLE" },
       );
     }
@@ -355,7 +355,7 @@ export async function openInsightUi(
       messages: [
         ...ext.messages,
         "未能打开扩展面板，且当前环境未配置浏览器 UI fallback。",
-        "请安装 Git Insight 扩展，或使用 @git-insight/mcp-server 的 open_ui。",
+        "请安装 Git Insight 扩展，或使用 @shaohui_jin/git-insight-mcp-server 的 open_ui。",
       ],
       howTo: ext.howTo,
     };

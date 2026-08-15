@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@antv/g6": "^5.0.49",
-    "@git-insight/core": "workspace:*",
+    "@shaohui_jin/git-insight-core": "workspace:*",
     "diff": "^9.0.0",
     "highlight.js": "^11.11.1",
     "marked": "^15.0.12",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { isSameBranchForMr as coreIsSameBranchForMr } from "@git-insight/core/merge/branchName";
+import { isSameBranchForMr as coreIsSameBranchForMr } from "@shaohui_jin/git-insight-core/merge/branchName";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";

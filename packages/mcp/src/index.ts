@@ -27,7 +27,7 @@ import {
   resolveRepoRoot,
   suggestMergeOrder,
   surveyMerges,
-} from "@git-insight/core";
+} from "@shaohui_jin/git-insight-core";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";

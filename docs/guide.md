@@ -7,8 +7,8 @@
 ### 1.1 四个包的职责
 
 ```text
-packages/core                  @git-insight/core    唯一 Git 引擎 + CLI（不单独发版）
-packages/mcp                   @git-insight/mcp-server  MCP server（stdio）
+packages/core                  @shaohui_jin/git-insight-core    唯一 Git 引擎 + CLI（不单独发版）
+packages/mcp                   @shaohui_jin/git-insight-mcp-server  MCP server（stdio）
 packages/extension             git-insight           Cursor/VS Code 宿主
 packages/extension/webview     Vue3 UI               同一套 Webview，扩展 / 浏览器共用
 ```
@@ -418,7 +418,7 @@ UI **同一套**（`packages/extension/webview` + `coreBridge.handleWebviewReque
 
 ### 3.4 npm 发版流程
 
-| | 扩展 `git-insight` | MCP `@git-insight/mcp-server` |
+| | 扩展 `git-insight` | MCP `@shaohui_jin/git-insight-mcp-server` |
 |--|-------------------|-------------------------------|
 | 版本文件 | `packages/extension/package.json` | `packages/mcp/package.json` |
 | Git tag | `v{version}` | `mcp-server-v{version}` |
@@ -431,13 +431,13 @@ CI 触发：推 `master` 且 `packages/mcp/**` 或 `core/**` 改动（或 `workf
 
 ```bash
 npm whoami
-npm access ls packages @git-insight
+npm access ls packages @shaohui_jin
 npm publish --dry-run --access public --prefix "packages/mcp"
 ```
 
 #### scope 备选
 
-scope `@git-insight` 不可用时改用 `@<npm-username>/mcp-server`。
+scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 
 ### 3.5 用户接入（用户自己的 .cursor/mcp.json）
 
@@ -446,7 +446,7 @@ scope `@git-insight` 不可用时改用 `@<npm-username>/mcp-server`。
   "mcpServers": {
     "git-insight": {
       "command": "npx",
-      "args": ["-y", "@git-insight/mcp-server@latest"]
+      "args": ["-y", "@shaohui_jin/git-insight-mcp-server@latest"]
     }
   }
 }
@@ -555,7 +555,7 @@ Skill `open-ui` 与 MCP `open_ui` 共用 `openInsightUi()`，auto fallback 链�
 | 组件 | 版本 | 发布渠道 |
 |------|------|----------|
 | 扩展 `git-insight` | 0.3.0 | Open VSX / Cursor 市场 |
-| 引擎 `@git-insight/core` | 0.1.0 | monorepo 内 / CLI |
-| MCP `@git-insight/mcp-server` | 0.1.0 | npm（CI 发版） |
+| 引擎 `@shaohui_jin/git-insight-core` | 0.1.0 | monorepo 内 / CLI |
+| MCP `@shaohui_jin/git-insight-mcp-server` | 0.1.0 | npm（CI 发版） |
 
 > 本期（未发版 0.3.1 候选）：候选人 5 分钟缓存 + skipCandidates 开关；矩阵多选 + into/from 隔离 + fillSuggested 覆盖式；toolbar 瘦身；stopUiServer 清理；链循环 guard；精准 platform 匹配；openPanel PowerShell 修复。详见 [roadmap.md](./roadmap.md)。
