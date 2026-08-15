@@ -271,7 +271,18 @@ async function greedyChain(
   let tried = 0;
   const total = branches.length;
 
+  // 安全上限：每轮至少删掉一个元素（same/error）或返回；理论上最多 total 轮，
+  // 留出余量防止未来改动引入无限循环。
+  const maxRounds = total * 2 + 1;
+  let round = 0;
+
   while (remaining.size > 0) {
+    round += 1;
+    if (round > maxRounds) {
+      // 防御性退出：正常情况下不会命中，保留作为逻辑变动的兜底
+      break;
+    }
+
     let picked: { from: string; fromSha: string; tree: string } | null = null;
     /** 本轮剔掉了 same / error，剩下的还没试完，得重开一轮而不是当作「全卡住」 */
     let dropped = false;

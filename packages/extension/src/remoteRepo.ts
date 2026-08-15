@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { httpsUrlWithToken, runGit } from "@git-insight/core";
@@ -117,6 +117,13 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** clone / fetch 失败时清理残留目录，避免下次重试报 "already exists" */
+async function cleanFailedDir(dir: string): Promise<void> {
+  if (await pathExists(dir)) {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 const locks = new Map<string, Promise<string>>();
 
 /**
@@ -161,9 +168,11 @@ export async function ensureRemoteRepo(
         });
       }
       if (r.code !== 0) {
-        throw new Error(
+        const err = new Error(
           r.stderr.trim() || r.stdout.trim() || "clone 失败：鉴权未通过",
         );
+        await cleanFailedDir(dir);
+        throw err;
       }
     } else {
       let r = await runGit(dir, ["fetch", "--all", "--prune"], {
@@ -185,6 +194,7 @@ export async function ensureRemoteRepo(
         throw new Error(
           r.stderr.trim() || r.stdout.trim() || "fetch 失败：鉴权未通过",
         );
+        // fetch 失败不清理：已有仓库可能还有用，让用户决定
       }
     }
     return dir;

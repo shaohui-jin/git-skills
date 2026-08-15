@@ -15,7 +15,7 @@ import {
   buildBranchGraph,
   createMergeRequest,
   crossPairs,
-  openInsightPanel,
+  openInsightUi,
   prepareCreateMr,
   previewMerge,
   rehearseMerge,
@@ -24,26 +24,25 @@ import {
   reportMergeRehearsal,
   reportMergeSurvey,
   resolveRemoteName,
+  resolveRepoRoot,
   suggestMergeOrder,
   surveyMerges,
 } from "@git-insight/core";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
+import { ensureMcpBrowserServer } from "./browserUi.js";
 
 /** 构建时由 scripts/bundle.mjs 从 package.json 注入；tsx 直跑时没有这个值 */
 declare const __MCP_VERSION__: string;
 const VERSION = typeof __MCP_VERSION__ === "string" ? __MCP_VERSION__ : "0.0.0-dev";
-
-/** 宿主一般在仓库根启动本进程；显式配了 GIT_INSIGHT_MCP_CWD 就以它为准 */
-const DEFAULT_CWD = process.env.GIT_INSIGHT_MCP_CWD?.trim() || process.cwd();
 
 const writeEnabled = process.env.GIT_INSIGHT_MCP_ALLOW_WRITE === "1";
 
 const cwdArg = z
   .string()
   .optional()
-  .describe("仓库路径；省略时用服务启动目录（或 GIT_INSIGHT_MCP_CWD）");
+  .describe("仓库路径；省略时按 fallback 链自动探测：GIT_INSIGHT_MCP_CWD > 服务启动目录 > 向上找 .git");
 
 const noFetchArg = z
   .boolean()
@@ -59,8 +58,29 @@ const WRITES = { readOnlyHint: false, destructiveHint: true } as const;
 /** 不碰仓库，但会在用户桌面上弹窗口，所以不能标 readOnly */
 const OPENS_WINDOW = { readOnlyHint: false, destructiveHint: false } as const;
 
-function repo(cwd?: string): string {
-  return cwd?.trim() || DEFAULT_CWD;
+/**
+ * cwd 解析 fallback 链（优先级从高到低）：
+ *   1. 调用方显式传的 cwd
+ *   2. 环境变量 GIT_INSIGHT_MCP_CWD
+ *   3. 宿主启动目录 process.cwd()
+ *   4. 向上找 .git（由 resolveRepoRoot 实现，底层 git rev-parse --show-toplevel）
+ *
+ * 都不是 git 仓库就抛错，让用户知道要显式配置。
+ */
+async function resolveCwd(requestCwd?: string): Promise<string> {
+  const candidates = [requestCwd?.trim(), process.env.GIT_INSIGHT_MCP_CWD?.trim(), process.cwd()].filter(
+    (c): c is string => !!c,
+  );
+  for (const candidate of candidates) {
+    try {
+      return await resolveRepoRoot(candidate);
+    } catch {
+      // 这个候选不行，继续下一个
+    }
+  }
+  throw new Error(
+    "无法定位 git 仓库。请配置环境变量 GIT_INSIGHT_MCP_CWD=<仓库路径>，或在请求里传 cwd。",
+  );
 }
 
 function text(body: string): { content: Array<{ type: "text"; text: string }> } {
@@ -101,7 +121,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, into, from, noFetch }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const graph = await buildBranchGraph({
           cwd: root,
           into,
@@ -136,7 +156,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, into, from, noFetch, detail }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const remote = await remoteFor(root);
         if (detail) {
           const data = await rehearseMerge({
@@ -182,7 +202,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, intos, froms, noFetch }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const data = await surveyMerges({
           cwd: root,
           pairs: crossPairs(intos, froms),
@@ -212,7 +232,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, into, branches, noFetch }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const data = await suggestMergeOrder({
           cwd: root,
           into,
@@ -243,7 +263,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, into, from, sourceBranch }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const data = await prepareCreateMr({
           cwd: root,
           into,
@@ -272,9 +292,9 @@ function createServer(): McpServer {
   server.registerTool(
     "open_ui",
     {
-      title: "在编辑器里打开预演面板",
+      title: "打开预演 UI（扩展或浏览器）",
       description:
-        "把 into/from 种进 Git Insight 扩展的预演面板并拉起窗口，让人接手选边、一键解决、申请 MR。分析完发现要动手时用它交接。需要本机装了扩展；没装则返回 URI 让用户自己打开。",
+        "把 into/from 种进 Git Insight 预演面板。默认 auto：优先扩展；失败则打开本地浏览器面板（127.0.0.1:17341）。也可显式 mode=extension|browser。",
       annotations: OPENS_WINDOW,
       inputSchema: z.object({
         cwd: cwdArg,
@@ -284,27 +304,41 @@ function createServer(): McpServer {
           .boolean()
           .optional()
           .describe("默认 true：打开后立刻跑一次预演"),
+        mode: z
+          .enum(["auto", "extension", "browser"])
+          .optional()
+          .describe("默认 auto：扩展优先，失败则浏览器"),
+        tab: z
+          .enum(["preview", "config", "graph"])
+          .optional()
+          .describe("浏览器面板初始 Tab，默认 preview"),
       }),
     },
-    async ({ cwd, into, from, autoPreview }) => {
+    async ({ cwd, into, from, autoPreview, mode, tab }) => {
       try {
-        const data = await openInsightPanel({
-          cwd: repo(cwd),
+        const data = await openInsightUi({
+          cwd: await resolveCwd(cwd),
           into,
           from,
           autoPreview,
+          mode: mode ?? "auto",
+          tab: tab ?? "preview",
+          ensureBrowserServer: ensureMcpBrowserServer,
         });
-        return text(
+        const lines = [
           data.opened
-            ? `已唤起预演面板：${into} ← ${from}（${data.openedWith}）`
-            : [
-                "没能自动打开窗口，可能本机没装扩展或 cursor 命令不在 PATH。",
-                "请手动打开这个链接：",
-                data.uri,
-                "",
-                ...data.messages,
-              ].join("\n"),
-        );
+            ? data.mode === "browser"
+              ? `已打开浏览器预演：${into} ← ${from}`
+              : `已唤起扩展预演：${into} ← ${from}（${data.openedWith}）`
+            : data.mode === "browser"
+              ? "未能自动打开浏览器，请手动访问下方 URL"
+              : "未能打开扩展，已尝试浏览器 fallback 或请手动打开 URI",
+          data.url ? `浏览器：${data.url}` : "",
+          data.uri ? `扩展 URI：${data.uri}` : "",
+          "",
+          ...data.messages,
+        ].filter(Boolean);
+        return text(lines.join("\n"));
       } catch (err) {
         return failed(err);
       }
@@ -345,7 +379,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, into, from, files, push, tempBranch }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const data = await applyStashedResolve({
           cwd: root,
           into,
@@ -389,7 +423,7 @@ function createServer(): McpServer {
     },
     async ({ cwd, sourceBranch, targetBranch, title, body, reviewers }) => {
       try {
-        const root = repo(cwd);
+        const root = await resolveCwd(cwd);
         const data = await createMergeRequest({
           cwd: root,
           sourceBranch,
@@ -417,7 +451,7 @@ function createServer(): McpServer {
 const handle = serveStdio(createServer);
 
 console.error(
-  `[git-insight-mcp] v${VERSION} 已就绪（stdio）；仓库根 ${DEFAULT_CWD}${
+  `[git-insight-mcp] v${VERSION} 已就绪（stdio）；仓库根 ${process.env.GIT_INSIGHT_MCP_CWD?.trim() || process.cwd()}${
     writeEnabled ? "" : "；只读模式"
   }`,
 );

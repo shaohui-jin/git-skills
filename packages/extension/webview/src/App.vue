@@ -31,6 +31,84 @@ import type {
 } from "./types";
 import { getVsCodeApi } from "./vscode";
 
+/** 浏览器 / MCP 深链：?into=&from=&cwd=&tab=preview&autoPreview=1 */
+interface UrlSeed {
+  into: string;
+  from: string;
+  cwd: string;
+  tab: TabId | "";
+  autoPreview: boolean;
+  /** setCwd 已发出、等 workspace 再种分支 */
+  awaitingCwd?: boolean;
+}
+
+function parseUrlSeed(): UrlSeed | null {
+  if (typeof window === "undefined" || !window.location.search) {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (!params.get("into") && !params.get("from") && !params.get("cwd") && !params.get("tab")) {
+    return null;
+  }
+  const tabRaw = params.get("tab")?.trim() ?? "";
+  const tab: TabId | "" =
+    tabRaw === "preview" || tabRaw === "graph" || tabRaw === "config" ? tabRaw : "";
+  return {
+    into: params.get("into")?.trim() ?? "",
+    from: params.get("from")?.trim() ?? "",
+    cwd: params.get("cwd")?.trim() ?? "",
+    tab,
+    autoPreview: params.get("autoPreview") !== "0",
+  };
+}
+
+const urlSeedPending = ref<UrlSeed | null>(parseUrlSeed());
+
+function applyUrlSeed(workspaceError?: string | null): void {
+  const seed = urlSeedPending.value;
+  if (!seed) {
+    return;
+  }
+
+  if (seed.cwd && cwd.value !== seed.cwd) {
+    if (workspaceError && seed.awaitingCwd) {
+      urlSeedPending.value = null;
+      return;
+    }
+    if (!seed.awaitingCwd) {
+      seed.awaitingCwd = true;
+      vscode.postMessage({ type: "setCwd", path: seed.cwd });
+    }
+    return;
+  }
+
+  if (seed.tab) {
+    tab.value = seed.tab;
+  } else if (seed.into || seed.from) {
+    tab.value = "preview";
+  }
+  if (seed.into) {
+    into.value = seed.into;
+  }
+  if (seed.from) {
+    from.value = seed.from;
+  }
+
+  const shouldPreview =
+    seed.autoPreview && into.value && from.value && !previewBlockReason.value;
+  urlSeedPending.value = null;
+
+  if (shouldPreview) {
+    setTimeout(() => {
+      if (!busy.value && into.value && from.value && !previewBlockReason.value) {
+        runPreview();
+      }
+    }, 400);
+  } else if (seed.into || seed.from) {
+    status.value = `已从 URL 种入分支：${into.value || "?"} ← ${from.value || "?"}`;
+  }
+}
+
 function short(sha: string): string {
   return sha.slice(0, 7);
 }
@@ -291,7 +369,6 @@ const vscode = getVsCodeApi();
 
 const tab = ref<TabId>("config");
 const cwd = ref<string | null>(null);
-const pathInput = ref("");
 const branches = ref<BranchOption[]>([]);
 const into = ref("");
 const from = ref("");
@@ -602,9 +679,6 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     cwd.value = msg.cwd;
     branches.value = normalizeBranches(msg.branches);
     previewMode.value = !!msg.previewMode;
-    if (msg.cwd) {
-      pathInput.value = msg.cwd;
-    }
     if (msg.error) {
       error.value = msg.error;
       status.value = msg.error;
@@ -637,6 +711,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
           "";
       }
     }
+    applyUrlSeed(msg.error ?? null);
     return;
   }
   if (msg.type === "fetchResult") {
@@ -879,19 +954,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("message", onHostMessage as EventListener);
 });
-
-function openByPath() {
-  const path = pathInput.value.trim();
-  if (!path) {
-    error.value = "请输入本机路径或 GitHub 仓库（owner/repo）";
-    return;
-  }
-  vscode.postMessage({ type: "setCwd", path });
-}
-
-function pickFolder() {
-  vscode.postMessage({ type: "pickFolder" });
-}
 
 function loadGraph() {
   busy.value = true;
@@ -1198,37 +1260,14 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
     <header class="topbar">
       <div class="topbar-path">
         <span class="topbar-label">仓库</span>
-        <input
-          v-model="pathInput"
-          class="path"
-          type="text"
-          :title="cwd ?? pathInput"
-          placeholder="本机路径，或 GitHub：owner/repo / https://github.com/owner/repo"
-          @keyup.enter="openByPath"
-        />
-        <button class="btn secondary btn-sm" :disabled="busy" @click="openByPath">打开</button>
-        <button
-          class="btn secondary btn-sm"
-          :disabled="busy"
-          title="系统目录对话框（不依赖浏览器 HTTPS）"
-          @click="pickFolder"
-        >
-          浏览…
-        </button>
+        <span class="topbar-cwd" :title="cwd ?? ''">{{ cwd || "未打开仓库" }}</span>
       </div>
       <div class="topbar-actions">
         <div class="topbar-tools">
           <button
             class="btn secondary btn-sm"
             :disabled="busy || !cwd"
-            @click="vscode.postMessage({ type: 'refreshWorkspace' })"
-          >
-            刷新分支
-          </button>
-          <button
-            class="btn secondary btn-sm"
-            :disabled="busy || !cwd"
-            title="手动再 fetch 一次（加载图/预演已默认 fetch）"
+            title="仅同步远程 refs，不刷图"
             @click="vscode.postMessage({ type: 'fetch' })"
           >
             Fetch
@@ -1439,7 +1478,6 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             :survey="survey"
             :order="mergeOrder"
             :busy="busy"
-            :default-remote="graphDefaultRemote"
             :progress="pairProgress"
             @survey="runSurvey"
             @order="runMergeOrder"

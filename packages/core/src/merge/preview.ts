@@ -127,6 +127,11 @@ async function runMergeTree(
     };
   }
 
+  // merge-tree 退出码非零但没识别到冲突路径：把 stderr 带进 messages，方便排查
+  if (fromMessages.size === 0 && modern.stderr.trim()) {
+    console.warn(`[git-insight] merge-tree 退出码 ${modern.code}，未识别冲突路径，stderr: ${modern.stderr.trim()}`);
+  }
+
   // Fallback: classic merge-tree needs an explicit base
   const base = options?.mergeBaseSha;
   if (!base) {

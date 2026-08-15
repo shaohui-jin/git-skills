@@ -92,6 +92,14 @@ async function removeWorktree(repoRoot: string, wtPath: string): Promise<void> {
 }
 
 /**
+ * 清理未推送成功的临时分支：worktree remove 不会删分支本身，
+ * 不主动清掉会让下次重试时面对一个指向旧 commit 的同名分支。
+ */
+async function removeTempBranch(repoRoot: string, branch: string): Promise<void> {
+  await runGit(repoRoot, ["branch", "-D", branch], { allowFail: true });
+}
+
+/**
  * 将 git remote URL 转为可在浏览器打开的「新建 MR/PR」页。
  * 支持 https / ssh 形态的 GitLab、GitHub；无法识别时返回 null。
  */
@@ -124,15 +132,19 @@ export function buildCreateMrUrl(
     const src = encodeURIComponent(sourceBranch);
     const tgt = encodeURIComponent(targetBranch);
 
-    if (host.includes("github")) {
+    if (host === "github.com" || host.endsWith(".github.com")) {
       return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }
     // GitLab 及多数自建（含 gitlab. 子域）
-    if (host.includes("gitlab") || host.includes("git.")) {
+    if (
+      host === "gitlab.com" ||
+      host.endsWith(".gitlab.com") ||
+      host.includes("gitlab.")
+    ) {
       return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
     }
-    // 默认按 GitLab 新建 MR 查询串尝试
-    return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
+    // 其他平台（Gitea、Bitbucket 等）无法构造标准新建 URL
+    return null;
   } catch {
     return null;
   }
@@ -249,6 +261,8 @@ export async function applyStashedResolve(
   reportProgress(onProgress, 12, `创建独立 worktree（分支 ${tempBranch}）…`);
   const wtPath = await mkdtemp(join(tmpdir(), "git-insight-resolve-"));
 
+  // push 成功则保留临时分支供后续 MR；失败则清理干净
+  let pushSucceeded = false;
   try {
     const addRun = await runGit(
       repoRoot,
@@ -373,7 +387,6 @@ export async function applyStashedResolve(
           { code: "NOTHING_TO_MERGE" },
         );
       }
-      // merge 已是 "Already up to date" 时往往没有 MERGE_HEAD，commit 也会失败
       if (/Already up to date/i.test(mergeRun.stdout + mergeRun.stderr)) {
         throw new GitError(
           `没有可合并的新提交（${from} → ${into}），无需推送临时分支`,
@@ -405,6 +418,7 @@ export async function applyStashedResolve(
         );
       }
       pushed = true;
+      pushSucceeded = true;
       messages.push(`已推送 ${remote}/${tempBranch}`);
     }
 
@@ -434,5 +448,8 @@ export async function applyStashedResolve(
     };
   } finally {
     await removeWorktree(repoRoot, wtPath);
+    if (!pushSucceeded) {
+      await removeTempBranch(repoRoot, tempBranch);
+    }
   }
 }

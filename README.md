@@ -15,7 +15,8 @@ Git 分支溯源、合并冲突预演，以及 Cursor/VS Code 扩展内的一键
 
 ## 文档
 
-→ **[docs/guide.md](docs/guide.md)**（主流程 · 各模块 git/gh/glab 指令 · 核心实现 · Skill · **§五 指令一览**）
+→ **[docs/guide.md](docs/guide.md)**（主流程 · 各模块 git/gh/glab 指令 · 核心实现 · Skill · **§五 指令一览**）  
+→ **[docs/features.md](docs/features.md)**（**功能清单与实现进度**，扩展市场说明用）
 
 扩展约定摘要：目标分支仅远程；我的分支可本地；同名分支（如 `master` ↔ `origin/master`）请自行 push / pull，不走本工具 MR。
 
@@ -25,7 +26,9 @@ Git 分支溯源、合并冲突预演，以及 Cursor/VS Code 扩展内的一键
 |----|------|
 | `packages/core` | 引擎 + CLI，不依赖 VS Code |
 | `packages/extension` | Cursor / VS Code 扩展（含 webview） |
-| `packages/mcp` | MCP server，把上面的能力开放给任意 MCP 宿主；默认只读（[README](packages/mcp/README.md)） |
+| `packages/mcp` | MCP server `@git-insight/mcp-server`（npm；含浏览器 UI fallback） |
+
+功能与实现进度见 **[docs/features.md](docs/features.md)**。
 
 ## 快速命令
 

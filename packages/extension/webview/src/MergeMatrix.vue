@@ -21,8 +21,6 @@ const props = defineProps<{
   survey: MergeSurveyResult | null;
   order: SuggestOrderResult | null;
   busy: boolean;
-  /** 默认远程名，用来给「一键填入」挑目标 */
-  defaultRemote: string;
   /** 每一对走到哪了（已推临时分支 / 已提 MR）；用来把进度标回格子上 */
   progress: PairProgress[];
 }>();
@@ -57,7 +55,19 @@ const emit = defineEmits<{
 const intos = ref<string[]>([]);
 const froms = ref<string[]>([]);
 const picking = ref<"into" | "from">("into");
-const pickValue = ref("");
+const intoPickValue = ref<string[]>([]);
+const fromPickValue = ref<string[]>([]);
+/** 按当前模式读写对应的 v-model ref */
+const pickValue = computed({
+  get: () => (picking.value === "into" ? intoPickValue.value : fromPickValue.value),
+  set: (v: string[]) => {
+    if (picking.value === "into") {
+      intoPickValue.value = v;
+    } else {
+      fromPickValue.value = v;
+    }
+  },
+});
 const activeCell = ref<MergeSurveyCell | null>(null);
 
 const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
@@ -69,39 +79,33 @@ const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
 };
 
 function addPicked(): void {
-  const picked = pickValue.value.trim();
-  if (!picked) {
+  const picks = pickValue.value.filter(Boolean);
+  if (picks.length === 0) {
     return;
   }
   const bucket = picking.value === "into" ? intos : froms;
-  if (!bucket.value.includes(picked)) {
-    bucket.value = [...bucket.value, picked];
+  const merged = new Set([...bucket.value, ...picks]);
+  bucket.value = [...merged];
+  if (picking.value === "into") {
+    intoPickValue.value = [];
+  } else {
+    fromPickValue.value = [];
   }
-  pickValue.value = "";
+}
+
+/** BranchTreeSelect multi 模式 confirm */
+function onPickedConfirm(values: string[]): void {
+  if (values.length === 0) {
+    return;
+  }
+  const bucket = picking.value === "into" ? intos : froms;
+  const merged = new Set([...bucket.value, ...values]);
+  bucket.value = [...merged];
 }
 
 function drop(kind: "into" | "from", name: string): void {
   const bucket = kind === "into" ? intos : froms;
   bucket.value = bucket.value.filter((b) => b !== name);
-}
-
-const TRUNK = new Set(["main", "master", "develop", "dev", "test", "release"]);
-
-/** 最常见的用法：手上几条本地分支都要合进线上主干 */
-function fillSuggested(): void {
-  const remote = props.defaultRemote || "origin";
-  const trunks = props.branches.filter(
-    (b) => b.remote && TRUNK.has(b.name.split("/").pop() ?? ""),
-  );
-  const target = trunks.find((b) => b.remoteName === remote) ?? trunks[0];
-  if (target && !intos.value.includes(target.gitRef)) {
-    intos.value = [...intos.value, target.gitRef];
-  }
-  const mine = props.branches
-    .filter((b) => !b.remote && b.gitRef !== target?.gitRef)
-    .slice(0, 6)
-    .map((b) => b.gitRef);
-  froms.value = [...new Set([...froms.value, ...mine])];
 }
 
 const canRun = computed(
@@ -461,16 +465,15 @@ watch(
             :branches="branches"
             :remote-only="picking === 'into'"
             :disabled="busy"
+            :multi="true"
             :placeholder="picking === 'into' ? '选择线上目标…' : '选择待合入分支…'"
+            @confirm="onPickedConfirm"
           />
-          <button class="btn secondary" type="button" :disabled="!pickValue" @click="addPicked">
+          <button class="btn secondary" type="button" :disabled="pickValue.length === 0" @click="addPicked">
             加入
           </button>
         </div>
         <div class="matrix-setup-actions">
-          <button class="btn secondary" type="button" :disabled="busy" @click="fillSuggested">
-            一键填入
-          </button>
           <button class="btn" type="button" :disabled="!canRun" @click="runSurvey">
             跑矩阵
           </button>

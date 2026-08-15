@@ -1,45 +1,57 @@
 /**
- * 唤起扩展的合并预演面板，并把 into / from 种进去。
+ * 唤起 Git Insight UI：扩展面板和/或本地浏览器面板。
  *
- * 这是「Agent 查完之后我要动手」那一步的桥：分析结果留在对话里，选边、
- * 一键解决、申请 MR 这些要动手的事回到面板里做。CLI 的 `open-ui` 和 MCP 的
- * `open_ui` 都走这里，别再各写一份——拼 URI 的规则和逐个候选命令去试的顺序
- * 一旦分叉，两边就会在不同机器上表现不一致。
- *
- * 前提是本机装了扩展。装了才有人注册这个 URI scheme，否则只能把 uri 交回给
- * 调用方，让它提示用户手动打开。
+ * CLI `open-ui` 与 MCP `open_ui` 共用；拼 URI / 浏览器 URL 的规则只维护一份。
  */
 import { spawn } from "node:child_process";
 import { GitError } from "../git/runner.js";
+import { GIT_INSIGHT_UI_PORT } from "./constants.js";
 
 export const GIT_INSIGHT_EXTENSION_ID = "jinshaohui.git-insight";
 
+export type OpenUiMode = "auto" | "extension" | "browser";
+export type OpenUiTab = "preview" | "config" | "graph";
+
 export interface OpenPanelOptions {
-  /** 仓库路径，默认取进程 cwd */
   cwd?: string;
-  /** 线上目标分支 */
   into: string;
-  /** 我的分支 */
   from: string;
-  /** 默认 true：种入分支后立刻跑预演 */
   autoPreview?: boolean;
-  /** 默认 true；false 只生成 URI，不尝试拉起窗口 */
   open?: boolean;
 }
 
 export interface OpenPanelResult {
   extensionId: string;
   uri: string;
-  /** Cursor 对 vscode:// 的等价 scheme，Windows 上 start 兜底时用得上 */
   cursorUri: string;
   vscodeCommand: string;
   commandArgs: { into: string; from: string; cwd: string; autoPreview: boolean };
   opened: boolean;
-  /** 实际是哪条命令拉起来的，排查「怎么没反应」时唯一有用的线索 */
   openedWith: string | null;
   howTo: string[];
-  /** 每个候选命令的尝试结果，按顺序 */
   messages: string[];
+}
+
+export interface OpenInsightUiOptions extends OpenPanelOptions {
+  mode?: OpenUiMode;
+  tab?: OpenUiTab;
+  /**
+   * browser / auto-fallback 时启动本地 UI 服务。
+   * MCP 注入 ensureBrowserServer；`pnpm preview` 直接调 startUiServer。
+   */
+  ensureBrowserServer?: () => Promise<{ baseUrl: string }>;
+}
+
+export interface OpenInsightUiResult {
+  mode: "extension" | "browser";
+  opened: boolean;
+  openedWith: string | null;
+  uri?: string;
+  url?: string;
+  extensionId?: string;
+  cursorUri?: string;
+  messages: string[];
+  howTo: string[];
 }
 
 function runCmdCapture(
@@ -49,7 +61,8 @@ function runCmdCapture(
   return new Promise((resolve) => {
     const child = spawn(cmd, cmdArgs, {
       windowsHide: true,
-      shell: process.platform === "win32",
+      shell: false,
+      detached: true,
       env: process.env,
     });
     let stdout = "";
@@ -70,26 +83,110 @@ function runCmdCapture(
 }
 
 /**
- * 逐个试，第一个成功就停。
+ * Windows 下 PowerShell Start-Process 能稳定唤起浏览器。
+ * cmd /c start 在无 GUI session 下会静默失败，所以换 Start-Process。
  *
- * 顺序是有讲究的：先试 `cursor --open-url`（装了 Cursor CLI 时最准，能复用
- * 已开着的窗口），再退到系统默认打开器。Windows 的 `start` 需要那个空标题参数，
- * 否则第一个带引号的参数会被当成窗口标题。
+ * pwsh（PowerShell 7+）优先，失败回退到 powershell（Windows PowerShell 5.1）。
+ * 单引号包裹 URL，内部单引号用 '' 转义。
  */
-function openCandidates(uri: string, cursorUri: string): Array<{ bin: string; args: string[] }> {
-  return process.platform === "win32"
-    ? [
-        { bin: "cursor", args: ["--open-url", uri] },
-        { bin: "cursor", args: [uri] },
-        { bin: "cmd", args: ["/c", "start", "", uri] },
-        { bin: "cmd", args: ["/c", "start", "", cursorUri] },
-      ]
-    : [
-        { bin: "cursor", args: ["--open-url", uri] },
-        { bin: "cursor", args: [uri] },
-        { bin: "code", args: ["--open-url", uri] },
-        { bin: "open", args: [uri] },
-      ];
+function winStartArgs(target: string): Array<{ bin: string; args: string[] }> {
+  const escaped = target.replace(/'/g, "''");
+  const cmd = `Start-Process '${escaped}'`;
+  return [
+    { bin: "pwsh", args: ["-NoProfile", "-Command", cmd] },
+    { bin: "powershell", args: ["-NoProfile", "-Command", cmd] },
+  ];
+}
+
+/**
+ * 返回值是二维数组：外层是"尝试顺序"，内层是这一尝试的并行候选。
+ * 内层数组里任意一个成功就算这一尝试成功。
+ */
+function openCandidates(uri: string, cursorUri: string): Array<Array<{ bin: string; args: string[] }>> {
+  if (process.platform === "win32") {
+    return [
+      [{ bin: "cursor", args: ["--open-url", uri] }],
+      [{ bin: "cursor", args: [uri] }],
+      [...winStartArgs(uri)],
+      [...winStartArgs(cursorUri)],
+    ];
+  }
+  return [
+    [{ bin: "cursor", args: ["--open-url", uri] }],
+    [{ bin: "cursor", args: [uri] }],
+    [{ bin: "code", args: ["--open-url", uri] }],
+    [{ bin: "open", args: [uri] }],
+  ];
+}
+
+function browserOpenCandidates(url: string): Array<Array<{ bin: string; args: string[] }>> {
+  if (process.platform === "win32") {
+    return [[...winStartArgs(url)]];
+  }
+  if (process.platform === "darwin") {
+    return [[{ bin: "open", args: [url] }]];
+  }
+  return [[{ bin: "xdg-open", args: [url] }]];
+}
+
+export function buildExtensionPreviewUri(options: {
+  into: string;
+  from: string;
+  cwd: string;
+  autoPreview: boolean;
+}): { uri: string; cursorUri: string } {
+  const q = new URLSearchParams({
+    into: options.into,
+    from: options.from,
+    cwd: options.cwd,
+    autoPreview: options.autoPreview ? "1" : "0",
+  });
+  const uri = `vscode://${GIT_INSIGHT_EXTENSION_ID}/preview?${q.toString()}`;
+  const cursorUri = `cursor://${GIT_INSIGHT_EXTENSION_ID}/preview?${q.toString()}`;
+  return { uri, cursorUri };
+}
+
+export function buildBrowserUiUrl(
+  baseUrl: string,
+  options: {
+    into: string;
+    from: string;
+    cwd: string;
+    autoPreview: boolean;
+    tab?: OpenUiTab;
+  },
+): string {
+  const root = baseUrl.replace(/\/+$/, "");
+  const q = new URLSearchParams({
+    into: options.into,
+    from: options.from,
+    cwd: options.cwd,
+    tab: options.tab ?? "preview",
+    autoPreview: options.autoPreview ? "1" : "0",
+  });
+  return `${root}/?${q.toString()}`;
+}
+
+/**
+ * 尝试一组"打开方案"（外层顺序尝试），
+ * 每个方案内部可能是多个并行候选（内层任一成功算通过）。
+ */
+async function tryOpenWithCandidates(
+  candidates: Array<Array<{ bin: string; args: string[] }>>,
+  messages: string[],
+): Promise<{ opened: boolean; openedWith: string | null }> {
+  for (const group of candidates) {
+    for (const a of group) {
+      const r = await runCmdCapture(a.bin, a.args);
+      if (r.code === 0) {
+        const openedWith = `${a.bin} ${a.args.join(" ")}`;
+        messages.push(`已尝试打开：${openedWith}`);
+        return { opened: true, openedWith };
+      }
+      messages.push(`尝试失败：${a.bin}（${(r.stderr || r.stdout).trim() || r.code}）`);
+    }
+  }
+  return { opened: false, openedWith: null };
 }
 
 export async function openInsightPanel(
@@ -103,14 +200,7 @@ export async function openInsightPanel(
   const cwd = options.cwd?.trim() || process.cwd();
   const autoPreview = options.autoPreview !== false;
 
-  const q = new URLSearchParams({
-    into,
-    from,
-    cwd,
-    autoPreview: autoPreview ? "1" : "0",
-  });
-  const uri = `vscode://${GIT_INSIGHT_EXTENSION_ID}/preview?${q.toString()}`;
-  const cursorUri = `cursor://${GIT_INSIGHT_EXTENSION_ID}/preview?${q.toString()}`;
+  const { uri, cursorUri } = buildExtensionPreviewUri({ into, from, cwd, autoPreview });
 
   const messages: string[] = [];
   let opened = false;
@@ -119,16 +209,9 @@ export async function openInsightPanel(
   if (options.open === false) {
     messages.push("已跳过自动打开");
   } else {
-    for (const a of openCandidates(uri, cursorUri)) {
-      const r = await runCmdCapture(a.bin, a.args);
-      if (r.code === 0) {
-        opened = true;
-        openedWith = `${a.bin} ${a.args.join(" ")}`;
-        messages.push(`已尝试打开：${openedWith}`);
-        break;
-      }
-      messages.push(`尝试失败：${a.bin}（${(r.stderr || r.stdout).trim() || r.code}）`);
-    }
+    const r = await tryOpenWithCandidates(openCandidates(uri, cursorUri), messages);
+    opened = r.opened;
+    openedWith = r.openedWith;
   }
 
   return {
@@ -143,8 +226,153 @@ export async function openInsightPanel(
       "在装了扩展的机器上执行会直接拉起窗口",
       "或在 Cursor 命令面板运行「Git Insight: 打开预演（可带 into/from）」",
       `或手动打开 URI：${uri}`,
-      "或在扩展宿主内 executeCommand('gitInsight.openPreview', { into, from })",
     ],
     messages,
+  };
+}
+
+async function openBrowserUi(options: {
+  into: string;
+  from: string;
+  cwd: string;
+  autoPreview: boolean;
+  tab?: OpenUiTab;
+  open: boolean;
+  ensureBrowserServer: () => Promise<{ baseUrl: string }>;
+}): Promise<OpenInsightUiResult> {
+  const { baseUrl } = await options.ensureBrowserServer();
+  const url = buildBrowserUiUrl(baseUrl, {
+    into: options.into,
+    from: options.from,
+    cwd: options.cwd,
+    autoPreview: options.autoPreview,
+    tab: options.tab,
+  });
+
+  const messages: string[] = [`浏览器面板：${url}`];
+  let opened = false;
+  let openedWith: string | null = null;
+
+  if (options.open !== false) {
+    const r = await tryOpenWithCandidates(browserOpenCandidates(url), messages);
+    opened = r.opened;
+    openedWith = r.openedWith;
+  } else {
+    messages.push("已跳过自动打开浏览器");
+  }
+
+  return {
+    mode: "browser",
+    opened,
+    openedWith,
+    url,
+    messages,
+    howTo: [
+      `在浏览器打开：${url}`,
+      `UI 服务默认监听 127.0.0.1:${GIT_INSIGHT_UI_PORT}`,
+    ],
+  };
+}
+
+function toPanelOptions(overrides: {
+  into: string;
+  from: string;
+  cwd: string;
+  autoPreview: boolean;
+  open: boolean;
+}): OpenPanelOptions {
+  return overrides;
+}
+
+export async function openInsightUi(
+  options: OpenInsightUiOptions,
+): Promise<OpenInsightUiResult> {
+  const into = options.into.trim();
+  const from = options.from.trim();
+  if (!into || !from) {
+    throw new GitError("into / from 不能为空", { code: "USAGE" });
+  }
+  const cwd = options.cwd?.trim() || process.cwd();
+  const autoPreview = options.autoPreview !== false;
+  const mode = options.mode ?? "auto";
+  const open = options.open !== false;
+
+  if (mode === "extension") {
+    const ext = await openInsightPanel(toPanelOptions({ into, from, cwd, autoPreview, open }));
+    return {
+      mode: "extension",
+      opened: ext.opened,
+      openedWith: ext.openedWith,
+      uri: ext.uri,
+      extensionId: ext.extensionId,
+      cursorUri: ext.cursorUri,
+      messages: ext.messages,
+      howTo: ext.howTo,
+    };
+  }
+
+  if (mode === "browser") {
+    if (!options.ensureBrowserServer) {
+      throw new GitError(
+        "browser 模式需要 UI 服务（请通过 @git-insight/mcp-server 或 pnpm preview 提供）",
+        { code: "BROWSER_UI_UNAVAILABLE" },
+      );
+    }
+    return openBrowserUi({
+      into,
+      from,
+      cwd,
+      autoPreview,
+      tab: options.tab,
+      open,
+      ensureBrowserServer: options.ensureBrowserServer,
+    });
+  }
+
+  // auto: 扩展优先，失败则浏览器
+  const ext = await openInsightPanel(toPanelOptions({ into, from, cwd, autoPreview, open }));
+  if (ext.opened) {
+    return {
+      mode: "extension",
+      opened: true,
+      openedWith: ext.openedWith,
+      uri: ext.uri,
+      extensionId: ext.extensionId,
+      cursorUri: ext.cursorUri,
+      messages: ext.messages,
+      howTo: ext.howTo,
+    };
+  }
+
+  if (!options.ensureBrowserServer) {
+    return {
+      mode: "extension",
+      opened: false,
+      openedWith: null,
+      uri: ext.uri,
+      extensionId: ext.extensionId,
+      cursorUri: ext.cursorUri,
+      messages: [
+        ...ext.messages,
+        "未能打开扩展面板，且当前环境未配置浏览器 UI fallback。",
+        "请安装 Git Insight 扩展，或使用 @git-insight/mcp-server 的 open_ui。",
+      ],
+      howTo: ext.howTo,
+    };
+  }
+
+  const browser = await openBrowserUi({
+    into,
+    from,
+    cwd,
+    autoPreview,
+    tab: options.tab,
+    open,
+    ensureBrowserServer: options.ensureBrowserServer,
+  });
+  return {
+    ...browser,
+    messages: [...ext.messages, "---", ...browser.messages],
+    howTo: [...ext.howTo, ...browser.howTo],
   };
 }

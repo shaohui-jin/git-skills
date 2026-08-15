@@ -1,4 +1,4 @@
-# @git-insight/mcp
+# @git-insight/mcp-server
 
 把 git-insight 的「不落地合并预演」开放成 MCP server，任何 MCP 宿主（Cursor、Claude Code、VS Code…）都能直接调用。
 
@@ -13,33 +13,22 @@
 | `merge_survey` | 批量矩阵：`froms × intos` 每种组合各预演一次，整批只 fetch 一次 |
 | `merge_order` | 多分支合进同一目标时，推演最省事的合入顺序 |
 | `mr_prepare` | 识别平台 / CLI / 默认标题 / 可选审核人，只读 |
-| `open_ui` | 把 `into` / `from` 种进扩展的预演面板并拉起窗口，交给人接手 |
+| `open_ui` | 打开预演 UI：**auto** 优先扩展，失败则浏览器（`127.0.0.1:17341`） |
 
 前面五个都标了 `readOnlyHint`，宿主可以免确认直接调。
 
-`open_ui` 不碰仓库，但会在桌面上弹窗口，所以没标只读。它是「Agent 查完之后我要动手」那一步的交接口：模型扫出哪几对会撞之后调它，人直接在面板里选边、一键解决、申请 MR，不用再手动找分支名。**前提是本机装了扩展**；没装的话它会把 `vscode://` URI 返回给你，自己贴到浏览器里也能打开。
+`open_ui` 不碰仓库，但会弹窗口，所以没标只读。它是「Agent 查完之后我要动手」的交接口：人直接在面板里选边、一键解决、申请 MR。
 
-写操作默认**不注册**。需要时启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，此时多出 `apply_resolve` 与 `create_mr`，且每次调用还必须显式传 `confirm: true`。两道门是有意的：模型编不出环境变量，人也不会被一次工具调用不小心推了分支。
+写操作默认**不注册**。需要时启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，此时多出 `apply_resolve` 与 `create_mr`，且每次调用还必须显式传 `confirm: true`。
 
-## 用起来
-
-> 本包**尚未发布到 npm**，所以现在只能从源码构建后用绝对路径接入。发布之后才能换成下面的 `npx` 写法。
-
-先构建（仓库根目录）：
-
-```bash
-pnpm install        # 首次或改过依赖后必须跑：装 MCP SDK 与 esbuild
-pnpm build:mcp      # 产出单文件 packages/mcp/dist/index.js
-```
-
-再接进宿主。Cursor 是 `~/.cursor/mcp.json`：
+## 接入（npm）
 
 ```json
 {
   "mcpServers": {
     "git-insight": {
-      "command": "node",
-      "args": ["D:/_myproject/git-skill/packages/mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@git-insight/mcp-server@latest"],
       "env": {
         "GIT_INSIGHT_MCP_CWD": "D:/你的/仓库"
       }
@@ -48,39 +37,43 @@ pnpm build:mcp      # 产出单文件 packages/mcp/dist/index.js
 }
 ```
 
-改完重启宿主，工具列表里就能看到 `git_branch_graph` 等六个。
+`GIT_INSIGHT_MCP_CWD` 必须是**本地路径**（不能填 GitHub URL）。改完重启 MCP 宿主。
 
-想先单测一遍、不碰宿主配置：
+## 从源码构建
+
+```bash
+pnpm install
+pnpm build:mcp   # core + webview + 打包 dist/index.js 与 dist/webview
+```
+
+本地调试可改用绝对路径：
+
+```json
+{ "command": "node", "args": ["…/packages/mcp/dist/index.js"] }
+```
 
 ```bash
 npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js
 ```
 
-`GIT_INSIGHT_MCP_CWD` 可以不填，此时以进程启动目录为准；每个工具也都接受 `cwd` 参数覆盖。
+需要 Node ≥ 20 和系统 Git ≥ 2.38。
 
-需要 Node ≥ 20 和系统 Git ≥ 2.38（依赖 `merge-tree --write-tree`）。
+## 发版
 
-发布之后可以改成免构建的写法：
-
-```json
-{ "command": "npx", "args": ["-y", "@git-insight/mcp"] }
-```
-
-## 发布
-
-`@git-insight/core` 是 workspace 包、没发过 npm，所以构建时用 esbuild **内联进 `dist/index.js`**；只有 `@modelcontextprotocol/server` 和 `zod` 留作外部依赖，交给 npm 去重和安全更新。见 `scripts/bundle.mjs`。
+- npm 包名：`@git-insight/mcp-server`
+- Git tag：`mcp-server-v{version}`（与扩展 `v*` tag 独立）
+- CI：`.github/workflows/release-mcp-server.yml`（Secret：`NPM_TOKEN`）
 
 ```bash
-# 仓库根目录
 pnpm publish:mcp
 ```
 
-它会先构建 core（`check` 要靠它的 `dist` 做类型解析），再由 `prepublishOnly` 跑一遍类型检查和打包。发布走 pnpm 默认的分支 / 工作区干净校验，别绕过。
+构建时用 esbuild 内联 `@git-insight/core` 与 extension `coreBridge`；`@modelcontextprotocol/server`、`zod`、`ws` 为外部依赖。Webview 静态资源在 `dist/webview/`。
 
-改动 core 之后 MCP 要重新发一次才生效 —— 内联的代价就在这里。握手里报的版本号由打包脚本从 `package.json` 注入，不用手动同步。
+功能进度见仓库 [`docs/features.md`](../../docs/features.md)。
 
 ## 注意
 
-- stdout 是协议流，本进程的日志一律走 stderr。
-- 默认每次调用都会先 `fetch`。批量扫描时如果嫌慢，传 `noFetch: true` 用本地已有的 remote-tracking refs。
-- 私有仓库的 fetch 走本机 git 凭据；本包不读也不存 Token。
+- stdout 是协议流，日志走 stderr。
+- 默认每次调用会 `fetch`；批量扫描可传 `noFetch: true`。
+- 浏览器面板不支持 AI 选边与冲突预警状态栏（扩展专属）。

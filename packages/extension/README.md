@@ -5,6 +5,7 @@ Cursor / VS Code 扩展：Git 分支图、合并冲突预演、冲突选边 / AI
 - 扩展 ID：`jinshaohui.git-insight`
 - 引擎：`@git-insight/core`
 - 仓库：[shaohui-jin/git-skills](https://github.com/shaohui-jin/git-skills)
+- **功能与实现进度**：[docs/features.md](../../docs/features.md)
 
 ## 安装
 

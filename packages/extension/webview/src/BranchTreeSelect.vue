@@ -12,18 +12,24 @@ import PathTreeNodes from "./PathTreeNodes.vue";
 
 const props = withDefaults(
   defineProps<{
-    modelValue: string;
+    modelValue: string | string[];
     branches: BranchOption[];
     placeholder?: string;
     disabled?: boolean;
     /** 只展示远程跟踪分支（目标分支用） */
     remoteOnly?: boolean;
+    /** 多选模式：面板内勾选、底部「确认加入」按钮 */
+    multi?: boolean;
   }>(),
-  { remoteOnly: false },
+  { remoteOnly: false, multi: false },
 );
 
 const emit = defineEmits<{
-  "update:modelValue": [value: string];
+  "update:modelValue": [value: string | string[]];
+  /** 仅 multi 模式触发：用户勾选完点「确认」 */
+  confirm: [values: string[]];
+  /** 仅 multi 模式触发：用户点「取消」 */
+  cancel: [];
 }>();
 
 const open = ref(false);
@@ -39,18 +45,43 @@ const expandedFolders = ref<Record<string, boolean>>({});
 const panelStyle = ref<Record<string, string>>({});
 const activeIndex = ref(-1);
 
+/** 多选模式下已勾选的集合 */
+const multiPicked = ref<Set<string>>(new Set());
+
 const effectiveBranches = computed(() =>
   props.remoteOnly ? props.branches.filter((b) => b.remote) : props.branches,
 );
 
 const tree = computed(() => buildBranchTree(effectiveBranches.value));
 
+/** 外部 modelValue 统一转成 Set 方便 multi 模式用 */
+const externalSet = computed<Set<string>>(() => {
+  if (Array.isArray(props.modelValue)) {
+    return new Set(props.modelValue);
+  }
+  return props.modelValue ? new Set([props.modelValue]) : new Set();
+});
+
+watch(
+  externalSet,
+  (s) => {
+    if (props.multi) {
+      multiPicked.value = new Set(s);
+    }
+  },
+  { immediate: true },
+);
+
 const triggerLabel = computed(() => {
+  if (props.multi) {
+    const n = externalSet.value.size;
+    return n === 0 ? "" : `已选 ${n} 个`;
+  }
   if (!props.modelValue) {
     return "";
   }
-  const hit = findBranchByGitRef(effectiveBranches.value, props.modelValue);
-  return hit ? branchDisplayLabel(hit) : props.modelValue;
+  const hit = findBranchByGitRef(effectiveBranches.value, props.modelValue as string);
+  return hit ? branchDisplayLabel(hit) : (props.modelValue as string);
 });
 
 const filtered = computed(() => {
@@ -163,11 +194,42 @@ async function focusFilter(): Promise<void> {
   filterRef.value?.select();
 }
 
+/** 单选：点一个就确认关闭 */
 function select(full: string): void {
+  if (props.multi) {
+    toggleMulti(full);
+    return;
+  }
   emit("update:modelValue", full);
   open.value = false;
   filter.value = "";
   activeIndex.value = -1;
+}
+
+/** 多选切换勾选 */
+function toggleMulti(full: string): void {
+  const next = new Set(multiPicked.value);
+  if (next.has(full)) {
+    next.delete(full);
+  } else {
+    next.add(full);
+  }
+  multiPicked.value = next;
+}
+
+/** 多选：确认 */
+function confirmMulti(): void {
+  const arr = [...multiPicked.value];
+  emit("update:modelValue", arr);
+  emit("confirm", arr);
+  closePanel();
+}
+
+/** 多选：取消（恢复到打开前的勾选） */
+function cancelMulti(): void {
+  multiPicked.value = new Set(externalSet.value);
+  emit("cancel");
+  closePanel();
 }
 
 function toggleFolder(key: string): void {
@@ -178,6 +240,9 @@ async function openPanel(): Promise<void> {
   open.value = true;
   filter.value = "";
   activeIndex.value = -1;
+  if (props.multi) {
+    multiPicked.value = new Set(externalSet.value);
+  }
   await placePanel();
   await focusFilter();
 }
@@ -210,7 +275,6 @@ function expandPathToFull(full: string): void {
   const localHit = flattenPathTree(filtered.value.local).some((x) => x.full === full);
   if (localHit) {
     expandedLocal.value = true;
-    // 展开 local 下路径
     for (const leaf of flattenPathTree(tree.value.local)) {
       if (leaf.full !== full) {
         continue;
@@ -282,6 +346,18 @@ function onFilterKeydown(ev: KeyboardEvent): void {
     return;
   }
   if (ev.key === "Enter") {
+    if (props.multi) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const hit =
+        activeIndex.value >= 0
+          ? flatLeaves.value[activeIndex.value]
+          : undefined;
+      if (hit) {
+        toggleMulti(hit.full);
+      }
+      return;
+    }
     ev.preventDefault();
     ev.stopPropagation();
     const hit =
@@ -298,7 +374,11 @@ function onFilterKeydown(ev: KeyboardEvent): void {
   if (ev.key === "Escape") {
     ev.preventDefault();
     ev.stopPropagation();
-    closePanel();
+    if (props.multi) {
+      cancelMulti();
+    } else {
+      closePanel();
+    }
   }
 }
 
@@ -327,6 +407,11 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onScrollOrResize);
   window.removeEventListener("scroll", onScrollOrResize, true);
 });
+
+/** 给 PathTreeNodes 提供当前 node 是否勾选（multi 模式） */
+function isChecked(full: string): boolean {
+  return multiPicked.value.has(full);
+}
 </script>
 
 <template>
@@ -337,7 +422,7 @@ onBeforeUnmount(() => {
       :disabled="disabled"
       @click="toggle"
     >
-      <span class="tree-select-value" :class="{ placeholder: !modelValue }">
+      <span class="tree-select-value" :class="{ placeholder: !modelValue || (Array.isArray(modelValue) && modelValue.length === 0) }">
         {{ triggerLabel || placeholder || "选择分支…" }}
       </span>
       <span class="tree-select-arrow">▾</span>
@@ -377,9 +462,11 @@ onBeforeUnmount(() => {
               v-if="expandedLocal"
               :nodes="filtered.local"
               :model-value="modelValue"
-              expand-key-prefix="local"
+              :expand-key-prefix="`local`"
               :expanded="expandedFolders"
               :active-full="activeFull"
+              :multi="multi"
+              :is-checked="isChecked"
               @select="select"
               @toggle="toggleFolder"
               @hover="(full) => (activeIndex = flatLeaves.findIndex((x) => x.full === full))"
@@ -412,6 +499,8 @@ onBeforeUnmount(() => {
                 :expand-key-prefix="`remote:${g.remote}`"
                 :expanded="expandedFolders"
                 :active-full="activeFull"
+                :multi="multi"
+                :is-checked="isChecked"
                 @select="select"
                 @toggle="toggleFolder"
                 @hover="(full) => (activeIndex = flatLeaves.findIndex((x) => x.full === full))"
@@ -424,6 +513,14 @@ onBeforeUnmount(() => {
             class="tree-empty"
           >
             无匹配分支
+          </div>
+        </div>
+
+        <div v-if="multi" class="tree-select-multi-footer">
+          <span class="tree-multi-count">已选 {{ multiPicked.size }}</span>
+          <div class="tree-multi-actions">
+            <button type="button" class="btn secondary tiny" @click="cancelMulti">取消</button>
+            <button type="button" class="btn tiny" @click="confirmMulti">确认加入</button>
           </div>
         </div>
       </div>

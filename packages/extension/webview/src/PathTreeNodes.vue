@@ -5,12 +5,16 @@ import PathTreeNodes from "./PathTreeNodes.vue";
 
 const props = defineProps<{
   nodes: PathTreeNode[];
-  modelValue: string;
+  modelValue: string | string[];
   /** folder key prefix，用于展开状态 */
   expandKeyPrefix: string;
   expanded: Record<string, boolean>;
   activeFull: string | null;
   depth?: number;
+  /** 多选模式：显示 checkbox */
+  multi?: boolean;
+  /** 多选模式下判断某个 full 是否已勾选 */
+  isChecked?: (full: string) => boolean;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +24,18 @@ const emit = defineEmits<{
 }>();
 
 const depth = computed(() => props.depth ?? 0);
+
+/** 外部 modelValue 统一转成 Set，方便比较 */
+const externalSet = computed<Set<string>>(() => {
+  if (Array.isArray(props.modelValue)) {
+    return new Set(props.modelValue);
+  }
+  return props.modelValue ? new Set([props.modelValue]) : new Set();
+});
+
+function isSelected(full: string): boolean {
+  return externalSet.value.has(full);
+}
 
 function folderKey(segment: string): string {
   return `${props.expandKeyPrefix}/${segment}`;
@@ -59,13 +75,22 @@ function leafCount(node: PathTreeNode): number {
           v-if="n.full && isExpanded(n.segment)"
           class="tree-leaf tree-leaf--self"
           :class="{
-            active: n.full === modelValue,
+            active: isSelected(n.full),
             'kbd-active': activeFull === n.full,
+            'multi': props.multi,
           }"
           :title="n.full"
           @click="emit('select', n.full)"
           @mouseenter="emit('hover', n.full)"
         >
+          <input
+            v-if="props.multi"
+            type="checkbox"
+            :checked="isChecked ? isChecked(n.full) : false"
+            class="tree-multi-cb"
+            @click.stop
+            @change="emit('select', n.full)"
+          />
           <span class="tree-self-tip">（本段）</span>
           {{ n.segment }}
         </div>
@@ -77,6 +102,8 @@ function leafCount(node: PathTreeNode): number {
           :expanded="expanded"
           :active-full="activeFull"
           :depth="depth + 1"
+          :multi="multi"
+          :is-checked="isChecked"
           @select="emit('select', $event)"
           @toggle="emit('toggle', $event)"
           @hover="emit('hover', $event)"
@@ -88,13 +115,22 @@ function leafCount(node: PathTreeNode): number {
         v-else-if="n.full"
         class="tree-leaf"
         :class="{
-          active: n.full === modelValue,
+          active: isSelected(n.full),
           'kbd-active': activeFull === n.full,
+          'multi': props.multi,
         }"
         :title="n.full"
         @click="emit('select', n.full)"
         @mouseenter="emit('hover', n.full)"
       >
+        <input
+          v-if="props.multi"
+          type="checkbox"
+          :checked="isChecked ? isChecked(n.full) : false"
+          class="tree-multi-cb"
+          @click.stop
+          @change="emit('select', n.full)"
+        />
         {{ n.segment }}
       </li>
     </template>

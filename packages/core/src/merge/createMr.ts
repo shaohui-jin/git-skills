@@ -5,6 +5,68 @@ import { buildCreateMrUrl, defaultTempBranchName } from "./applyResolve.js";
 import { branchNameForMr } from "./branchName.js";
 import { listRemotes } from "../git/remotes.js";
 
+/**
+ * 候选人缓存：同仓库+同 channel（gh/glab/token）5 分钟内复用，避免矩阵每行
+ * 打开 MR 下拉都重新请求 GitHub/GitLab API 或拉起 gh/glab 子进程。
+ *
+ * 候选人列表不是实时数据：协作者角色变更本身就不频繁，5 分钟 TTL 足够。
+ */
+interface CachedCandidates {
+  candidates: MrCandidate[];
+  cachedAt: number;
+}
+
+const CANDIDATE_TTL_MS = 5 * 60 * 1000;
+const CANDIDATE_CACHE_LIMIT = 50;
+const candidateCache = new Map<string, CachedCandidates>();
+
+function candidateCacheKey(repoRoot: string, remoteUrl: string, channel: string): string {
+  return `${repoRoot}\0${remoteUrl}\0${channel}`;
+}
+
+/** 供测试和「强制刷新候选人」入口使用。 */
+export function clearMrCandidateCache(): void {
+  candidateCache.clear();
+}
+
+function getCachedCandidates(
+  repoRoot: string,
+  remoteUrl: string,
+  channel: string,
+): MrCandidate[] | null {
+  const entry = candidateCache.get(candidateCacheKey(repoRoot, remoteUrl, channel));
+  if (!entry) {
+    return null;
+  }
+  if (Date.now() - entry.cachedAt > CANDIDATE_TTL_MS) {
+    candidateCache.delete(candidateCacheKey(repoRoot, remoteUrl, channel));
+    return null;
+  }
+  return entry.candidates;
+}
+
+function putCachedCandidates(
+  repoRoot: string,
+  remoteUrl: string,
+  channel: string,
+  candidates: MrCandidate[],
+): void {
+  if (candidateCache.size >= CANDIDATE_CACHE_LIMIT) {
+    let drop = Math.ceil(CANDIDATE_CACHE_LIMIT / 4);
+    for (const k of candidateCache.keys()) {
+      candidateCache.delete(k);
+      drop -= 1;
+      if (drop <= 0) {
+        break;
+      }
+    }
+  }
+  candidateCache.set(candidateCacheKey(repoRoot, remoteUrl, channel), {
+    candidates,
+    cachedAt: Date.now(),
+  });
+}
+
 export type MrPlatform = "github" | "gitlab" | "unknown";
 
 export interface MrCandidate {
@@ -26,6 +88,12 @@ export interface PrepareCreateMrOptions {
   /** Token 方式下列成员 / 建单 */
   token?: string;
   method?: MrMethod | null;
+  /**
+   * 跳过候选人拉取，直接返回空 candidates + 平台/链接等信息。
+   * 矩阵等需要批量准备 MR 的场景可传 true，避免每行都请求 GitHub/GitLab API
+   * 或拉起 gh/glab 子进程。默认不传（行为与旧版一致：实时拉列表）。
+   */
+  skipCandidates?: boolean;
 }
 
 export interface PrepareCreateMrResult {
@@ -136,13 +204,20 @@ export function detectMrPlatform(remoteUrl: string): MrPlatform {
   }
   try {
     const host = new URL(web).hostname.toLowerCase();
-    if (host.includes("github")) {
+    // GitHub：github.com 及其子域（如 api.github.com）
+    if (host === "github.com" || host.endsWith(".github.com")) {
       return "github";
     }
-    if (host.includes("gitlab") || host.includes("git.")) {
+    // GitLab：gitlab.com 及其子域，或自建的 *.gitlab.* 主机
+    if (
+      host === "gitlab.com" ||
+      host.endsWith(".gitlab.com") ||
+      host.includes("gitlab.")
+    ) {
       return "gitlab";
     }
-    return "gitlab";
+    // 其他（Gitea、Bitbucket、Azure DevOps 等）暂不自动识别
+    return "unknown";
   } catch {
     return "unknown";
   }
@@ -674,12 +749,38 @@ export async function prepareCreateMr(
   }
 
   if (method === "token" && options.token?.trim()) {
-    if (platform === "github") {
-      candidates = await listGithubCandidatesByToken(url, options.token.trim());
-      messages.push(`已通过 Token API 加载 ${candidates.length} 位协作者`);
-    } else if (platform === "gitlab") {
-      candidates = await listGitlabCandidatesByToken(url, options.token.trim());
-      messages.push(`已通过 Token API 加载 ${candidates.length} 位成员`);
+    const tokenChannel = "token";
+    if (options.skipCandidates) {
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli: null,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, tokenChannel);
+    if (cached) {
+      candidates = cached;
+      messages.push(`已复用缓存的 ${candidates.length} 位 Token API 协作者（5 分钟内有效）`);
+    } else {
+      if (platform === "github") {
+        candidates = await listGithubCandidatesByToken(url, options.token.trim());
+        messages.push(`已通过 Token API 加载 ${candidates.length} 位协作者`);
+      } else if (platform === "gitlab") {
+        candidates = await listGitlabCandidatesByToken(url, options.token.trim());
+        messages.push(`已通过 Token API 加载 ${candidates.length} 位成员`);
+      }
+      if (candidates.length > 0) {
+        putCachedCandidates(repoRoot, url, tokenChannel, candidates);
+      }
     }
     return {
       repoRoot,
@@ -700,21 +801,81 @@ export async function prepareCreateMr(
   const glabBin = platform === "gitlab" ? options.cliPath || "glab" : "glab";
 
   if (platform === "github") {
+    const channel = `gh:${ghBin}`;
+    if (options.skipCandidates) {
+      const check = await checkGh(repoRoot, ghBin);
+      cli = check.ok ? "gh" : null;
+      cliError = check.ok ? undefined : (check.error ?? "gh 不可用");
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+        cliError,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, channel);
     const check = await checkGh(repoRoot, ghBin);
     if (check.ok) {
       cli = "gh";
-      candidates = await listGithubCandidates(repoRoot, url, ghBin);
-      messages.push(`已通过 gh 加载 ${candidates.length} 位协作者/可指派用户`);
+      if (cached) {
+        candidates = cached;
+        messages.push(`已复用缓存的 ${candidates.length} 位协作者/可指派用户（5 分钟内有效）`);
+      } else {
+        candidates = await listGithubCandidates(repoRoot, url, ghBin);
+        messages.push(`已通过 gh 加载 ${candidates.length} 位协作者/可指派用户`);
+        if (candidates.length > 0) {
+          putCachedCandidates(repoRoot, url, channel, candidates);
+        }
+      }
     } else {
       cliError = check.error;
       messages.push(check.error ?? "gh 不可用");
     }
   } else if (platform === "gitlab") {
+    const channel = `glab:${glabBin}`;
+    if (options.skipCandidates) {
+      const check = await checkGlab(repoRoot, glabBin);
+      cli = check.ok ? "glab" : null;
+      cliError = check.ok ? undefined : (check.error ?? "glab 不可用");
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+        cliError,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, channel);
     const check = await checkGlab(repoRoot, glabBin);
     if (check.ok) {
       cli = "glab";
-      candidates = await listGitlabCandidates(repoRoot, url, glabBin);
-      messages.push(`已通过 glab 加载 ${candidates.length} 位项目成员`);
+      if (cached) {
+        candidates = cached;
+        messages.push(`已复用缓存的 ${candidates.length} 位项目成员（5 分钟内有效）`);
+      } else {
+        candidates = await listGitlabCandidates(repoRoot, url, glabBin);
+        messages.push(`已通过 glab 加载 ${candidates.length} 位项目成员`);
+        if (candidates.length > 0) {
+          putCachedCandidates(repoRoot, url, channel, candidates);
+        }
+      }
     } else {
       cliError = check.error;
       messages.push(check.error ?? "glab 不可用");

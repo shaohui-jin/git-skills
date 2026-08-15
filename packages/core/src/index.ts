@@ -125,6 +125,7 @@ export {
   needsTempBranchForMr,
 } from "./merge/branchName.js";
 export {
+  clearMrCandidateCache,
   createMergeRequest,
   detectMrPlatform,
   normalizeRemoteWebUrl,
@@ -148,5 +149,19 @@ export {
   reportMergeSurvey,
   reportFetch,
 } from "./report/chinese.js";
-export { GIT_INSIGHT_EXTENSION_ID, openInsightPanel } from "./ui/openPanel.js";
-export type { OpenPanelOptions, OpenPanelResult } from "./ui/openPanel.js";
+export {
+  GIT_INSIGHT_EXTENSION_ID,
+  buildBrowserUiUrl,
+  buildExtensionPreviewUri,
+  openInsightPanel,
+  openInsightUi,
+} from "./ui/openPanel.js";
+export type {
+  OpenInsightUiOptions,
+  OpenInsightUiResult,
+  OpenPanelOptions,
+  OpenPanelResult,
+  OpenUiMode,
+  OpenUiTab,
+} from "./ui/openPanel.js";
+export { GIT_INSIGHT_UI_PORT } from "./ui/constants.js";

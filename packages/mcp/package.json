@@ -1,7 +1,7 @@
 {
-  "name": "@git-insight/mcp",
-  "version": "0.1.0",
-  "description": "MCP server exposing git-insight branch graph, merge preview, batch survey and merge-order planning",
+  "name": "@git-insight/mcp-server",
+  "version": "0.1.1",
+  "description": "MCP server exposing git-insight branch graph, merge preview, batch survey, merge-order planning and browser UI",
   "type": "module",
   "bin": {
     "git-insight-mcp": "./dist/index.js"
@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
+    "ws": "^8.18.2",
     "zod": "^4.2.0"
   },
   "devDependencies": {
