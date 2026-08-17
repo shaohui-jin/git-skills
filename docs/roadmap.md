@@ -53,8 +53,8 @@
 |------|:--------:|:---:|:---:|:-----------:|------|
 | 冲突预警常驻（默认关闭） | ✅ | — | — | — | ✅ |
 | Agent Skill `/git-branch-insight` | ✅ | — | — | ✅ | ✅ |
-| `open_ui` 唤起扩展预演面板 | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `open_ui` auto → 浏览器面板 fallback | — | 🔶 | ✅ | — | ✅ |
+| 扩展深链 `vscode://…/preview?…` | ✅ | — | — | ✅ | ✅ |
+| `open_ui` / `open-ui`（含浏览器 fallback） | — | — | — | — | 🗑 0.2.0 移除（github proxy 拦截频发，维护成本高） |
 | MCP `npx @shaohui_jin/git-insight-mcp-server` 接入 | — | — | ✅ | — | ✅ |
 
 ### 本期新完成（v0.3.1 候选）
@@ -67,9 +67,9 @@
 | into/from 选择隔离 | pickValue 无法跨模式污染 | ✅ |
 | 顶部 toolbar 瘦身 | 移除打开/浏览，Fetch 文字按钮，分支图/矩阵主按钮下放 | ✅ |
 | 候选人按 platform 精准匹配 | 修复 `git.xxx` 自定义域名误判 | ✅ |
-| stopUiServer 真实关闭 HTTP | 释放端口 | ✅ |
+| stopUiServer 真实关闭 HTTP | 释放端口（随 0.2.0 UI 下线成为历史条目） | ✅ |
 | MCP cwd fallback 链 | 请求 > GIT_INSIGHT_MCP_CWD > 启动目录 > 向上找 .git，零配置可用 | ✅ |
-| MCP open_ui 浏览器修复 | Windows 改用 PowerShell Start-Process + detached，无 cmd 弹窗 | ✅ |
+| MCP open_ui 浏览器修复 | Windows 改用 PowerShell Start-Process + detached（随 0.2.0 移除） | ✅ |
 
 > MCP 写工具 (`apply_resolve` / `create_mr`) 默认不注册；需 `GIT_INSIGHT_MCP_ALLOW_WRITE=1` + `confirm: true`。
 
@@ -134,7 +134,7 @@
 
 ### F. 浏览器面板体验补齐（Phase 2）
 
-**状态**：📋 规划中
+**状态**：🗑 已废弃（随 v0.2.0 移除浏览器面板：github proxy 拦截频发，MCP/UI 耦合维护成本高）
 
 - Git 配置持久化（localStorage）
 - `open_ui` 深链到矩阵 / 分支图 Tab

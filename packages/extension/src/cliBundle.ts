@@ -257,29 +257,56 @@ export async function downloadBundledCli(
 }
 
 /** 检测 PATH 或指定路径上的 CLI 是否安装 / 已登录 */
+const CLI_CHECK_TIMEOUT_MS = 5000;
+
+/**
+ * 带超时的 spawn 探测。
+ * `gh auth status` 会拿本地凭据去请求 GitHub API 验证有效性，
+ * 在代理/网络受限环境下会长时间挂住，把整个面板初始化卡死；
+ * 超时后 kill 并按失败处理。
+ */
+function spawnProbe(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  timeoutMs = CLI_CHECK_TIMEOUT_MS,
+): Promise<{ code: number; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r: { code: number; timedOut: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const child = spawn(cmd, args, {
+      cwd,
+      windowsHide: true,
+      env: { ...process.env, GH_PROMPT_DISABLED: "1", GLAB_PROMPT_DISABLED: "1" },
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ code: -1, timedOut: true });
+    }, timeoutMs);
+    child.on("error", () => finish({ code: 127, timedOut: false }));
+    child.on("close", (code) => finish({ code: code ?? 1, timedOut: false }));
+  });
+}
+
 export async function checkCli(
   cwd: string,
   kind: BundledCliKind,
   binPath?: string,
 ): Promise<{ installed: boolean; loggedIn: boolean }> {
   const cmd = binPath || kind;
-  const ver = await new Promise<{ code: number }>((resolve) => {
-    const child = spawn(cmd, ["--version"], { cwd, windowsHide: true });
-    child.on("error", () => resolve({ code: 127 }));
-    child.on("close", (code) => resolve({ code: code ?? 1 }));
-  });
-  if (ver.code !== 0) {
+  // 一次探测到位：127 = 不存在（未安装）；其余非 0 含超时 = 未登录。
+  // 不再先跑 --version 再跑 auth status，spawn 次数减半。
+  const auth = await spawnProbe(cmd, ["auth", "status"], cwd);
+  if (auth.code === 127) {
     return { installed: false, loggedIn: false };
   }
-  const auth = await new Promise<{ code: number }>((resolve) => {
-    const child = spawn(cmd, ["auth", "status"], {
-      cwd,
-      windowsHide: true,
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GLAB_PROMPT_DISABLED: "1" },
-    });
-    child.on("error", () => resolve({ code: 127 }));
-    child.on("close", (code) => resolve({ code: code ?? 1 }));
-  });
   return { installed: true, loggedIn: auth.code === 0 };
 }
 

@@ -18,32 +18,6 @@ try {
   // dist 尚未创建
 }
 
-const uiServerStub = `
-export const GIT_INSIGHT_UI_PORT = 17341;
-export function startUiServer() { throw new Error("uiServer unavailable in extension"); }
-export function stopUiServer() {}
-export async function resolveWebviewRoot() { throw new Error("uiServer unavailable in extension"); }
-export function defaultMcpWebviewRoot() { throw new Error("uiServer unavailable in extension"); }
-`;
-
-const stubPlugin = {
-  name: "no-ui-server",
-  setup(build) {
-    build.onResolve({ filter: /[/\\]ui[/\\]uiServer\.js$/ }, (args) => ({
-      path: args.path,
-      namespace: "ui-server-stub",
-    }));
-    build.onResolve({ filter: /^@shaohui_jin\/git-insight-core\/ui\/server$/ }, () => ({
-      path: "ui-server-stub",
-      namespace: "ui-server-stub",
-    }));
-    build.onLoad({ filter: /.*/, namespace: "ui-server-stub" }, () => ({
-      contents: uiServerStub,
-      loader: "js",
-    }));
-  },
-};
-
 await esbuild.build({
   entryPoints: [resolve(root, "src/extension.ts")],
   outfile: resolve(dist, "extension.js"),
@@ -54,7 +28,6 @@ await esbuild.build({
   external: ["vscode"],
   sourcemap: true,
   logLevel: "warning",
-  plugins: [stubPlugin],
 });
 
 await esbuild.build({

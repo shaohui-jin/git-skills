@@ -350,73 +350,9 @@ git ls-remote --exit-code <remote> HEAD
 
 ---
 
-## 三、MCP 浏览器面板 + npm 发版
+## 三、MCP npm 发版
 
-### 3.1 auto 唤起流程
-
-```text
-open_ui(into, from, cwd?, mode=auto)
-        │
-        ├─ mode=extension ──► vscode://jinshaohui.git-insight/preview?…
-        │
-        ├─ mode=browser ────► http://127.0.0.1:17341/?into=…&from=…&cwd=…&tab=preview
-        │
-        └─ mode=auto（默认）
-              ├─ ① cursor --open-url 打开 vscode://…
-              │      └─ 成功 → 扩展面板（现有行为）
-              └─ ② 失败 → startUiServer(17341) + 打开浏览器 URL
-                     └─ Webview 读 query，等价 seedPreview + 自动预演
-```
-
-#### CLI 命令对比（唤起）
-
-```bash
-# 直接让 cursor 打开（优先）
-cursor --open-url vscode://jinshaohui.git-insight/preview?into=…&from=…
-cursor vscode://jinshaohui.git-insight/preview?into=…&from=…
-
-# Windows 下让系统默认浏览器打开 URL
-
-pwsh -NoProfile -Command "Start-Process 'http://127.0.0.1:17341/...'"
-powershell -NoProfile -Command "Start-Process 'http://127.0.0.1:17341/...'"
-
-# macOS
-open http://127.0.0.1:17341/
-
-# Linux
-xdg-open http://127.0.0.1:17341/
-
-# MCP fallback：startUiServer 固定 17341 端口，同 key 只 listen 一次
-export uiServer.ts → createServer + WebSocketServer({ server, path: "/ws" })
-export stopUiServer → 关闭 wss + httpServer，释放端口
-```
-
-> **注意**：windowsHide:true + shell:false + detached:true，无 cmd 弹窗。
-
-### 3.2 opensUiServer 固定端口单例
-
-```typescript
-// 同 host+port+webRoot 的重复调用直接返回已有实例
-// 多个 open_ui → 只 listen 一次
-startUiServer({ webRoot, port, initialCwd, onRequest }) → Promise<UiServerHandle>
-
-// 清理
-stopUiServer() → Promise<void>  // 关 wss + httpServer，释放端口
-```
-
-### 3.3 浏览器 vs 扩展（v1）
-
-| 能力 | 扩展 | 浏览器 |
-|------|------|--------|
-| 配置 / 分支图 / 矩阵 / 预演 / 三栏 / 一键解决 / MR | ✅ | ✅ |
-| Git 配置持久化 | globalState | 内存（浏览器 Phase 2 可 localStorage） |
-| AI 选边 | ✅ | 暂不支持 |
-| 冲突预警状态栏 | ✅ | ❌ |
-| 选本地目录 | VS Code 对话框 | 路径输入 / GitHub URL |
-
-UI **同一套**（`packages/extension/webview` + `coreBridge.handleWebviewRequest`），浏览器侧靠 WebSocket 桥接，不是第二套。
-
-### 3.4 npm 发版流程
+### 3.1 npm 发版流程
 
 | | 扩展 `git-insight` | MCP `@shaohui_jin/git-insight-mcp-server` |
 |--|-------------------|-------------------------------|
@@ -439,7 +375,7 @@ npm publish --dry-run --access public --prefix "packages/mcp"
 
 scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 
-### 3.5 用户接入（用户自己的 .cursor/mcp.json）
+### 3.2 用户接入（用户自己的 .cursor/mcp.json）
 
 ```json
 {
@@ -459,8 +395,6 @@ scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 ## 四、Agent Skill (`/git-branch-insight`)
 
 装扩展即自动同步到 `~/.cursor/skills/git-branch-insight/`；任意仓库 Agent 输入 `/git-branch-insight` 再说需求即可。
-
-Skill `open-ui` 与 MCP `open_ui` 共用 `openInsightUi()`，auto fallback 链相同。
 
 ---
 
@@ -496,7 +430,6 @@ Skill `open-ui` 与 MCP `open_ui` 共用 `openInsightUi()`，auto fallback 链�
 | 一键落盘 | `packages/core/src/merge/applyResolve.ts` |
 | 可插拔 resolver | `packages/core/src/merge/resolvers.ts` |
 | 创建 MR | `packages/core/src/merge/createMr.ts`、`branchName.ts` |
-| 唤起面板 | `packages/core/src/ui/openPanel.ts`、`uiServer.ts` |
 | CLI | `packages/core/src/cli.ts` |
 | MCP server | `packages/mcp/src/index.ts` |
 | 宿主桥接 | `packages/extension/src/coreBridge.ts` |
@@ -555,7 +488,7 @@ Skill `open-ui` 与 MCP `open_ui` 共用 `openInsightUi()`，auto fallback 链�
 | 组件 | 版本 | 发布渠道 |
 |------|------|----------|
 | 扩展 `git-insight` | 0.3.0 | Open VSX / Cursor 市场 |
-| 引擎 `@shaohui_jin/git-insight-core` | 0.1.0 | monorepo 内 / CLI |
-| MCP `@shaohui_jin/git-insight-mcp-server` | 0.1.0 | npm（CI 发版） |
+| 引擎 `@shaohui_jin/git-insight-core` | 0.2.0 | monorepo 内 / CLI |
+| MCP `@shaohui_jin/git-insight-mcp-server` | 0.2.0 | npm（CI 发版） |
 
-> 本期（未发版 0.3.1 候选）：候选人 5 分钟缓存 + skipCandidates 开关；矩阵多选 + into/from 隔离 + fillSuggested 覆盖式；toolbar 瘦身；stopUiServer 清理；链循环 guard；精准 platform 匹配；openPanel PowerShell 修复。详见 [roadmap.md](./roadmap.md)。
+> 本期（未发版候选）：候选人 5 分钟缓存 + skipCandidates 开关；矩阵多选 + into/from 隔离 + fillSuggested 覆盖式；toolbar 瘦身；链循环 guard；精准 platform 匹配；**移除 open_ui / open-ui 与浏览器 UI（含 uiServer、ws 依赖、webview 携带），MCP 不再耦合 extension**。详见 [roadmap.md](./roadmap.md)。

@@ -119,8 +119,24 @@ export function validateGitlabTokenFormat(token: string): TokenFormatResult {
   };
 }
 
-function formatExpiryMessage(expiresAt: string | null | undefined): string | undefined {
+function formatExpiryMessage(
+  expiresAt: string | null | undefined,
+  platform?: TokenPlatform,
+  token?: string,
+): string | undefined {
   if (expiresAt === undefined) {
+    // 拿不到过期时间的原因按平台/前缀区分，比一句「有效期未知」更有诊断价值：
+    if (platform === "github") {
+      if (token?.startsWith("github_pat_")) {
+        return "有效（fine-grained token 不返回有效期，以 GitHub 设置页为准）";
+      }
+      // classic PAT（ghp_）本应返回 github-authentication-token-expiration 响应头；
+      // 拿不到常见原因：token 创建时选了 No expiration，或代理/网关剥掉了非标准头。
+      return "有效（未返回有效期：永不过期的 token 不带此信息；若经代理访问，代理可能剥掉该响应头）";
+    }
+    if (platform === "gitlab") {
+      return "有效（未能读取有效期：token 需含 read_api 权限或服务版本较旧）";
+    }
     return "有效期未知";
   }
   if (expiresAt === null) {
@@ -183,6 +199,8 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
     };
   }
   const t = token.trim();
+  const expiryFor = (exp: string | null | undefined) =>
+    formatExpiryMessage(exp, "github", t);
   try {
     const res = await fetch("https://api.github.com/user", {
       headers: {
@@ -211,7 +229,7 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
         apiChecked: true,
         apiOk: false,
         expiresAt,
-        expiresMessage: formatExpiryMessage(expiresAt),
+        expiresMessage: expiryFor(expiresAt),
         statusLabel: statusFromResult({ ok: false, formatOk: true, apiChecked: true, error }),
         ok: false,
         error,
@@ -231,7 +249,7 @@ export async function validateGithubToken(token: string): Promise<TokenValidateR
       };
     }
     const user = (await res.json()) as { login?: string };
-    const expiresMessage = formatExpiryMessage(expiresAt);
+    const expiresMessage = expiryFor(expiresAt);
     const expired =
       expiresAt != null &&
       !Number.isNaN(Date.parse(expiresAt)) &&
@@ -391,9 +409,9 @@ export async function validateGitlabToken(
               apiChecked: true,
               apiOk: false,
               login: user.username,
-              expiresAt,
-              expiresMessage: formatExpiryMessage(expiresAt),
-              statusLabel: "已过期",
+            expiresAt,
+            expiresMessage: formatExpiryMessage(expiresAt, "gitlab", t),
+            statusLabel: "已过期",
               ok: false,
               error: "Token 已过期",
             };
@@ -411,7 +429,7 @@ export async function validateGitlabToken(
       apiOk: true,
       login: user.username,
       expiresAt,
-      expiresMessage: formatExpiryMessage(expiresAt),
+      expiresMessage: formatExpiryMessage(expiresAt, "gitlab", t),
       statusLabel: "有效",
       ok: true,
     };

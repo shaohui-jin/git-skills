@@ -15,7 +15,6 @@ import {
   buildBranchGraph,
   createMergeRequest,
   crossPairs,
-  openInsightUi,
   prepareCreateMr,
   previewMerge,
   rehearseMerge,
@@ -31,7 +30,6 @@ import {
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
-import { ensureMcpBrowserServer } from "./browserUi.js";
 
 /** 构建时由 scripts/bundle.mjs 从 package.json 注入；tsx 直跑时没有这个值 */
 declare const __MCP_VERSION__: string;
@@ -55,8 +53,6 @@ const noFetchArg = z
  */
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
 const WRITES = { readOnlyHint: false, destructiveHint: true } as const;
-/** 不碰仓库，但会在用户桌面上弹窗口，所以不能标 readOnly */
-const OPENS_WINDOW = { readOnlyHint: false, destructiveHint: false } as const;
 
 /**
  * cwd 解析 fallback 链（优先级从高到低）：
@@ -280,62 +276,6 @@ function createServer(): McpServer {
           data.candidates.length > 0
             ? `可选审核人：${data.candidates.map((c) => c.username).join(", ")}`
             : "",
-          ...data.messages,
-        ].filter(Boolean);
-        return text(lines.join("\n"));
-      } catch (err) {
-        return failed(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "open_ui",
-    {
-      title: "打开预演 UI（扩展或浏览器）",
-      description:
-        "把 into/from 种进 Git Insight 预演面板。默认 auto：优先扩展；失败则打开本地浏览器面板（127.0.0.1:17341）。也可显式 mode=extension|browser。",
-      annotations: OPENS_WINDOW,
-      inputSchema: z.object({
-        cwd: cwdArg,
-        into: z.string().describe("线上目标分支，如 origin/master"),
-        from: z.string().describe("我的分支"),
-        autoPreview: z
-          .boolean()
-          .optional()
-          .describe("默认 true：打开后立刻跑一次预演"),
-        mode: z
-          .enum(["auto", "extension", "browser"])
-          .optional()
-          .describe("默认 auto：扩展优先，失败则浏览器"),
-        tab: z
-          .enum(["preview", "config", "graph"])
-          .optional()
-          .describe("浏览器面板初始 Tab，默认 preview"),
-      }),
-    },
-    async ({ cwd, into, from, autoPreview, mode, tab }) => {
-      try {
-        const data = await openInsightUi({
-          cwd: await resolveCwd(cwd),
-          into,
-          from,
-          autoPreview,
-          mode: mode ?? "auto",
-          tab: tab ?? "preview",
-          ensureBrowserServer: ensureMcpBrowserServer,
-        });
-        const lines = [
-          data.opened
-            ? data.mode === "browser"
-              ? `已打开浏览器预演：${into} ← ${from}`
-              : `已唤起扩展预演：${into} ← ${from}（${data.openedWith}）`
-            : data.mode === "browser"
-              ? "未能自动打开浏览器，请手动访问下方 URL"
-              : "未能打开扩展，已尝试浏览器 fallback 或请手动打开 URI",
-          data.url ? `浏览器：${data.url}` : "",
-          data.uri ? `扩展 URI：${data.uri}` : "",
-          "",
           ...data.messages,
         ].filter(Boolean);
         return text(lines.join("\n"));

@@ -48,7 +48,6 @@ node "__GIT_INSIGHT_CLI__" <command> …
 | 落盘 | `apply-resolve --into … --from … --stash stash.json` |
 | 准备 MR | `prepare-mr --into … --from …` |
 | 创建 MR | `create-mr --source … --target … --method cli\|token` |
-| 唤起 UI | `open-ui --into … --from …` |
 
 若 `__GIT_INSIGHT_CLI__` 仍是占位符或文件不存在：用命令面板 `Git Insight: 打开预演`，或 `vscode://jinshaohui.git-insight/preview?into=…&from=…&autoPreview=1`。
 
@@ -60,7 +59,6 @@ node "__GIT_INSIGHT_CLI__" <command> …
 |------|------|
 | cli | `create-mr --method cli` |
 | token | `create-mr --method token` 或 `GIT_INSIGHT_*_TOKEN` |
-| ui | `open-ui`（扩展面板） |
 
 ## 输出
 

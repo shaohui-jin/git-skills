@@ -22,7 +22,6 @@ import {
   reportMergeSurvey,
 } from "./report/chinese.js";
 import { graphToMermaid, mergeToMermaid } from "./report/mermaid.js";
-import { openInsightUi } from "./ui/openPanel.js";
 import type { CliJsonError, CliJsonResult } from "./types.js";
 import type { StashFilePayload } from "./merge/applyResolve.js";
 
@@ -44,7 +43,6 @@ Usage (write / MR — 需确认后由 Agent 调用):
   git-insight apply-resolve --into <线上> --from <我的> --stash <file.json> [--cwd] [--no-push]
   git-insight prepare-mr --into <线上> --from <我的> [--source <分支>] [--method cli|token] [--token <pat>] [--cwd]
   git-insight create-mr --source <源> --target <目标> [--method cli|token] [--token <pat>] [--title] [--body] [--reviewers a,b] [--cwd]
-  git-insight open-ui --into <线上> --from <我的> [--cwd] [--no-open] [--mode auto|extension|browser]
 
 Notes:
   - preview-merge: --into=线上合入目标（建议远程），--from=我的分支
@@ -53,8 +51,6 @@ Notes:
   - merge-order: 推演把多个分支依次合入 --into 的最佳顺序，全程在对象库内模拟，不改工作区
   - apply-resolve: stash JSON 为 { files: [{ path, resolvedContent }] }；干净合并可用 { "files": [] }
   - create-mr --method: cli（本机 gh/glab）| token（--token 或环境 GIT_INSIGHT_GITHUB_TOKEN / GIT_INSIGHT_GITLAB_TOKEN）
-  - open-ui: 打开预演 UI；--mode auto（默认）优先扩展，失败时无浏览器 fallback 除非通过 MCP
-  - open-ui --mode extension: 仅 vscode:// URI；browser: 需 MCP 环境
   - 同名分支（master ↔ origin/master）不要走 MR，请自行 push/pull
   - --remote 未传时：读 ~/.git-insight/user-config.json 的 defaultRemote，再按仓库 remotes 兜底
 `;
@@ -300,11 +296,6 @@ async function runPrepareMr(args: string[]): Promise<void> {
           label: "Token API",
           hint: "传 --token 或环境变量 GIT_INSIGHT_GITHUB_TOKEN / GIT_INSIGHT_GITLAB_TOKEN",
         },
-        {
-          id: "ui",
-          label: "唤起扩展 UI",
-          hint: `已安装插件时：git-insight open-ui --into … --from …`,
-        },
       ],
     },
     report: `准备 MR：${data.sourceBranch} → ${data.targetBranch}（${data.platform} / ${method}）`,
@@ -341,40 +332,6 @@ async function runCreateMr(args: string[]): Promise<void> {
     report: data.url
       ? `MR 已创建：${data.sourceBranch} → ${data.targetBranch}\n${data.url}`
       : `已提交创建（via ${data.via}），未返回 URL`,
-  });
-}
-
-async function runOpenUi(args: string[]): Promise<void> {
-  const into = getFlag(args, "--into");
-  const from = getFlag(args, "--from");
-  if (!into || !from) {
-    throw new GitError("open-ui 需要 --into 与 --from", { code: "USAGE" });
-  }
-  const modeRaw = getFlag(args, "--mode");
-  const mode =
-    modeRaw === "browser" || modeRaw === "extension" || modeRaw === "auto"
-      ? modeRaw
-      : "auto";
-  const data = await openInsightUi({
-    cwd: getFlag(args, "--cwd"),
-    into,
-    from,
-    mode,
-    open: !hasSwitch(args, "--no-open"),
-  });
-  const report =
-    data.mode === "browser"
-      ? data.opened
-        ? `已打开浏览器预演：${into} ← ${from}\n${data.url ?? ""}`
-        : `未能自动打开浏览器。请手动访问：\n${data.url ?? ""}`
-      : data.opened
-        ? `已尝试唤起扩展预演：${into} ← ${from}`
-        : `未能自动打开 UI。请手动打开 URI 或使用 MCP open_ui：\n${data.uri ?? ""}`;
-  printJson({
-    ok: true,
-    command: "open-ui",
-    data,
-    report,
   });
 }
 
@@ -456,11 +413,6 @@ async function main(): Promise<void> {
 
     if (command === "create-mr") {
       await runCreateMr(args);
-      return;
-    }
-
-    if (command === "open-ui") {
-      await runOpenUi(args);
       return;
     }
 

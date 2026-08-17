@@ -4079,8 +4079,8 @@ button.btn.tiny {
 }
 
 .icon-btn:hover:not(:disabled) {
-  background: var(--bg-hover, #f3f4f6);
-  border-color: var(--border, #e5e7eb);
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
 }
 
 .icon-btn:disabled {
@@ -4128,8 +4128,8 @@ button.btn.tiny {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-top: 1px solid var(--border, #e5e7eb);
-  background: var(--bg-subtle, #f9fafb);
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
 }
 
 .tree-multi-count {

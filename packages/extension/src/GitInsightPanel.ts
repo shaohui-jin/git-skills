@@ -6,6 +6,7 @@ import { bundledCliPath, shellExecCommand } from "./cliBundle.js";
 import {
   busyLabelForRequest,
   handleWebviewRequest,
+  invalidateCliStatusCache,
   requestStreamsProgress,
   resolveWorkspaceCwd,
 } from "./coreBridge.js";
@@ -274,6 +275,8 @@ export class GitInsightPanel {
       });
       term.show();
       term.sendText(cmd);
+      // 登录会改变凭据状态，清掉探测缓存，让「重新检测 CLI」拿到真实结果
+      invalidateCliStatusCache();
       void vscode.window.showInformationMessage(
         `已在终端启动「${kind} auth login」。完成后请回到面板点击「重新检测 CLI」。`,
       );
@@ -500,6 +503,14 @@ export class GitInsightPanel {
         previewMode: false,
         cliStorageDir: this.cliStorageDir,
         configMemento: this.configMemento,
+        // 分段下发：workspace（分支列表）先到，cliStatus 探测完再补 git 配置；
+        // 受限网络下 auth status 挂到超时也不影响用户先看到仓库内容。
+        onPartial:
+          req.type === "ready" || req.type === "refreshWorkspace"
+            ? async (msg) => {
+                await this.post(msg);
+              }
+            : undefined,
         onProgress: requestStreamsProgress(req)
           ? async (u) => {
               await this.post({

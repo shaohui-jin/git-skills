@@ -1,6 +1,6 @@
 {
   "name": "@shaohui_jin/git-insight-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Git branch graph, merge conflict preview, and conflict provenance engine",
   "type": "module",
   "main": "./dist/index.js",
@@ -12,10 +12,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./ui/server": {
-      "types": "./dist/ui/uiServer.d.ts",
-      "import": "./dist/ui/uiServer.js"
     },
     "./merge/branchName": {
       "types": "./dist/merge/branchName.d.ts",
@@ -44,11 +40,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "ws": "^8.18.2"
-  },
   "devDependencies": {
-    "@types/ws": "^8.18.1",
     "@types/node": "^22.15.21",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"

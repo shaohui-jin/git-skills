@@ -13,11 +13,8 @@
 | `merge_survey` | 批量矩阵：`froms × intos` 每种组合各预演一次，整批只 fetch 一次 |
 | `merge_order` | 多分支合进同一目标时，推演最省事的合入顺序 |
 | `mr_prepare` | 识别平台 / CLI / 默认标题 / 可选审核人，只读 |
-| `open_ui` | 打开预演 UI：**auto** 优先扩展，失败则浏览器（`127.0.0.1:17341`） |
 
-前面五个都标了 `readOnlyHint`，宿主可以免确认直接调。
-
-`open_ui` 不碰仓库，但会弹窗口，所以没标只读。它是「Agent 查完之后我要动手」的交接口：人直接在面板里选边、一键解决、申请 MR。
+全部标了 `readOnlyHint`，宿主可以免确认直接调。
 
 写操作默认**不注册**。需要时启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，此时多出 `apply_resolve` 与 `create_mr`，且每次调用还必须显式传 `confirm: true`。
 
@@ -43,7 +40,7 @@
 
 ```bash
 pnpm install
-pnpm build:mcp   # core + webview + 打包 dist/index.js 与 dist/webview
+pnpm build:mcp   # core + 打包 dist/index.js
 ```
 
 本地调试可改用绝对路径：
@@ -68,7 +65,7 @@ npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js
 pnpm publish:mcp
 ```
 
-构建时用 esbuild 内联 `@shaohui_jin/git-insight-core` 与 extension `coreBridge`；`@modelcontextprotocol/server`、`zod`、`ws` 为外部依赖。Webview 静态资源在 `dist/webview/`。
+构建时用 esbuild 内联 `@shaohui_jin/git-insight-core`；`@modelcontextprotocol/server`、`zod` 为外部依赖。
 
 功能进度见仓库 [`docs/roadmap.md`](../../docs/roadmap.md)。
 
@@ -76,4 +73,4 @@ pnpm publish:mcp
 
 - stdout 是协议流，日志走 stderr。
 - 默认每次调用会 `fetch`；批量扫描可传 `noFetch: true`。
-- 浏览器面板不支持 AI 选边与冲突预警状态栏（扩展专属）。
+- AI 选边与冲突预警状态栏为 Cursor 扩展专属能力。

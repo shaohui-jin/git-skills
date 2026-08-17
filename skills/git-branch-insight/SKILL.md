@@ -49,7 +49,6 @@ pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js <command> …
 | 落盘 | `apply-resolve --into … --from … --stash stash.json` |
 | 准备 MR | `prepare-mr --into … --from …` |
 | 创建 MR | `create-mr --source … --target … --method cli\|token` |
-| 唤起 UI | `open-ui --into … --from …` |
 
 干净：`stash` 可用 `{ "files": [] }`。
 
@@ -59,7 +58,6 @@ pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js <command> …
 |------|------|
 | cli | `create-mr --method cli` |
 | token | `create-mr --method token` 或 `GIT_INSIGHT_*_TOKEN` |
-| ui | `open-ui`（扩展出口，不是第二个 Skill） |
 
 ## 输出
 
@@ -67,7 +65,7 @@ pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js <command> …
 ## 结论
 ## 冲突详情
 ## 图
-## 建议动作（含 MR：cli|token|ui 待选）
+## 建议动作（含 MR：cli|token 待选）
 ## 结果
 ```
 

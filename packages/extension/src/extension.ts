@@ -25,7 +25,7 @@ function parseUriSeed(uri: vscode.Uri): OpenPreviewArgs {
 
 async function openPreview(
   context: vscode.ExtensionContext,
-  output: vscode.OutputChannel,
+  _output: vscode.OutputChannel,
   args?: OpenPreviewArgs,
 ): Promise<void> {
   const { GitInsightPanel } = await import("./GitInsightPanel.js");
@@ -39,7 +39,7 @@ async function openPreview(
 
 async function openTab(
   context: vscode.ExtensionContext,
-  output: vscode.OutputChannel,
+  _output: vscode.OutputChannel,
   tab: "config" | "preview" | "graph",
   seed?: OpenPreviewArgs,
 ): Promise<void> {

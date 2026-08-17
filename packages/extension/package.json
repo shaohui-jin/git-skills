@@ -2,7 +2,7 @@
   "name": "git-insight",
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, merge matrix, one-click resolve & push, and create MR/PR. See docs/features.md for capability matrix.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "jinshaohui",
   "license": "MIT",
   "repository": {
@@ -115,7 +115,6 @@
     "build:ext": "node scripts/bundle.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "pnpm run build:webview && pnpm run build:ext",
-    "preview": "tsx scripts/preview.ts",
     "package:vsix": "pnpm run build && vsce package --no-dependencies --out ../../git-insight.vsix",
     "publish:ovsx": "pnpm run package:vsix && ovsx publish ../../git-insight.vsix"
   },
@@ -123,7 +122,6 @@
     "@shaohui_jin/git-insight-core": "workspace:*",
     "@types/node": "^22.15.21",
     "@types/vscode": "^1.85.0",
-    "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.3.2",
     "esbuild": "^0.25.5",
     "ovsx": "^0.10.5",

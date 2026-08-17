@@ -225,6 +225,40 @@ async function buildCliStatus(
   };
 }
 
+/**
+ * cliStatus 探测缓存：`auth status` 会拿本地凭据打 GitHub/GitLab API，
+ * 受限网络下可能挂到超时，避免每次 ready/refresh/getGitConfig 都重跑 4 组探测。
+ */
+const cliStatusCache = new Map<
+  string,
+  { at: number; payload: CliStatusPayload }
+>();
+const CLI_STATUS_TTL_MS = 30_000;
+
+/** 下载 CLI / 登录等改变状态的操作后调用，让下一次探测拿到真实结果 */
+export function invalidateCliStatusCache(): void {
+  cliStatusCache.clear();
+}
+
+async function buildCliStatusCached(
+  repoRoot: string,
+  cliStorageDir: string | undefined,
+  configuredDefaultRemote?: string | null,
+): Promise<CliStatusPayload> {
+  const key = `${repoRoot}|${cliStorageDir ?? ""}|${configuredDefaultRemote ?? ""}`;
+  const hit = cliStatusCache.get(key);
+  if (hit && Date.now() - hit.at < CLI_STATUS_TTL_MS) {
+    return hit.payload;
+  }
+  const payload = await buildCliStatus(
+    repoRoot,
+    cliStorageDir,
+    configuredDefaultRemote,
+  );
+  cliStatusCache.set(key, { at: Date.now(), payload });
+  return payload;
+}
+
 async function remoteUrlForDefault(
   repoRoot: string,
   configuredDefaultRemote?: string | null,
@@ -358,6 +392,8 @@ export async function handleWebviewRequest(
   options?: {
     previewMode?: boolean;
     onProgress?: (update: { percent: number; label: string }) => void;
+    /** 分段下发：消息产生即推给 webview，不等整个请求处理完 */
+    onPartial?: (msg: HostMessage) => Promise<void>;
     /** 扩展 globalStorage，用于 B：下载 CLI */
     cliStorageDir?: string;
     /** 扩展 globalState：Token / MR 方式全仓库共用 */
@@ -366,6 +402,7 @@ export async function handleWebviewRequest(
 ): Promise<{ messages: HostMessage[]; cwd?: string | null }> {
   const previewMode = options?.previewMode;
   const onProgress = options?.onProgress;
+  const onPartial = options?.onPartial;
   const cliStorageDir = options?.cliStorageDir;
   const configMemento = options?.configMemento;
 
@@ -384,12 +421,18 @@ export async function handleWebviewRequest(
   const cfgPath = () => configPath(cliStorageDir);
 
   if (req.type === "ready" || req.type === "refreshWorkspace") {
-    const messages: HostMessage[] = [await workspacePayload(cwd, previewMode)];
+    const wsMsg = await workspacePayload(cwd, previewMode);
+    // 分支列表不等 CLI 探测：受限网络下 auth status 挂住时，
+    // 用户也该先看到仓库与分支，配置状态稍后到达。
+    if (onPartial) {
+      await onPartial(wsMsg);
+    }
+    const messages: HostMessage[] = onPartial ? [] : [wsMsg];
     if (cwd && configMemento) {
       try {
         const config = await loadCfg();
         let cfg = config;
-        const cliStatus = await buildCliStatus(
+        const cliStatus = await buildCliStatusCached(
           cwd,
           cliStorageDir,
           cfg.defaultRemote,
@@ -525,7 +568,7 @@ export async function handleWebviewRequest(
     const config = await loadCfg();
     let cfg = config;
     const cliStatus = cwd
-      ? await buildCliStatus(cwd, cliStorageDir, cfg.defaultRemote)
+      ? await buildCliStatusCached(cwd, cliStorageDir, cfg.defaultRemote)
       : emptyCliStatus(cfg.defaultRemote);
     if (cwd && cliStatus.remotes.length > 0) {
       const resolved = cliStatus.defaultRemote;
@@ -570,7 +613,7 @@ export async function handleWebviewRequest(
       aiModel: req.config.aiModel ?? prev.aiModel ?? "",
     });
     const cliStatus = cwd
-      ? await buildCliStatus(cwd, cliStorageDir, saved.defaultRemote)
+      ? await buildCliStatusCached(cwd, cliStorageDir, saved.defaultRemote)
       : emptyCliStatus(saved.defaultRemote);
     const ready = isMrMethodReady(saved, cliStatus);
     return {
@@ -804,7 +847,7 @@ export async function handleWebviewRequest(
           githubToken: req.githubToken ?? prev.githubToken ?? "",
           gitlabToken: req.gitlabToken ?? prev.gitlabToken ?? "",
         });
-        const cliStatus = await buildCliStatus(
+        const cliStatus = await buildCliStatusCached(
           cwd,
           cliStorageDir,
           saved.defaultRemote,
@@ -843,6 +886,7 @@ export async function handleWebviewRequest(
       const path = await downloadBundledCli(cliStorageDir, req.kind, (label) => {
         void onProgress?.({ percent: 50, label });
       });
+      invalidateCliStatusCache();
       const config = await loadCfg();
       const cliStatus = await buildCliStatus(
         cwd,
@@ -887,7 +931,7 @@ export async function handleWebviewRequest(
         };
       }
       const config = await loadCfg();
-      const cliStatus = await buildCliStatus(
+      const cliStatus = await buildCliStatusCached(
         cwd,
         cliStorageDir,
         config.defaultRemote,
@@ -958,7 +1002,7 @@ export async function handleWebviewRequest(
         };
       }
       const config = await loadCfg();
-      const cliStatus = await buildCliStatus(
+      const cliStatus = await buildCliStatusCached(
         cwd,
         cliStorageDir,
         config.defaultRemote,
