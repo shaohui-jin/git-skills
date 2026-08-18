@@ -1,7 +1,10 @@
 # Release MCP server to npm
 #
-# 只有 packages/mcp/package.json 的 version 字段发生变化时才打包推送。
-# 与 Cursor 插件的发版逻辑一致：版本没变就不推送，避免无意义的重复构建。
+# 判据与扩展发布统一：只看「这个版本发过没有」——远程还没有
+# mcp-server-v{version} 这个 tag 就构建、发布 npm、最后打 tag。
+#
+# tag 放在发布成功之后才打，代表「已发布」而不是「试过了」，
+# 这样任何一步失败都能原样重试（重新 push 或手动重跑），不会白白浪费版本号。
 #
 # Secret: NPM_TOKEN（npm Automation token）
 # 文档：docs/mcp-ui-and-release.md、docs/features.md
@@ -23,50 +26,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2  # 需要上一个 commit 来比较版本变化
-
-      - name: Check if version changed
-        id: version-check
-        run: |
-          PKG="packages/mcp/package.json"
-          
-          # 读取当前版本
-          CURRENT_VERSION="$(jq -r .version "$PKG")"
-          if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" = "null" ]; then
-            echo "::error::无法读取 $PKG 的 version"
-            exit 1
-          fi
-          
-          # 读取上一个 commit 的版本（如果是首次提交则视为变化）
-          PREV_VERSION=""
-          if git show HEAD~1:"$PKG" >/dev/null 2>&1; then
-            PREV_VERSION="$(git show HEAD~1:"$PKG" | jq -r .version 2>/dev/null || echo "")"
-          fi
-          
-          echo "当前版本: ${CURRENT_VERSION}"
-          echo "上一版本: ${PREV_VERSION:-（无）}"
-          
-          if [ "$CURRENT_VERSION" = "$PREV_VERSION" ] && [ -n "$PREV_VERSION" ]; then
-            echo "version_changed=false" >> "$GITHUB_OUTPUT"
-            echo "版本未变化，跳过发布。要发新版请提高 ${PKG} 的 version。"
-          else
-            echo "version_changed=true" >> "$GITHUB_OUTPUT"
-            echo "version=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
-            echo "版本已变化（${PREV_VERSION:-无} → ${CURRENT_VERSION}），准备发布。"
-          fi
 
       - name: Decide whether to release
         id: gate
-        if: steps.version-check.outputs.version_changed == 'true'
         run: |
-          VERSION="${{ steps.version-check.outputs.version }}"
+          PKG="packages/mcp/package.json"
+          VERSION="$(jq -r .version "$PKG")"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "::error::无法读取 $PKG 的 version"
+            exit 1
+          fi
           TAG="mcp-server-v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             echo "should_release=false" >> "$GITHUB_OUTPUT"
-            echo "${TAG} 已发布过，跳过。"
+            echo "${TAG} 已发布过，跳过。要发新版请提高 ${PKG} 的 version。"
           else
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "${TAG} 尚未发布，开始构建。"
@@ -111,7 +87,7 @@ jobs:
             exit 1
           fi
           npm publish --access public
-          echo "已发布 @shaohui_jin/git-insight-mcp-server@${{ steps.version-check.outputs.version }}"
+          echo "已发布 @shaohui_jin/git-insight-mcp-server@${{ steps.gate.outputs.version }}"
 
       - name: Create and push tag
         if: steps.gate.outputs.should_release == 'true'
