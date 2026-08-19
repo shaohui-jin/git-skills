@@ -119,7 +119,17 @@ watch(
   },
 );
 
-const platform = computed(() => props.cliStatus?.platformHint ?? "unknown");
+/** 用户手动选择的平台覆盖（仅在自动探测为 unknown 时显示选择器） */
+const manualPlatform = ref<"github" | "gitlab" | null>(null);
+
+/** 生效的平台：手动选择优先，否则用自动探测结果 */
+const platform = computed(() => {
+  return manualPlatform.value ?? props.cliStatus?.platformHint ?? "unknown";
+});
+
+function setManualPlatform(p: "github" | "gitlab"): void {
+  manualPlatform.value = p;
+}
 
 function cliStatusText(c: { installed: boolean; loggedIn: boolean } | undefined): string {
   if (!c?.installed) {
@@ -135,14 +145,15 @@ function bundledStatusText(c: { installed: boolean; loggedIn: boolean } | undefi
   return c.loggedIn ? "已登录" : "已下载未登录";
 }
 
-const neededKind = computed((): "gh" | "glab" | null => {
+const neededKind = computed((): "gh" | "glab" | "both" | null => {
   if (platform.value === "gitlab") {
     return "glab";
   }
   if (platform.value === "github") {
     return "gh";
   }
-  return null;
+  // unknown 时返回 both，让用户选择下载哪个 CLI
+  return "both";
 });
 
 const systemTarget = computed(() => {
@@ -156,6 +167,7 @@ const systemTarget = computed(() => {
   if (neededKind.value === "glab") {
     return { kind: "glab" as const, ...s.systemGlab };
   }
+  // both：unknown 时优先选已安装的
   if (s.systemGh.installed && !s.systemGh.loggedIn) {
     return { kind: "gh" as const, ...s.systemGh };
   }
@@ -182,6 +194,7 @@ const bundledTarget = computed(() => {
   if (neededKind.value === "glab") {
     return { kind: "glab" as const, ...s.bundledGlab };
   }
+  // both：unknown 时优先选已下载的
   if (s.bundledGh.installed && !s.bundledGh.loggedIn) {
     return { kind: "gh" as const, ...s.bundledGh };
   }
@@ -260,7 +273,7 @@ const options = computed(() => {
           ? "仅可填写 GitHub Token；修改后触发校验并保存"
           : platform.value === "gitlab"
             ? "仅可填写 GitLab Token（须 glpat- 前缀）；修改后触发校验并保存"
-            : "按远程平台填写对应 Token；修改后触发校验并保存",
+            : "远程平台未识别，可填写任一 Token；修改后触发校验并保存",
       ready: !!tokenReady.value,
       detail: `当前远程倾向：${platform.value}`,
     },
@@ -272,6 +285,17 @@ const options = computed(() => {
       detail: "无需 CLI / Token",
     },
   ];
+  // 当平台为 unknown 时，在选项列表末尾追加平台选择说明
+  if (platform.value === "unknown" && s) {
+    options.push({
+      id: "__platform_picker" as any,
+      title: "远程平台识别",
+      desc: "未能自动识别远程平台，请手动选择",
+      ready: true,
+      detail: "",
+    });
+  }
+  return options;
 });
 
 function persistConfig(): void {
@@ -475,18 +499,39 @@ const gitlabTitleStatus = computed(() => {
               @click.stop
             >
               <div class="btn-row">
-                <button
-                  type="button"
-                  class="btn secondary"
-                  :disabled="busy || previewMode || !neededKind"
-                  @click="neededKind && emit('downloadCli', neededKind)"
-                >
-                  {{
-                    bundledTarget?.installed
-                      ? `重新下载 ${neededKind || "CLI"}`
-                      : `下载 ${neededKind || "CLI"} 到扩展目录`
-                  }}
-                </button>
+                <!-- unknown 时显示两个下载按钮让用户选择 -->
+                <template v-if="neededKind === 'both'">
+                  <button
+                    type="button"
+                    class="btn secondary"
+                    :disabled="busy || previewMode"
+                    @click="emit('downloadCli', 'gh')"
+                  >
+                    {{ bundledTarget?.kind === 'gh' && bundledTarget.installed ? "重新下载 gh" : "下载 gh" }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn secondary"
+                    :disabled="busy || previewMode"
+                    @click="emit('downloadCli', 'glab')"
+                  >
+                    {{ bundledTarget?.kind === 'glab' && bundledTarget.installed ? "重新下载 glab" : "下载 glab" }}
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    type="button"
+                    class="btn secondary"
+                    :disabled="busy || previewMode || !neededKind"
+                    @click="neededKind && emit('downloadCli', neededKind)"
+                  >
+                    {{
+                      bundledTarget?.installed
+                        ? `重新下载 ${neededKind || "CLI"}`
+                        : `下载 ${neededKind || "CLI"} 到扩展目录`
+                    }}
+                  </button>
+                </template>
                 <button
                   v-if="bundledTarget?.installed && !bundledTarget.loggedIn"
                   type="button"
@@ -603,6 +648,36 @@ const gitlabTitleStatus = computed(() => {
               <p class="muted" style="margin: 0">
                 Token 变更并确认后（change）自动校验并保存；有效期为中国时间（年/月/日
                 时:分:秒）。
+              </p>
+            </div>
+
+            <!-- 手动选择平台（仅在自动探测为 unknown 时显示） -->
+            <div
+              v-if="opt.id === '__platform_picker'"
+              class="config-inline"
+              @click.stop
+            >
+              <p class="muted" style="margin: 0 0 6px 0">
+                未能自动识别远程平台。请选择你使用的平台，此后选项 A/B/C 将按所选平台生效。
+              </p>
+              <div class="seg" role="group" aria-label="选择远程平台">
+                <button
+                  type="button"
+                  class="seg-btn"
+                  :class="{ active: manualPlatform === 'github' }"
+                  :disabled="busy || previewMode"
+                  @click="setManualPlatform('github')"
+                >GitHub</button>
+                <button
+                  type="button"
+                  class="seg-btn"
+                  :class="{ active: manualPlatform === 'gitlab' }"
+                  :disabled="busy || previewMode"
+                  @click="setManualPlatform('gitlab')"
+                >GitLab</button>
+              </div>
+              <p v-if="manualPlatform" class="muted" style="margin: 4px 0 0 0; color: var(--ok)">
+                已选择：{{ manualPlatform === 'github' ? 'GitHub' : 'GitLab' }}。选项将按此平台生效。
               </p>
             </div>
           </div>

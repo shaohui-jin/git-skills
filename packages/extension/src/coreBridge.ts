@@ -8,6 +8,7 @@ import {
   listRemotes,
   normalizeRemoteWebUrl,
   prepareCreateMr,
+  probePlatform,
   rehearseMerge,
   reportFetch,
   reportGraph,
@@ -190,7 +191,11 @@ async function buildCliStatus(
   const defaultRemote = resolveDefaultRemote(configuredDefaultRemote, remoteNames);
   const defaultInfo = remotes.find((r) => r.name === defaultRemote);
   const remoteUrl = defaultInfo?.fetchUrl || defaultInfo?.pushUrl || "";
-  const platformHint = detectMrPlatform(remoteUrl);
+  let platformHint = detectMrPlatform(remoteUrl);
+  // 同步检测不到时尝试异步探测（访问 API 判断是否为 GitLab）
+  if (platformHint === "unknown" && remoteUrl) {
+    platformHint = await probePlatform(remoteUrl);
+  }
   const web = normalizeRemoteWebUrl(remoteUrl);
   let remoteWebOrigin: string | null = null;
   if (web) {

@@ -453,10 +453,11 @@ export function titleSideStatus(r: TokenValidateResult): string {
   if (r.ok && r.login) {
     parts.push(r.login);
   }
-  if (r.expiresMessage) {
-    parts.push(r.expiresMessage);
-  } else if (!r.ok && r.error && r.formatOk) {
+  // 校验失败时优先显示具体错误原因，而不是模糊的"有效期未知"
+  if (!r.ok && r.error && r.formatOk) {
     parts.push(r.error);
+  } else if (r.expiresMessage) {
+    parts.push(r.expiresMessage);
   } else if (!r.formatOk && r.formatMessage) {
     parts.push(r.formatMessage);
   }

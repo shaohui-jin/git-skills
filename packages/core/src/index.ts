@@ -126,10 +126,12 @@ export {
 } from "./merge/branchName.js";
 export {
   clearMrCandidateCache,
+  clearProbeCache,
   createMergeRequest,
   detectMrPlatform,
   normalizeRemoteWebUrl,
   prepareCreateMr,
+  probePlatform,
 } from "./merge/createMr.js";
 export type {
   CreateMergeRequestOptions,

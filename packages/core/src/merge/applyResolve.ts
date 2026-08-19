@@ -107,6 +107,8 @@ export function buildCreateMrUrl(
   remoteUrl: string,
   sourceBranch: string,
   targetBranch: string,
+  /** 外部已知的平台覆盖（异步探测或用户手动选择的结果） */
+  platformHint?: "github" | "gitlab" | "unknown",
 ): string | null {
   let url = remoteUrl.trim();
   if (!url) {
@@ -132,6 +134,15 @@ export function buildCreateMrUrl(
     const src = encodeURIComponent(sourceBranch);
     const tgt = encodeURIComponent(targetBranch);
 
+    // 优先使用外部传入的平台覆盖（异步探测或用户手动选择的结果）
+    if (platformHint === "gitlab") {
+      return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
+    }
+    if (platformHint === "github") {
+      return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
+    }
+
+    // 匹配逻辑与 createMr.ts 中的 matchHostPlatform 保持一致
     if (host === "github.com" || host.endsWith(".github.com")) {
       return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }

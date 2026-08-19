@@ -6,6 +6,21 @@ import { branchNameForMr } from "./branchName.js";
 import { listRemotes } from "../git/remotes.js";
 
 /**
+ * 远程主机名快速匹配平台。
+ * 被 detectMrPlatform 和 buildCreateMrUrl 共享，避免两处不一致。
+ */
+function matchHostPlatform(hostname: string): "github" | "gitlab" | null {
+  const host = hostname.toLowerCase();
+  if (host === "github.com" || host.endsWith(".github.com")) {
+    return "github";
+  }
+  if (host === "gitlab.com" || host.endsWith(".gitlab.com") || host.includes("gitlab.")) {
+    return "gitlab";
+  }
+  return null;
+}
+
+/**
  * 候选人缓存：同仓库+同 channel（gh/glab/token）5 分钟内复用，避免矩阵每行
  * 打开 MR 下拉都重新请求 GitHub/GitLab API 或拉起 gh/glab 子进程。
  *
@@ -204,23 +219,72 @@ export function detectMrPlatform(remoteUrl: string): MrPlatform {
   }
   try {
     const host = new URL(web).hostname.toLowerCase();
-    // GitHub：github.com 及其子域（如 api.github.com）
-    if (host === "github.com" || host.endsWith(".github.com")) {
-      return "github";
-    }
-    // GitLab：gitlab.com 及其子域，或自建的 *.gitlab.* 主机
-    if (
-      host === "gitlab.com" ||
-      host.endsWith(".gitlab.com") ||
-      host.includes("gitlab.")
-    ) {
-      return "gitlab";
-    }
-    // 其他（Gitea、Bitbucket、Azure DevOps 等）暂不自动识别
-    return "unknown";
+    return matchHostPlatform(host) ?? "unknown";
   } catch {
     return "unknown";
   }
+}
+
+// 简单内存缓存，避免同一仓库反复探测
+const probeCache = new Map<string, MrPlatform>();
+
+/** 清除探测缓存（测试 / 刷新时用） */
+export function clearProbeCache(): void {
+  probeCache.clear();
+}
+
+/**
+ * 异步探测远程平台：先同步匹配，失败时访问 {origin}/api/v4/version 判断是否为 GitLab。
+ * 3 秒超时，结果缓存 5 分钟。
+ */
+export async function probePlatform(remoteUrl: string): Promise<MrPlatform> {
+  const sync = detectMrPlatform(remoteUrl);
+  if (sync !== "unknown") {
+    return sync;
+  }
+
+  const cached = probeCache.get(remoteUrl);
+  if (cached) {
+    return cached;
+  }
+
+  const web = normalizeRemoteWebUrl(remoteUrl);
+  if (!web) {
+    return "unknown";
+  }
+  try {
+    const origin = new URL(web).origin;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetch(`${origin}/api/v4/version`, {
+        signal: controller.signal,
+        headers: { "User-Agent": "git-insight" },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { version?: string };
+        if (data.version) {
+          setProbeCache(remoteUrl, "gitlab");
+          return "gitlab";
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // 网络不可达时保持 unknown
+  }
+  setProbeCache(remoteUrl, "unknown");
+  return "unknown";
+}
+
+function setProbeCache(key: string, value: MrPlatform): void {
+  probeCache.set(key, value);
+  setTimeout(() => {
+    if (probeCache.get(key) === value) {
+      probeCache.delete(key);
+    }
+  }, 5 * 60 * 1000);
 }
 
 function parseOwnerRepo(remoteUrl: string): { owner: string; repo: string; projectPath: string } | null {
@@ -723,7 +787,7 @@ export async function prepareCreateMr(
     );
   }
   const title = `Merge ${sourceBranch} into ${targetBranch}`;
-  const createMrUrl = buildCreateMrUrl(url, sourceBranch, targetBranch);
+  const createMrUrl = buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
   const messages: string[] = [];
   const method = options.method ?? null;
 
@@ -797,10 +861,10 @@ export async function prepareCreateMr(
     };
   }
 
-  const ghBin = platform === "github" ? options.cliPath || "gh" : "gh";
+  const ghBin = (platform === "github" || platform === "unknown") ? options.cliPath || "gh" : "gh";
   const glabBin = platform === "gitlab" ? options.cliPath || "glab" : "glab";
 
-  if (platform === "github") {
+  if (platform === "github" || platform === "unknown") {
     const channel = `gh:${ghBin}`;
     if (options.skipCandidates) {
       const check = await checkGh(repoRoot, ghBin);
@@ -931,7 +995,7 @@ export async function createMergeRequest(
   const method = options.method ?? "cli";
 
   if (method === "browser") {
-    const link = buildCreateMrUrl(url, sourceBranch, targetBranch);
+    const link = buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
     messages.push("浏览器创建页模式：请在打开的页面中提交 MR/PR");
     return {
       platform,
@@ -950,7 +1014,30 @@ export async function createMergeRequest(
         code: "NO_TOKEN",
       });
     }
-    if (platform === "github") {
+    if (platform === "github" || platform === "unknown") {
+      // unknown 时优先尝试 GitHub token（GitLab token 会走下面 glpat- 格式校验）
+      if (options.token?.trim().startsWith("glpat-")) {
+        // 是 GitLab token 格式，走 GitLab 路径
+        const created = await createGitlabMrByToken({
+          remoteUrl: url,
+          token,
+          sourceBranch,
+          targetBranch,
+          title,
+          body,
+          reviewers,
+        });
+        messages.push("已用 GitLab Token API 创建 MR");
+        messages.push(...created.warnings);
+        return {
+          platform,
+          via: "token",
+          url: created.url,
+          sourceBranch,
+          targetBranch,
+          messages,
+        };
+      }
       const prUrl = await createGithubPrByToken({
         remoteUrl: url,
         token,
@@ -995,7 +1082,7 @@ export async function createMergeRequest(
   }
 
   // cli | download-cli
-  if (platform === "github") {
+  if (platform === "github" || platform === "unknown") {
     const bin = options.cliPath || "gh";
     const check = await checkGh(repoRoot, bin);
     if (!check.ok) {
@@ -1030,7 +1117,7 @@ export async function createMergeRequest(
     return {
       platform,
       via: "gh",
-      url: prUrl || buildCreateMrUrl(url, sourceBranch, targetBranch),
+      url: prUrl || buildCreateMrUrl(url, sourceBranch, targetBranch, platform),
       sourceBranch,
       targetBranch,
       messages,
@@ -1070,7 +1157,7 @@ export async function createMergeRequest(
     }
     const mrUrl =
       run.stdout.match(/https?:\/\/\S+/)?.[0] ??
-      buildCreateMrUrl(url, sourceBranch, targetBranch);
+      buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
     messages.push(`已用 glab 创建 MR`);
     return {
       platform,

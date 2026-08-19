@@ -276,7 +276,11 @@ export function isMrMethodReady(
           ? { ok: true }
           : { ok: false, reason: "请填写以 glpat- 开头的 GitLab Token" };
       }
-      return { ok: false, reason: "无法识别远程平台，Token 方式不可用" };
+      // unknown 时：任一 Token 有值即可，让用户选择用哪个
+      if (config.githubToken?.trim() || config.gitlabToken?.trim()) {
+        return { ok: true };
+      }
+      return { ok: false, reason: "无法识别远程平台，请填写 GitHub 或 GitLab Token" };
     }
     case "browser":
       return { ok: true };
