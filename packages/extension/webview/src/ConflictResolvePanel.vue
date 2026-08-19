@@ -800,24 +800,20 @@ const resultLineStarts = computed(() => {
             type="button"
             class="btn"
             :class="{ secondary: !canCreateMr }"
-            :disabled="previewMode || !into || !from || aiBusy"
+            :disabled="previewMode || !into || !from || aiBusy || !canCreateMr"
             :title="
-              createMrBlockReason ||
-              '需先完成一键解决并推送，且在 Git 配置中选好可用方式'
+              !canCreateMr
+                ? (createMrBlockReason ||
+                   '请先完成「一键解决并推送」，并在「Git 配置」中选择 MR 方式')
+                : '申请 MR'
             "
-            @click="
-              canCreateMr
-                ? emit('requestCreateMr', { into, from })
-                : (stashNote =
-                    createMrBlockReason ||
-                    '请先完成「一键解决并推送」，并在「Git 配置」中选择 MR 方式')
-            "
+            @click="emit('requestCreateMr', { into, from })"
           >
             一键申请 MR
           </button>
           <button
             type="button"
-            class="btn secondary btn-sm"
+            class="btn secondary"
             :disabled="aiBusy"
             title="重置界面选边，不清理本地暂存缓存"
             @click="resetStash"
