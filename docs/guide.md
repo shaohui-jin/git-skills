@@ -501,12 +501,12 @@ scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 
 ---
 
-## 九、当前版本（2026-08-19）
+## 九、当前版本（2026-08-20）
 
 | 组件 | 版本 | 发布渠道 |
 |------|------|----------|
-| 扩展 `git-insight` | 0.3.4 | Open VSX / Cursor 市场 |
-| 引擎 `@shaohui_jin/git-insight-core` | 0.2.0 | monorepo 内 / CLI |
+| 扩展 `git-insight` | 0.3.5 | Open VSX / Cursor 市场 |
+| 引擎 `@shaohui_jin/git-insight-core` | 0.2.1 | monorepo 内 / CLI |
 | MCP `@shaohui_jin/git-insight-mcp-server` | 0.2.1 | npm（CI 发版） |
 
 > 本期（未发版候选）：候选人 5 分钟缓存 + skipCandidates 开关；矩阵多选 + into/from 隔离 + fillSuggested 覆盖式；toolbar 瘦身；链循环 guard；精准 platform 匹配；**移除 open_ui / open-ui 与浏览器 UI（含 uiServer、ws 依赖、webview 携带），MCP 不再耦合 extension**。详见 [roadmap.md](./roadmap.md)。

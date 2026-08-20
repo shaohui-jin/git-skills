@@ -108,7 +108,7 @@ export function buildCreateMrUrl(
   sourceBranch: string,
   targetBranch: string,
   /** 外部已知的平台覆盖（异步探测或用户手动选择的结果） */
-  platformHint?: "github" | "gitlab" | "gitee" | "unknown",
+  platformHint?: "github" | "gitlab" | "unknown",
 ): string | null {
   let url = remoteUrl.trim();
   if (!url) {
@@ -134,34 +134,20 @@ export function buildCreateMrUrl(
     const src = encodeURIComponent(sourceBranch);
     const tgt = encodeURIComponent(targetBranch);
 
-    // 优先使用外部传入的平台覆盖（异步探测或用户手动选择的结果）
+    // 优先使用外部传入的平台覆盖
     if (platformHint === "gitlab") {
       return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
     }
     if (platformHint === "github") {
       return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }
-    if (platformHint === "gitee") {
-      return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
-    }
 
-    // 匹配逻辑与 createMr.ts 中的 matchHostPlatform 保持一致
+    // 匹配逻辑与 createMr.ts 中的 matchHostPlatform 保持一致：非 github 即 gitlab
     if (host === "github.com" || host.endsWith(".github.com")) {
       return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }
-    // GitLab 及多数自建（含 gitlab. 子域）
-    if (
-      host === "gitlab.com" ||
-      host.endsWith(".gitlab.com") ||
-      host.includes("gitlab.")
-    ) {
-      return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
-    }
-    if (host === "gitee.com" || host.endsWith(".gitee.com")) {
-      return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
-    }
-    // 其他平台（Gitea、Bitbucket 等）无法构造标准新建 URL
-    return null;
+    // 非 github 域名统一视为 gitlab（GitHub 没有自建实例）
+    return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
   } catch {
     return null;
   }

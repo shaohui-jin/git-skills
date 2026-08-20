@@ -1,7 +1,7 @@
 {
   "name": "git-skill",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Git branch insight monorepo: core engine + Cursor skill + extension shell",
   "scripts": {
     "build": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight build",

@@ -9,18 +9,13 @@ import { listRemotes } from "../git/remotes.js";
  * 远程主机名快速匹配平台。
  * 被 detectMrPlatform 和 buildCreateMrUrl 共享，避免两处不一致。
  */
-function matchHostPlatform(hostname: string): "github" | "gitlab" | "gitee" | null {
+function matchHostPlatform(hostname: string): "github" | "gitlab" | null {
   const host = hostname.toLowerCase();
   if (host === "github.com" || host.endsWith(".github.com")) {
     return "github";
   }
-  if (host === "gitlab.com" || host.endsWith(".gitlab.com") || host.includes("gitlab.")) {
-    return "gitlab";
-  }
-  if (host === "gitee.com" || host.endsWith(".gitee.com")) {
-    return "gitee";
-  }
-  return null;
+  // 非 github 域名统一视为 gitlab（GitHub 没有自建实例）
+  return "gitlab";
 }
 
 /**
@@ -85,7 +80,7 @@ function putCachedCandidates(
   });
 }
 
-export type MrPlatform = "github" | "gitlab" | "gitee" | "unknown";
+export type MrPlatform = "github" | "gitlab" | "unknown";
 
 export interface MrCandidate {
   username: string;
@@ -237,13 +232,12 @@ export function clearProbeCache(): void {
 }
 
 /**
- * 异步探测远程平台：先同步匹配，失败时访问 {origin}/api/v4/version 判断是否为 GitLab。
- * 私有 GitLab 实例需要带 token 才能访问该接口，因此接收可选的 gitlabToken。
- * 3 秒超时，结果缓存 5 分钟。
+ * 异步探测远程平台：先同步匹配，失败时按「非 github 即 gitlab」处理。
+ * 因为 GitHub 没有自建实例，自定义域名几乎都是 GitLab 等其他自建平台。
  */
 export async function probePlatform(
   remoteUrl: string,
-  gitlabToken?: string,
+  _gitlabToken?: string,
 ): Promise<MrPlatform> {
   const sync = detectMrPlatform(remoteUrl);
   if (sync !== "unknown") {
@@ -255,38 +249,26 @@ export async function probePlatform(
     return cached;
   }
 
+  // 同步阶段 unknown 说明无法解析 URL（如空字符串），此时仍返回 unknown
   const web = normalizeRemoteWebUrl(remoteUrl);
   if (!web) {
+    setProbeCache(remoteUrl, "unknown");
     return "unknown";
   }
+
   try {
-    const origin = new URL(web).origin;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    try {
-      const headers: Record<string, string> = { "User-Agent": "git-insight" };
-      if (gitlabToken?.trim()) {
-        headers["PRIVATE-TOKEN"] = gitlabToken.trim();
-      }
-      const res = await fetch(`${origin}/api/v4/version`, {
-        signal: controller.signal,
-        headers,
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { version?: string };
-        if (data.version) {
-          setProbeCache(remoteUrl, "gitlab");
-          return "gitlab";
-        }
-      }
-    } finally {
-      clearTimeout(timer);
+    const host = new URL(web).hostname.toLowerCase();
+    // 非 github 域名统一视为 gitlab
+    if (host === "github.com" || host.endsWith(".github.com")) {
+      setProbeCache(remoteUrl, "github");
+      return "github";
     }
+    setProbeCache(remoteUrl, "gitlab");
+    return "gitlab";
   } catch {
-    // 网络不可达时保持 unknown
+    setProbeCache(remoteUrl, "unknown");
+    return "unknown";
   }
-  setProbeCache(remoteUrl, "unknown");
-  return "unknown";
 }
 
 function setProbeCache(key: string, value: MrPlatform): void {
@@ -783,7 +765,7 @@ export async function prepareCreateMr(
   const url = await remoteUrl(repoRoot, remote);
   let platform = detectMrPlatform(url);
   if (platform === "unknown") {
-    platform = await probePlatform(url, options.token);
+    platform = await probePlatform(url);
   }
   const targetBranch = branchNameForMr(into, remotes);
   const sourceBranch = await resolveDefaultSource(
@@ -849,7 +831,7 @@ export async function prepareCreateMr(
       candidates = cached;
       messages.push(`已复用缓存的 ${candidates.length} 位 Token API 协作者（5 分钟内有效）`);
     } else {
-      if (platform === "github" || platform === "gitee") {
+      if (platform === "github") {
         candidates = await listGithubCandidatesByToken(url, options.token.trim());
         messages.push(`已通过 Token API 加载 ${candidates.length} 位协作者`);
       } else if (platform === "gitlab") {
@@ -875,10 +857,10 @@ export async function prepareCreateMr(
     };
   }
 
-  const ghBin = (platform === "github" || platform === "unknown" || platform === "gitee") ? options.cliPath || "gh" : "gh";
+  const ghBin = (platform === "github" || platform === "unknown") ? options.cliPath || "gh" : "gh";
   const glabBin = platform === "gitlab" ? options.cliPath || "glab" : "glab";
 
-  if (platform === "github" || platform === "unknown" || platform === "gitee") {
+  if (platform === "github" || platform === "unknown") {
     const channel = `gh:${ghBin}`;
     if (options.skipCandidates) {
       const check = await checkGh(repoRoot, ghBin);
@@ -991,7 +973,7 @@ export async function createMergeRequest(
   const url = await remoteUrl(repoRoot, remote);
   let platform = detectMrPlatform(url);
   if (platform === "unknown") {
-    platform = await probePlatform(url, options.token);
+    platform = await probePlatform(url);
   }
   const sourceBranch = branchNameForMr(options.sourceBranch, remotes);
   const targetBranch = branchNameForMr(options.targetBranch, remotes);
@@ -1031,7 +1013,7 @@ export async function createMergeRequest(
         code: "NO_TOKEN",
       });
     }
-    if (platform === "github" || platform === "unknown" || platform === "gitee") {
+    if (platform === "github" || platform === "unknown") {
       // unknown 时优先尝试 GitHub token（GitLab token 会走下面 glpat- 格式校验）
       if (options.token?.trim().startsWith("glpat-")) {
         // 是 GitLab token 格式，走 GitLab 路径
@@ -1099,7 +1081,7 @@ export async function createMergeRequest(
   }
 
   // cli | download-cli
-  if (platform === "github" || platform === "unknown" || platform === "gitee") {
+  if (platform === "github" || platform === "unknown") {
     const bin = options.cliPath || "gh";
     const check = await checkGh(repoRoot, bin);
     if (!check.ok) {

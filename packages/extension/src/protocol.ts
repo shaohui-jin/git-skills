@@ -130,7 +130,7 @@ export type WebviewRequest =
   | { type: "aiResolveCopyPrompt" };
 
 export interface CliStatusPayload {
-  platformHint: "github" | "gitlab" | "gitee" | "unknown";
+  platformHint: "github" | "gitlab" | "unknown";
   /** 默认远程 URL 规范化后的 https 站点根，如 https://gitlab.example.com */
   remoteWebOrigin?: string | null;
   /** 当前仓库 `git remote -v`（无仓库时为空） */

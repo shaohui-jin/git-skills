@@ -153,7 +153,7 @@ async function workspacePayload(
  * `setCwd` returns the new cwd via workspace message; caller should persist it.
  */
 function cliPairOk(
-  platformHint: "github" | "gitlab" | "gitee" | "unknown",
+  platformHint: "github" | "gitlab" | "unknown",
   gh: { installed: boolean; loggedIn: boolean },
   glab: { installed: boolean; loggedIn: boolean },
 ): boolean {
@@ -163,7 +163,6 @@ function cliPairOk(
   if (platformHint === "gitlab") {
     return glab.installed && glab.loggedIn;
   }
-  // gitee 与 unknown 均回退为任一 CLI 可用即可
   return (gh.installed && gh.loggedIn) || (glab.installed && glab.loggedIn);
 }
 
