@@ -108,7 +108,7 @@ export function buildCreateMrUrl(
   sourceBranch: string,
   targetBranch: string,
   /** 外部已知的平台覆盖（异步探测或用户手动选择的结果） */
-  platformHint?: "github" | "gitlab" | "unknown",
+  platformHint?: "github" | "gitlab" | "gitee" | "unknown",
 ): string | null {
   let url = remoteUrl.trim();
   if (!url) {
@@ -141,6 +141,9 @@ export function buildCreateMrUrl(
     if (platformHint === "github") {
       return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }
+    if (platformHint === "gitee") {
+      return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
+    }
 
     // 匹配逻辑与 createMr.ts 中的 matchHostPlatform 保持一致
     if (host === "github.com" || host.endsWith(".github.com")) {
@@ -153,6 +156,9 @@ export function buildCreateMrUrl(
       host.includes("gitlab.")
     ) {
       return `${u.origin}/${path}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${src}&merge_request%5Btarget_branch%5D=${tgt}`;
+    }
+    if (host === "gitee.com" || host.endsWith(".gitee.com")) {
+      return `${u.origin}/${path}/compare/${encodeURIComponent(targetBranch)}...${encodeURIComponent(sourceBranch)}?expand=1`;
     }
     // 其他平台（Gitea、Bitbucket 等）无法构造标准新建 URL
     return null;
