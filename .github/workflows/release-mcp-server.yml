@@ -1,0 +1,101 @@
+# Release MCP server to npm
+#
+# 判据与扩展发布统一：只看「这个版本发过没有」——远程还没有
+# mcp-server-v{version} 这个 tag 就构建、发布 npm、最后打 tag。
+#
+# tag 放在发布成功之后才打，代表「已发布」而不是「试过了」，
+# 这样任何一步失败都能原样重试（重新 push 或手动重跑），不会白白浪费版本号。
+#
+# Secret: NPM_TOKEN（npm Automation token）
+# 文档：docs/mcp-ui-and-release.md、docs/features.md
+
+name: Release MCP server
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decide whether to release
+        id: gate
+        run: |
+          PKG="packages/mcp/package.json"
+          VERSION="$(jq -r .version "$PKG")"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "::error::无法读取 $PKG 的 version"
+            exit 1
+          fi
+          TAG="mcp-server-v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "${TAG} 已发布过，跳过。要发新版请提高 ${PKG} 的 version。"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} 尚未发布，开始构建。"
+          fi
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.should_release == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.should_release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        if: steps.gate.outputs.should_release == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core and webview
+        if: steps.gate.outputs.should_release == 'true'
+        run: |
+          pnpm --filter @shaohui_jin/git-insight-core build
+          pnpm --filter git-insight build:webview
+
+      - name: Build MCP package
+        if: steps.gate.outputs.should_release == 'true'
+        run: pnpm --filter @shaohui_jin/git-insight-mcp-server run check && pnpm --filter @shaohui_jin/git-insight-mcp-server run build
+
+      - name: Publish to npm
+        if: steps.gate.outputs.should_release == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: packages/mcp
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::未配置 GitHub Secret NPM_TOKEN"
+            exit 1
+          fi
+          npm publish --access public
+          echo "已发布 @shaohui_jin/git-insight-mcp-server@${{ steps.gate.outputs.version }}"
+
+      - name: Create and push tag
+        if: steps.gate.outputs.should_release == 'true'
+        env:
+          TAG: ${{ steps.gate.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "已推送 tag ${TAG}"

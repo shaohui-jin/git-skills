@@ -1,4 +1,4 @@
-import { maybeFetch } from "../git/fetch.js";
+import { fetchRemote } from "../git/fetch.js";
 import {
   ensureRev,
   mergeBase,
@@ -6,8 +6,11 @@ import {
   runGit,
 } from "../git/runner.js";
 import type { BranchGraph, BranchTip, CommitNode, GraphOptions } from "../types.js";
+import { mapProgress, reportProgress, withSoftProgress } from "../progress.js";
 
 const DEFAULT_MAX_NODES = 200;
+/** Avoid Windows/ARG_MAX failures when loading commit meta. */
+const META_CHUNK = 200;
 
 async function listTips(repoRoot: string): Promise<BranchTip[]> {
   const { stdout } = await runGit(repoRoot, [
@@ -39,35 +42,89 @@ async function listTips(repoRoot: string): Promise<BranchTip[]> {
   return tips;
 }
 
-async function loadCommitMeta(
+async function loadCommitMetaChunk(
   repoRoot: string,
   shas: string[],
+  onProgress?: GraphOptions["onProgress"],
+  softFrom = 0,
+  softTo = 0,
+  softLabel = "加载提交信息…",
 ): Promise<Map<string, CommitNode>> {
   const map = new Map<string, CommitNode>();
   if (shas.length === 0) {
     return map;
   }
-  const { stdout } = await runGit(repoRoot, [
-    "show",
-    "-s",
-    "--format=%H%00%P%00%an%00%at%00%s",
-    ...shas,
-  ]);
-  for (const line of stdout.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const [sha, parentsRaw, author, timeRaw, message] = line.split("\0");
+  // 用 log --no-walk + 字段尾部分隔，避免 git show 多对象时按行切割丢 subject
+  const { stdout } = await withSoftProgress(
+    onProgress && softTo > softFrom ? onProgress : undefined,
+    softFrom,
+    softTo,
+    softLabel,
+    () =>
+      runGit(repoRoot, [
+        "log",
+        "--no-walk=unsorted",
+        "--pretty=format:%H%x00%P%x00%an%x00%at%x00%s%x00",
+        ...shas,
+      ]),
+  );
+  const parts = stdout.split("\0");
+  let i = 0;
+  while (i < parts.length) {
+    const sha = (parts[i] ?? "").trim();
     if (!sha) {
+      i += 1;
       continue;
     }
+    if (i + 4 >= parts.length) {
+      break;
+    }
+    const parentsRaw = parts[i + 1] ?? "";
+    const author = (parts[i + 2] ?? "").trim();
+    const timeRaw = parts[i + 3] ?? "0";
+    const message = (parts[i + 4] ?? "").replace(/\r?\n/g, " ").trim();
     map.set(sha, {
       sha,
       parents: parentsRaw ? parentsRaw.split(" ").filter(Boolean) : [],
-      author: author ?? "",
-      time: Number(timeRaw ?? 0),
-      message: message ?? "",
+      author,
+      time: Number(timeRaw || 0),
+      message,
     });
+    i += 5;
+  }
+  return map;
+}
+
+async function loadCommitMeta(
+  repoRoot: string,
+  shas: string[],
+  onChunk?: (done: number, total: number) => void | Promise<void>,
+  onProgress?: GraphOptions["onProgress"],
+  rangeFrom = 45,
+  rangeTo = 92,
+): Promise<Map<string, CommitNode>> {
+  const map = new Map<string, CommitNode>();
+  const total = shas.length;
+  let done = 0;
+  const chunks = Math.max(1, Math.ceil(shas.length / META_CHUNK));
+  for (let i = 0; i < shas.length; i += META_CHUNK) {
+    const chunk = shas.slice(i, i + META_CHUNK);
+    const chunkIndex = Math.floor(i / META_CHUNK);
+    const softFrom = rangeFrom + ((rangeTo - rangeFrom) * chunkIndex) / chunks;
+    const softTo = rangeFrom + ((rangeTo - rangeFrom) * (chunkIndex + 1)) / chunks;
+    const part = await loadCommitMetaChunk(
+      repoRoot,
+      chunk,
+      onProgress,
+      softFrom,
+      softTo,
+      `加载提交信息（${Math.min(total, i + chunk.length)}/${total}）…`,
+    );
+    for (const [sha, node] of part) {
+      map.set(sha, node);
+    }
+    done = Math.min(total, i + chunk.length);
+    await onChunk?.(done, total);
   }
   return map;
 }
@@ -121,46 +178,80 @@ async function buildLineage(
 }
 
 /**
- * Build a commit DAG. With no into/from, uses all branch tips (capped).
- * With into/from, focuses on the symmetric difference around merge-base.
+ * Build a commit DAG. With no into/from, uses all branch tips.
+ * `maxNodes: 0` = unlimited (full graph); default cap 200 for CLI.
  */
 export async function buildBranchGraph(options: GraphOptions = {}): Promise<BranchGraph> {
+  const onProgress = options.onProgress;
   const repoRoot = await resolveRepoRoot(options.cwd);
-  const maxNodes = options.maxNodes ?? DEFAULT_MAX_NODES;
+  const unlimited = options.maxNodes === 0;
+  const maxNodes = unlimited ? 0 : (options.maxNodes ?? DEFAULT_MAX_NODES);
   const shouldFetch = options.fetch !== false;
-  await maybeFetch(repoRoot, shouldFetch, options.remote ?? "origin");
+
+  await reportProgress(onProgress, 2, "准备仓库…");
+  let fetched = false;
+  let fetchOk: boolean | undefined;
+  let fetchError: string | undefined;
+  if (shouldFetch) {
+    fetched = true;
+    const fr = await fetchRemote(
+      repoRoot,
+      options.remote ?? "origin",
+      (u) => mapProgress(onProgress, 2, 18, u.percent / 100, u.label),
+    );
+    fetchOk = fr.ok;
+    if (!fr.ok) {
+      fetchError = fr.stderr || fr.stdout || "fetch 失败";
+    }
+  }
+  await reportProgress(onProgress, 20, "列举分支 tip…");
 
   const tips = await listTips(repoRoot);
+  await reportProgress(onProgress, 26, `已找到 ${tips.length} 个 tip，枚举提交…`);
+
   let revListArgs: string[];
 
   if (options.into && options.from) {
     const intoSha = await ensureRev(repoRoot, options.into);
     const fromSha = await ensureRev(repoRoot, options.from);
     const base = await mergeBase(repoRoot, intoSha, fromSha);
-    revListArgs = [
-      "rev-list",
-      "--parents",
-      `--max-count=${maxNodes}`,
-      intoSha,
-      fromSha,
-      "^" + base + "^@",
-    ];
+    revListArgs = ["rev-list", "--parents"];
+    if (!unlimited) {
+      revListArgs.push(`--max-count=${maxNodes}`);
+    }
+    revListArgs.push(intoSha, fromSha, "^" + base + "^@");
   } else {
     const tipShas = tips.map((t) => t.sha);
     if (tipShas.length === 0) {
+      await reportProgress(onProgress, 100, "完成");
       return {
         repoRoot,
         nodes: [],
         tips,
         edges: [],
         truncated: false,
-        maxNodes,
+        maxNodes: 0,
+        fetched,
+        fetchOk,
+        fetchError,
       };
     }
-    revListArgs = ["rev-list", "--parents", `--max-count=${maxNodes}`, ...tipShas];
+    revListArgs = ["rev-list", "--parents"];
+    if (!unlimited) {
+      revListArgs.push(`--max-count=${maxNodes}`);
+    }
+    revListArgs.push(...tipShas);
   }
 
-  const { stdout } = await runGit(repoRoot, revListArgs);
+  const { stdout } = await withSoftProgress(
+    onProgress,
+    28,
+    42,
+    "枚举提交（rev-list，仓库大时较久）…",
+    () => runGit(repoRoot, revListArgs),
+  );
+  await reportProgress(onProgress, 44, "解析提交图…");
+
   const parentMap = new Map<string, string[]>();
   for (const line of stdout.split("\n")) {
     if (!line.trim()) {
@@ -175,8 +266,26 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
   }
 
   const shas = [...parentMap.keys()];
-  const truncated = shas.length >= maxNodes;
-  const meta = await loadCommitMeta(repoRoot, shas);
+  const truncated = !unlimited && shas.length >= maxNodes;
+  await reportProgress(onProgress, 45, `加载提交信息（0/${shas.length}）…`);
+
+  const meta = await loadCommitMeta(
+    repoRoot,
+    shas,
+    (done, total) =>
+      mapProgress(
+        onProgress,
+        45,
+        92,
+        total === 0 ? 1 : done / total,
+        `加载提交信息（${done}/${total}）…`,
+      ),
+    onProgress,
+    45,
+    92,
+  );
+
+  await reportProgress(onProgress, 94, "组装节点与边…");
   const nodes: CommitNode[] = [];
   const edges: Array<[string, string]> = [];
 
@@ -197,9 +306,11 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
 
   let lineage: BranchGraph["lineage"];
   if (options.into && options.from) {
+    await reportProgress(onProgress, 96, "计算分支溯源…");
     lineage = await buildLineage(repoRoot, options.into, options.from);
   }
 
+  await reportProgress(onProgress, 100, "完成");
   return {
     repoRoot,
     nodes,
@@ -207,6 +318,9 @@ export async function buildBranchGraph(options: GraphOptions = {}): Promise<Bran
     edges,
     lineage,
     truncated,
-    maxNodes,
+    maxNodes: unlimited ? nodes.length : maxNodes,
+    fetched,
+    fetchOk,
+    fetchError,
   };
 }

@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import {
+  gitAuthConfigArgs,
+  gitInteractiveEnv,
+  gitNonInteractiveEnv,
+  type GitAuthOptions,
+} from "./auth.js";
 
 export class GitError extends Error {
   readonly code: string;
@@ -30,45 +37,99 @@ export interface GitRunResult {
 export async function runGit(
   cwd: string,
   args: string[],
-  options?: { allowFail?: boolean },
+  options?: {
+    allowFail?: boolean;
+    /** stderr 按行回调（git --progress 常用 \\r 刷新） */
+    onStderrLine?: (line: string) => void;
+    /** 注入 HTTPS Token（方案 C） */
+    auth?: GitAuthOptions;
+    /** true：允许 GCM / Cursor 弹窗登录（最后兜底） */
+    interactive?: boolean;
+    /** 额外环境变量 */
+    env?: NodeJS.ProcessEnv;
+  },
 ): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("git", args, {
+    const finalArgs = [...gitAuthConfigArgs(options?.auth), ...args];
+    const baseEnv = options?.interactive
+      ? gitInteractiveEnv(process.env)
+      : gitNonInteractiveEnv(process.env);
+    const child = spawn("git", finalArgs, {
       cwd,
       windowsHide: true,
       env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-        LANG: "C",
+        ...baseEnv,
+        ...options?.env,
       },
     });
 
-    let stdout = "";
+    // 逐 chunk 调 toString 会把跨 chunk 边界的多字节字符切坏（中文提交信息、
+    // 中文文件内容都会变成 U+FFFD），所以 stdout 攒完再解码，stderr 用增量解码器。
+    const stdoutChunks: Buffer[] = [];
+    const stderrDecoder = new StringDecoder("utf8");
     let stderr = "";
+    let stderrBuf = "";
+
+    const flushStderrLines = (chunk: string, final = false) => {
+      stderrBuf += chunk;
+      const parts = stderrBuf.split(/\r|\n/);
+      stderrBuf = final ? "" : (parts.pop() ?? "");
+      if (final && parts.length === 0 && stderrBuf) {
+        parts.push(stderrBuf);
+        stderrBuf = "";
+      }
+      for (const line of parts) {
+        if (line.trim()) {
+          options?.onStderrLine?.(line);
+        }
+      }
+    };
+
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      stdoutChunks.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      const text = stderrDecoder.write(chunk);
+      if (!text) {
+        return;
+      }
+      stderr += text;
+      if (options?.onStderrLine) {
+        flushStderrLines(text);
+      }
     });
     child.on("error", (err) => {
       reject(
         new GitError(`无法启动 git：${err.message}`, {
           code: "GIT_SPAWN_FAILED",
-          args,
+          args: finalArgs,
         }),
       );
     });
     child.on("close", (code) => {
+      const tail = stderrDecoder.end();
+      if (tail) {
+        stderr += tail;
+        if (options?.onStderrLine) {
+          flushStderrLines(tail);
+        }
+      }
+      if (options?.onStderrLine && stderrBuf.trim()) {
+        flushStderrLines("", true);
+      }
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const exit = code ?? 1;
       if (exit !== 0 && !options?.allowFail) {
         reject(
-          new GitError(stderr.trim() || stdout.trim() || `git ${args.join(" ")} failed`, {
-            code: "GIT_COMMAND_FAILED",
-            stdout,
-            stderr,
-            args,
-          }),
+          new GitError(
+            stderr.trim() || stdout.trim() || `git ${finalArgs.join(" ")} failed`,
+            {
+              code: "GIT_COMMAND_FAILED",
+              stdout,
+              stderr,
+              args: finalArgs,
+            },
+          ),
         );
         return;
       }

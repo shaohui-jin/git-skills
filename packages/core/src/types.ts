@@ -35,6 +35,12 @@ export interface BranchGraph {
   lineage?: BranchLineage;
   truncated: boolean;
   maxNodes: number;
+  /** 本次是否尝试了 fetch（未传 noFetch） */
+  fetched?: boolean;
+  /** fetch 是否成功；失败时 tips 可能落后于线上 */
+  fetchOk?: boolean;
+  /** fetch 失败原因摘要 */
+  fetchError?: string;
 }
 
 export interface CommitRef {
@@ -42,6 +48,9 @@ export interface CommitRef {
   author: string;
   message?: string;
   pr?: string;
+  /** author-time（Unix 秒），来自 blame porcelain */
+  time?: number;
+  authorEmail?: string;
 }
 
 export interface ConflictHunk {
@@ -83,6 +92,11 @@ export interface MergePreviewResult {
   outcome?: MergeOutcome;
   /** 两条历史没有共同祖先 */
   unrelatedHistories?: boolean;
+  /**
+   * `merge-tree --write-tree` 产出的结果树 OID。冲突时同样有值，只是树里的
+   * blob 带冲突标记。合并顺序模拟靠它接 `commit-tree` 串起下一步。
+   */
+  resultTree?: string;
 }
 
 /** Full merge rehearsal: preview + conflict contents + blame provenance. */
@@ -101,9 +115,17 @@ export interface FetchResult {
   stderr: string;
 }
 
+export interface ProgressUpdate {
+  /** 0–100 */
+  percent: number;
+  label: string;
+}
+
+export type ProgressReporter = (update: ProgressUpdate) => void | Promise<void>;
+
 export interface GraphOptions {
   cwd?: string;
-  /** Limit DAG nodes; default 200. */
+  /** Limit DAG nodes; default 200. Pass `0` for unlimited (full graph). */
   maxNodes?: number;
   /** Optional pair for lineage focus. */
   into?: string;
@@ -111,6 +133,10 @@ export interface GraphOptions {
   /** Default true for skill usage. */
   fetch?: boolean;
   remote?: string;
+  /** 扩展配置中的 Token，用于 fetch 鉴权（避免系统登录弹窗） */
+  authToken?: string;
+  authProvider?: "github" | "gitlab" | "unknown";
+  onProgress?: ProgressReporter;
 }
 
 export interface MergeOptions {
@@ -120,8 +146,16 @@ export interface MergeOptions {
   /** Default true. */
   fetch?: boolean;
   remote?: string;
+  authToken?: string;
+  authProvider?: "github" | "gitlab" | "unknown";
   /** Max files to run blame on; default 20. */
   maxBlameFiles?: number;
+  /**
+   * 是否为溯源到的 commit 关联 PR 号（每个 commit 一次 `gh` 网络调用）。
+   * 默认关闭：文件多时它会主导整个预演耗时。
+   */
+  lookupPr?: boolean;
+  onProgress?: ProgressReporter;
 }
 
 export interface CliJsonResult<T> {

@@ -1,0 +1,1174 @@
+import { spawn } from "node:child_process";
+import type { MrMethod } from "../config/gitInsightConfig.js";
+import { GitError, resolveRepoRoot, runGit } from "../git/runner.js";
+import { buildCreateMrUrl, defaultTempBranchName } from "./applyResolve.js";
+import { branchNameForMr } from "./branchName.js";
+import { listRemotes } from "../git/remotes.js";
+
+/**
+ * 远程主机名快速匹配平台。
+ * 被 detectMrPlatform 和 buildCreateMrUrl 共享，避免两处不一致。
+ */
+function matchHostPlatform(hostname: string): "github" | "gitlab" | null {
+  const host = hostname.toLowerCase();
+  if (host === "github.com" || host.endsWith(".github.com")) {
+    return "github";
+  }
+  // 非 github 域名统一视为 gitlab（GitHub 没有自建实例）
+  return "gitlab";
+}
+
+/**
+ * 候选人缓存：同仓库+同 channel（gh/glab/token）5 分钟内复用，避免矩阵每行
+ * 打开 MR 下拉都重新请求 GitHub/GitLab API 或拉起 gh/glab 子进程。
+ *
+ * 候选人列表不是实时数据：协作者角色变更本身就不频繁，5 分钟 TTL 足够。
+ */
+interface CachedCandidates {
+  candidates: MrCandidate[];
+  cachedAt: number;
+}
+
+const CANDIDATE_TTL_MS = 5 * 60 * 1000;
+const CANDIDATE_CACHE_LIMIT = 50;
+const candidateCache = new Map<string, CachedCandidates>();
+
+function candidateCacheKey(repoRoot: string, remoteUrl: string, channel: string): string {
+  return `${repoRoot}\0${remoteUrl}\0${channel}`;
+}
+
+/** 供测试和「强制刷新候选人」入口使用。 */
+export function clearMrCandidateCache(): void {
+  candidateCache.clear();
+}
+
+function getCachedCandidates(
+  repoRoot: string,
+  remoteUrl: string,
+  channel: string,
+): MrCandidate[] | null {
+  const entry = candidateCache.get(candidateCacheKey(repoRoot, remoteUrl, channel));
+  if (!entry) {
+    return null;
+  }
+  if (Date.now() - entry.cachedAt > CANDIDATE_TTL_MS) {
+    candidateCache.delete(candidateCacheKey(repoRoot, remoteUrl, channel));
+    return null;
+  }
+  return entry.candidates;
+}
+
+function putCachedCandidates(
+  repoRoot: string,
+  remoteUrl: string,
+  channel: string,
+  candidates: MrCandidate[],
+): void {
+  if (candidateCache.size >= CANDIDATE_CACHE_LIMIT) {
+    let drop = Math.ceil(CANDIDATE_CACHE_LIMIT / 4);
+    for (const k of candidateCache.keys()) {
+      candidateCache.delete(k);
+      drop -= 1;
+      if (drop <= 0) {
+        break;
+      }
+    }
+  }
+  candidateCache.set(candidateCacheKey(repoRoot, remoteUrl, channel), {
+    candidates,
+    cachedAt: Date.now(),
+  });
+}
+
+export type MrPlatform = "github" | "gitlab" | "unknown";
+
+export interface MrCandidate {
+  username: string;
+  name?: string;
+  /** collaborator / member 等原始角色提示 */
+  role?: string;
+}
+
+export interface PrepareCreateMrOptions {
+  cwd?: string;
+  into: string;
+  from: string;
+  /** 源分支；默认优先临时分支名，否则 from */
+  sourceBranch?: string;
+  remote?: string;
+  /** 优先使用的 CLI 可执行文件路径（扩展目录下载的 gh/glab） */
+  cliPath?: string;
+  /** Token 方式下列成员 / 建单 */
+  token?: string;
+  method?: MrMethod | null;
+  /**
+   * 跳过候选人拉取，直接返回空 candidates + 平台/链接等信息。
+   * 矩阵等需要批量准备 MR 的场景可传 true，避免每行都请求 GitHub/GitLab API
+   * 或拉起 gh/glab 子进程。默认不传（行为与旧版一致：实时拉列表）。
+   */
+  skipCandidates?: boolean;
+}
+
+export interface PrepareCreateMrResult {
+  repoRoot: string;
+  platform: MrPlatform;
+  cli: "gh" | "glab" | null;
+  remote: string;
+  remoteUrl: string;
+  sourceBranch: string;
+  targetBranch: string;
+  /** 建议的 MR 标题 */
+  title: string;
+  candidates: MrCandidate[];
+  /** 浏览器创建页（CLI 不可用时的回退） */
+  createMrUrl: string | null;
+  messages: string[];
+  /** CLI 未登录或不可用时的说明 */
+  cliError?: string;
+}
+
+export interface CreateMergeRequestOptions {
+  cwd?: string;
+  sourceBranch: string;
+  targetBranch: string;
+  title?: string;
+  body?: string;
+  /** 指派人 + 审核人（同一批用户名，两种角色同时设置） */
+  reviewers?: string[];
+  remote?: string;
+  method?: MrMethod | null;
+  cliPath?: string;
+  token?: string;
+}
+
+export interface CreateMergeRequestResult {
+  platform: MrPlatform;
+  /** 实际使用的通道 */
+  via: "gh" | "glab" | "token" | "browser";
+  url: string | null;
+  sourceBranch: string;
+  targetBranch: string;
+  messages: string[];
+}
+
+function runCmd(
+  cmd: string,
+  args: string[],
+  cwd: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      windowsHide: true,
+      shell: false,
+      env: {
+        ...process.env,
+        GH_PROMPT_DISABLED: "1",
+        GLAB_PROMPT_DISABLED: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (b: Buffer) => {
+      stdout += b.toString("utf8");
+    });
+    child.stderr.on("data", (b: Buffer) => {
+      stderr += b.toString("utf8");
+    });
+    child.on("error", (err) => {
+      resolve({ code: 127, stdout: "", stderr: err.message });
+    });
+    child.on("close", (code) => {
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+/** 规范化 remote URL → https origin + path */
+export function normalizeRemoteWebUrl(remoteUrl: string): string | null {
+  let url = remoteUrl.trim();
+  if (!url) {
+    return null;
+  }
+  if (url.startsWith("git@")) {
+    const m = url.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+    if (!m) {
+      return null;
+    }
+    url = `https://${m[1]}/${m[2]}`;
+  } else if (url.startsWith("ssh://git@")) {
+    url = url.replace(/^ssh:\/\/git@/, "https://").replace(/\.git$/, "");
+  } else {
+    url = url.replace(/\.git$/, "");
+  }
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return null;
+  }
+}
+
+export function detectMrPlatform(remoteUrl: string): MrPlatform {
+  const web = normalizeRemoteWebUrl(remoteUrl);
+  if (!web) {
+    return "unknown";
+  }
+  try {
+    const host = new URL(web).hostname.toLowerCase();
+    return matchHostPlatform(host) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+// 简单内存缓存，避免同一仓库反复探测
+const probeCache = new Map<string, MrPlatform>();
+
+/** 清除探测缓存（测试 / 刷新时用） */
+export function clearProbeCache(): void {
+  probeCache.clear();
+}
+
+/**
+ * 异步探测远程平台：先同步匹配，失败时按「非 github 即 gitlab」处理。
+ * 因为 GitHub 没有自建实例，自定义域名几乎都是 GitLab 等其他自建平台。
+ */
+export async function probePlatform(
+  remoteUrl: string,
+  _gitlabToken?: string,
+): Promise<MrPlatform> {
+  const sync = detectMrPlatform(remoteUrl);
+  if (sync !== "unknown") {
+    return sync;
+  }
+
+  const cached = probeCache.get(remoteUrl);
+  if (cached) {
+    return cached;
+  }
+
+  // 同步阶段 unknown 说明无法解析 URL（如空字符串），此时仍返回 unknown
+  const web = normalizeRemoteWebUrl(remoteUrl);
+  if (!web) {
+    setProbeCache(remoteUrl, "unknown");
+    return "unknown";
+  }
+
+  try {
+    const host = new URL(web).hostname.toLowerCase();
+    // 非 github 域名统一视为 gitlab
+    if (host === "github.com" || host.endsWith(".github.com")) {
+      setProbeCache(remoteUrl, "github");
+      return "github";
+    }
+    setProbeCache(remoteUrl, "gitlab");
+    return "gitlab";
+  } catch {
+    setProbeCache(remoteUrl, "unknown");
+    return "unknown";
+  }
+}
+
+function setProbeCache(key: string, value: MrPlatform): void {
+  probeCache.set(key, value);
+  setTimeout(() => {
+    if (probeCache.get(key) === value) {
+      probeCache.delete(key);
+    }
+  }, 5 * 60 * 1000);
+}
+
+function parseOwnerRepo(remoteUrl: string): { owner: string; repo: string; projectPath: string } | null {
+  const web = normalizeRemoteWebUrl(remoteUrl);
+  if (!web) {
+    return null;
+  }
+  try {
+    const path = new URL(web).pathname.replace(/^\/+|\/+$/g, "");
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length < 2) {
+      return null;
+    }
+    const repo = parts[parts.length - 1]!;
+    const owner = parts[parts.length - 2]!;
+    return { owner, repo, projectPath: path };
+  } catch {
+    return null;
+  }
+}
+
+async function remoteUrl(cwd: string, remote: string): Promise<string> {
+  const r = await runGit(cwd, ["remote", "get-url", remote], { allowFail: true });
+  return r.stdout.trim();
+}
+
+async function localBranchExists(cwd: string, name: string): Promise<boolean> {
+  const r = await runGit(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${name}`], {
+    allowFail: true,
+  });
+  return r.code === 0;
+}
+
+async function remoteBranchExists(
+  cwd: string,
+  remote: string,
+  name: string,
+): Promise<boolean> {
+  const r = await runGit(
+    cwd,
+    ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${name}`],
+    { allowFail: true },
+  );
+  return r.code === 0;
+}
+
+async function resolveDefaultSource(
+  cwd: string,
+  into: string,
+  from: string,
+  remote: string,
+  explicit?: string,
+  remotes: string[] = ["origin"],
+): Promise<string> {
+  if (explicit?.trim()) {
+    return branchNameForMr(explicit, remotes);
+  }
+  const temp = defaultTempBranchName(into, from);
+  if (
+    (await localBranchExists(cwd, temp)) ||
+    (await remoteBranchExists(cwd, remote, temp))
+  ) {
+    return temp;
+  }
+  return branchNameForMr(from, remotes);
+}
+
+async function checkGh(
+  cwd: string,
+  cliPath = "gh",
+): Promise<{ ok: boolean; error?: string }> {
+  const ver = await runCmd(cliPath, ["--version"], cwd);
+  if (ver.code !== 0) {
+    return { ok: false, error: "未找到 gh CLI，请安装 GitHub CLI：https://cli.github.com/" };
+  }
+  const auth = await runCmd(cliPath, ["auth", "status"], cwd);
+  if (auth.code !== 0) {
+    return {
+      ok: false,
+      error: "gh 未登录。请在终端执行：gh auth login（扩展目录 CLI 同样需要登录一次）",
+    };
+  }
+  return { ok: true };
+}
+
+async function checkGlab(
+  cwd: string,
+  cliPath = "glab",
+): Promise<{ ok: boolean; error?: string }> {
+  const ver = await runCmd(cliPath, ["--version"], cwd);
+  if (ver.code !== 0) {
+    return {
+      ok: false,
+      error: "未找到 glab CLI，请安装 GitLab CLI：https://gitlab.com/gitlab-org/cli",
+    };
+  }
+  const auth = await runCmd(cliPath, ["auth", "status"], cwd);
+  if (auth.code !== 0) {
+    return {
+      ok: false,
+      error: "glab 未登录。请在终端执行：glab auth login（扩展目录 CLI 同样需要登录一次）",
+    };
+  }
+  return { ok: true };
+}
+
+async function listGithubCandidatesByToken(
+  remoteUrlStr: string,
+  token: string,
+): Promise<MrCandidate[]> {
+  const parsed = parseOwnerRepo(remoteUrlStr);
+  if (!parsed) {
+    return [];
+  }
+  const res = await fetch(
+    `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/collaborators?per_page=100`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "git-insight",
+      },
+    },
+  );
+  if (!res.ok) {
+    return [];
+  }
+  const arr = (await res.json()) as Array<{
+    login?: string;
+    role_name?: string;
+    permissions?: { admin?: boolean; maintain?: boolean; push?: boolean };
+  }>;
+  return arr
+    .filter((u) => u.login)
+    .map((u) => {
+      let role = u.role_name;
+      if (!role && u.permissions?.admin) {
+        role = "admin";
+      } else if (!role && u.permissions?.maintain) {
+        role = "maintain";
+      } else if (!role && u.permissions?.push) {
+        role = "write";
+      }
+      return { username: u.login!, role };
+    })
+    .filter((c) => isGithubMergeRole(c.role));
+}
+
+async function listGitlabCandidatesByToken(
+  remoteUrlStr: string,
+  token: string,
+): Promise<MrCandidate[]> {
+  const parsed = parseOwnerRepo(remoteUrlStr);
+  if (!parsed) {
+    return [];
+  }
+  const web = normalizeRemoteWebUrl(remoteUrlStr);
+  if (!web) {
+    return [];
+  }
+  const origin = new URL(web).origin;
+  const project = encodeURIComponent(parsed.projectPath);
+  const res = await fetch(`${origin}/api/v4/projects/${project}/members/all?per_page=100`, {
+    headers: {
+      "PRIVATE-TOKEN": token,
+      "User-Agent": "git-insight",
+    },
+  });
+  if (!res.ok) {
+    return [];
+  }
+  const arr = (await res.json()) as Array<{
+    username?: string;
+    name?: string;
+    access_level?: number;
+  }>;
+  return arr
+    .filter((u) => u.username && isGitlabMaintainerPlus(u.access_level))
+    .map((u) => ({
+      username: u.username!,
+      name: u.name,
+      role: accessLevelLabel(u.access_level),
+    }));
+}
+
+async function createGithubPrByToken(options: {
+  remoteUrl: string;
+  token: string;
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  body: string;
+  /** 同一批人：指派人 + 审核人 */
+  reviewers: string[];
+}): Promise<string | null> {
+  const parsed = parseOwnerRepo(options.remoteUrl);
+  if (!parsed) {
+    throw new GitError("无法解析 GitHub 仓库路径", { code: "BAD_REMOTE" });
+  }
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${options.token}`,
+    "User-Agent": "git-insight",
+    "Content-Type": "application/json",
+  };
+  const res = await fetch(
+    `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: options.title,
+        body: options.body,
+        head: options.sourceBranch,
+        base: options.targetBranch,
+      }),
+    },
+  );
+  const json = (await res.json()) as {
+    html_url?: string;
+    number?: number;
+    message?: string;
+    errors?: Array<{ message?: string; field?: string; code?: string }>;
+  };
+  if (!res.ok) {
+    const detail = (json.errors ?? [])
+      .map((e) => e.message || [e.field, e.code].filter(Boolean).join(": "))
+      .filter(Boolean)
+      .join("; ");
+    const hint =
+      detail || json.message || String(res.status);
+    throw new GitError(`GitHub API 创建 PR 失败：${hint}`, {
+      code: "CREATE_MR_FAILED",
+    });
+  }
+  if (options.reviewers.length && json.number) {
+    await fetch(
+      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls/${json.number}/requested_reviewers`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ reviewers: options.reviewers }),
+      },
+    );
+    // PR 与 Issue 共用 assignees 接口
+    await fetch(
+      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${json.number}/assignees`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ assignees: options.reviewers }),
+      },
+    );
+  }
+  return json.html_url ?? null;
+}
+
+/** GitLab username → user id；查不到的记入 missing */
+async function resolveGitlabUserIds(
+  origin: string,
+  token: string,
+  usernames: string[],
+): Promise<{ ids: number[]; missing: string[] }> {
+  const ids: number[] = [];
+  const missing: string[] = [];
+  for (const username of usernames) {
+    const res = await fetch(
+      `${origin}/api/v4/users?username=${encodeURIComponent(username)}`,
+      {
+        headers: {
+          "PRIVATE-TOKEN": token,
+          "User-Agent": "git-insight",
+        },
+      },
+    );
+    if (!res.ok) {
+      missing.push(username);
+      continue;
+    }
+    const arr = (await res.json()) as Array<{ id?: number; username?: string }>;
+    const hit =
+      arr.find((u) => u.username?.toLowerCase() === username.toLowerCase()) ?? arr[0];
+    if (hit?.id != null) {
+      ids.push(hit.id);
+    } else {
+      missing.push(username);
+    }
+  }
+  return { ids, missing };
+}
+
+async function createGitlabMrByToken(options: {
+  remoteUrl: string;
+  token: string;
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  body: string;
+  /** 同一批人：指派人 + 审核人 */
+  reviewers: string[];
+}): Promise<{ url: string | null; warnings: string[] }> {
+  const parsed = parseOwnerRepo(options.remoteUrl);
+  const web = normalizeRemoteWebUrl(options.remoteUrl);
+  if (!parsed || !web) {
+    throw new GitError("无法解析 GitLab 仓库路径", { code: "BAD_REMOTE" });
+  }
+  const origin = new URL(web).origin;
+  const project = encodeURIComponent(parsed.projectPath);
+  const warnings: string[] = [];
+  let userIds: number[] = [];
+  if (options.reviewers.length) {
+    const resolved = await resolveGitlabUserIds(origin, options.token, options.reviewers);
+    userIds = resolved.ids;
+    if (resolved.missing.length) {
+      warnings.push(`未能解析用户 id，已跳过：${resolved.missing.join(", ")}`);
+    }
+  }
+  const res = await fetch(`${origin}/api/v4/projects/${project}/merge_requests`, {
+    method: "POST",
+    headers: {
+      "PRIVATE-TOKEN": options.token,
+      "Content-Type": "application/json",
+      "User-Agent": "git-insight",
+    },
+    body: JSON.stringify({
+      source_branch: options.sourceBranch,
+      target_branch: options.targetBranch,
+      title: options.title,
+      description: options.body,
+      assignee_ids: userIds,
+      reviewer_ids: userIds,
+    }),
+  });
+  const json = (await res.json()) as {
+    web_url?: string;
+    message?: string | string[];
+  };
+  if (!res.ok) {
+    const msg = Array.isArray(json.message) ? json.message.join("; ") : json.message;
+    throw new GitError(`GitLab API 创建 MR 失败：${msg || res.status}`, {
+      code: "CREATE_MR_FAILED",
+    });
+  }
+  return { url: json.web_url ?? null, warnings };
+}
+
+async function listGithubCandidates(
+  cwd: string,
+  remoteUrlStr: string,
+  cliPath = "gh",
+): Promise<MrCandidate[]> {
+  const parsed = parseOwnerRepo(remoteUrlStr);
+  if (!parsed) {
+    return [];
+  }
+  const { owner, repo } = parsed;
+  const api = await runCmd(
+    cliPath,
+    [
+      "api",
+      `repos/${owner}/${repo}/collaborators?per_page=100`,
+      "--jq",
+      '.[] | select(.permissions.admin == true or .permissions.maintain == true or .role_name == "admin" or .role_name == "maintain") | {username: .login, name: (.name // .login), role: (if .role_name then .role_name elif .permissions.admin then "admin" else "maintain" end)}',
+    ],
+    cwd,
+  );
+  if (api.code !== 0) {
+    return [];
+  }
+  return parseJsonLinesOrArray(api.stdout).filter((c) => isGithubMergeRole(c.role));
+}
+
+async function listGitlabCandidates(
+  cwd: string,
+  remoteUrlStr: string,
+  cliPath = "glab",
+): Promise<MrCandidate[]> {
+  const parsed = parseOwnerRepo(remoteUrlStr);
+  if (!parsed) {
+    return [];
+  }
+  const project = encodeURIComponent(parsed.projectPath);
+  const api = await runCmd(
+    cliPath,
+    ["api", `projects/${project}/members/all?per_page=100`],
+    cwd,
+  );
+  if (api.code !== 0) {
+    return [];
+  }
+  try {
+    const arr = JSON.parse(api.stdout) as Array<{
+      username?: string;
+      name?: string;
+      access_level?: number;
+    }>;
+    return arr
+      .filter((u) => u.username && isGitlabMaintainerPlus(u.access_level))
+      .map((u) => ({
+        username: u.username!,
+        name: u.name,
+        role: accessLevelLabel(u.access_level),
+      }))
+      .sort((a, b) => a.username.localeCompare(b.username));
+  } catch {
+    return [];
+  }
+}
+
+function accessLevelLabel(level?: number): string | undefined {
+  if (level == null) {
+    return undefined;
+  }
+  if (level >= 50) {
+    return "owner";
+  }
+  if (level >= 40) {
+    return "maintainer";
+  }
+  if (level >= 30) {
+    return "developer";
+  }
+  if (level >= 20) {
+    return "reporter";
+  }
+  return `level:${level}`;
+}
+
+/** GitLab：仅 Maintainer / Owner（可合保护分支的一层） */
+function isGitlabMaintainerPlus(level?: number): boolean {
+  return (level ?? 0) >= 40;
+}
+
+function isGithubMergeRole(role?: string): boolean {
+  const r = (role || "").toLowerCase();
+  return r === "admin" || r === "maintain";
+}
+
+function parseJsonLinesOrArray(text: string): MrCandidate[] {
+  const t = text.trim();
+  if (!t) {
+    return [];
+  }
+  try {
+    if (t.startsWith("[")) {
+      const arr = JSON.parse(t) as MrCandidate[];
+      return arr.filter((x) => x.username);
+    }
+  } catch {
+    // jq 可能逐行输出对象
+  }
+  const out: MrCandidate[] = [];
+  for (const line of t.split("\n")) {
+    const s = line.trim();
+    if (!s) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(s) as MrCandidate;
+      if (obj.username) {
+        out.push(obj);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return out;
+}
+
+/**
+ * 准备创建 MR：识别平台、检查 CLI/Token、拉取候选评审人、给出默认源/目标分支。
+ */
+export async function prepareCreateMr(
+  options: PrepareCreateMrOptions,
+): Promise<PrepareCreateMrResult> {
+  const repoRoot = await resolveRepoRoot(options.cwd);
+  const remote = options.remote ?? "origin";
+  const into = options.into.trim();
+  const from = options.from.trim();
+  if (!into || !from) {
+    throw new GitError("into / from 不能为空", { code: "USAGE" });
+  }
+
+  const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
+  const url = await remoteUrl(repoRoot, remote);
+  let platform = detectMrPlatform(url);
+  if (platform === "unknown") {
+    platform = await probePlatform(url);
+  }
+  const targetBranch = branchNameForMr(into, remotes);
+  const sourceBranch = await resolveDefaultSource(
+    repoRoot,
+    into,
+    from,
+    remote,
+    options.sourceBranch,
+    remotes,
+  );
+  if (sourceBranch === targetBranch) {
+    throw new GitError(
+      `源/目标是同一分支（${targetBranch}），请用 git push / pull 自行同步，此处不申请 MR。`,
+      { code: "SAME_BRANCH_MR" },
+    );
+  }
+  const title = `Merge ${sourceBranch} into ${targetBranch}`;
+  const createMrUrl = buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
+  const messages: string[] = [];
+  const method = options.method ?? null;
+
+  let cli: "gh" | "glab" | null = null;
+  let cliError: string | undefined;
+  let candidates: MrCandidate[] = [];
+
+  if (method === "browser") {
+    messages.push("已选择浏览器创建页方式");
+    return {
+      repoRoot,
+      platform,
+      cli: null,
+      remote,
+      remoteUrl: url,
+      sourceBranch,
+      targetBranch,
+      title,
+      candidates: [],
+      createMrUrl,
+      messages,
+    };
+  }
+
+  if (method === "token" && options.token?.trim()) {
+    const tokenChannel = "token";
+    if (options.skipCandidates) {
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli: null,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, tokenChannel);
+    if (cached) {
+      candidates = cached;
+      messages.push(`已复用缓存的 ${candidates.length} 位 Token API 协作者（5 分钟内有效）`);
+    } else {
+      if (platform === "github") {
+        candidates = await listGithubCandidatesByToken(url, options.token.trim());
+        messages.push(`已通过 Token API 加载 ${candidates.length} 位协作者`);
+      } else if (platform === "gitlab") {
+        candidates = await listGitlabCandidatesByToken(url, options.token.trim());
+        messages.push(`已通过 Token API 加载 ${candidates.length} 位成员`);
+      }
+      if (candidates.length > 0) {
+        putCachedCandidates(repoRoot, url, tokenChannel, candidates);
+      }
+    }
+    return {
+      repoRoot,
+      platform,
+      cli: null,
+      remote,
+      remoteUrl: url,
+      sourceBranch,
+      targetBranch,
+      title,
+      candidates,
+      createMrUrl,
+      messages,
+    };
+  }
+
+  const ghBin = (platform === "github" || platform === "unknown") ? options.cliPath || "gh" : "gh";
+  const glabBin = platform === "gitlab" ? options.cliPath || "glab" : "glab";
+
+  if (platform === "github" || platform === "unknown") {
+    const channel = `gh:${ghBin}`;
+    if (options.skipCandidates) {
+      const check = await checkGh(repoRoot, ghBin);
+      cli = check.ok ? "gh" : null;
+      cliError = check.ok ? undefined : (check.error ?? "gh 不可用");
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+        cliError,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, channel);
+    const check = await checkGh(repoRoot, ghBin);
+    if (check.ok) {
+      cli = "gh";
+      if (cached) {
+        candidates = cached;
+        messages.push(`已复用缓存的 ${candidates.length} 位协作者/可指派用户（5 分钟内有效）`);
+      } else {
+        candidates = await listGithubCandidates(repoRoot, url, ghBin);
+        messages.push(`已通过 gh 加载 ${candidates.length} 位协作者/可指派用户`);
+        if (candidates.length > 0) {
+          putCachedCandidates(repoRoot, url, channel, candidates);
+        }
+      }
+    } else {
+      cliError = check.error;
+      messages.push(check.error ?? "gh 不可用");
+    }
+  } else if (platform === "gitlab") {
+    const channel = `glab:${glabBin}`;
+    if (options.skipCandidates) {
+      const check = await checkGlab(repoRoot, glabBin);
+      cli = check.ok ? "glab" : null;
+      cliError = check.ok ? undefined : (check.error ?? "glab 不可用");
+      messages.push("已跳过候选人拉取（skipCandidates=true）");
+      return {
+        repoRoot,
+        platform,
+        cli,
+        remote,
+        remoteUrl: url,
+        sourceBranch,
+        targetBranch,
+        title,
+        candidates: [],
+        createMrUrl,
+        messages,
+        cliError,
+      };
+    }
+    const cached = getCachedCandidates(repoRoot, url, channel);
+    const check = await checkGlab(repoRoot, glabBin);
+    if (check.ok) {
+      cli = "glab";
+      if (cached) {
+        candidates = cached;
+        messages.push(`已复用缓存的 ${candidates.length} 位项目成员（5 分钟内有效）`);
+      } else {
+        candidates = await listGitlabCandidates(repoRoot, url, glabBin);
+        messages.push(`已通过 glab 加载 ${candidates.length} 位项目成员`);
+        if (candidates.length > 0) {
+          putCachedCandidates(repoRoot, url, channel, candidates);
+        }
+      }
+    } else {
+      cliError = check.error;
+      messages.push(check.error ?? "glab 不可用");
+    }
+  } else {
+    cliError = "无法识别远程平台（非 GitHub / GitLab）";
+    messages.push(cliError);
+  }
+
+  return {
+    repoRoot,
+    platform,
+    cli,
+    remote,
+    remoteUrl: url,
+    sourceBranch,
+    targetBranch,
+    title,
+    candidates,
+    createMrUrl,
+    messages,
+    cliError,
+  };
+}
+
+/**
+ * 按配置方式创建 PR/MR（CLI / 扩展目录 CLI / Token / 浏览器仅返回链接）。
+ */
+export async function createMergeRequest(
+  options: CreateMergeRequestOptions,
+): Promise<CreateMergeRequestResult> {
+  const repoRoot = await resolveRepoRoot(options.cwd);
+  const remote = options.remote ?? "origin";
+  const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
+  const url = await remoteUrl(repoRoot, remote);
+  let platform = detectMrPlatform(url);
+  if (platform === "unknown") {
+    platform = await probePlatform(url);
+  }
+  const sourceBranch = branchNameForMr(options.sourceBranch, remotes);
+  const targetBranch = branchNameForMr(options.targetBranch, remotes);
+  if (!sourceBranch || !targetBranch) {
+    throw new GitError("sourceBranch / targetBranch 不能为空", { code: "USAGE" });
+  }
+  if (sourceBranch === targetBranch) {
+    throw new GitError(
+      `源/目标是同一分支（${targetBranch}），请用 git push / pull 自行同步，此处不申请 MR。`,
+      { code: "SAME_BRANCH_MR" },
+    );
+  }
+  const title =
+    options.title?.trim() || `Merge ${sourceBranch} into ${targetBranch}`;
+  const body = options.body?.trim() || "Created via Git Insight.";
+  const reviewers = [...new Set((options.reviewers ?? []).map((r) => r.trim()).filter(Boolean))];
+  const messages: string[] = [];
+  const method = options.method ?? "cli";
+
+  if (method === "browser") {
+    const link = buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
+    messages.push("浏览器创建页模式：请在打开的页面中提交 MR/PR");
+    return {
+      platform,
+      via: "browser",
+      url: link,
+      sourceBranch,
+      targetBranch,
+      messages,
+    };
+  }
+
+  if (method === "token") {
+    const token = options.token?.trim();
+    if (!token) {
+      throw new GitError("未配置 Token，请在「Git 配置」中填写并保存", {
+        code: "NO_TOKEN",
+      });
+    }
+    if (platform === "github" || platform === "unknown") {
+      // unknown 时优先尝试 GitHub token（GitLab token 会走下面 glpat- 格式校验）
+      if (options.token?.trim().startsWith("glpat-")) {
+        // 是 GitLab token 格式，走 GitLab 路径
+        const created = await createGitlabMrByToken({
+          remoteUrl: url,
+          token,
+          sourceBranch,
+          targetBranch,
+          title,
+          body,
+          reviewers,
+        });
+        messages.push("已用 GitLab Token API 创建 MR");
+        messages.push(...created.warnings);
+        return {
+          platform,
+          via: "token",
+          url: created.url,
+          sourceBranch,
+          targetBranch,
+          messages,
+        };
+      }
+      const prUrl = await createGithubPrByToken({
+        remoteUrl: url,
+        token,
+        sourceBranch,
+        targetBranch,
+        title,
+        body,
+        reviewers,
+      });
+      messages.push("已用 GitHub Token API 创建 PR");
+      return {
+        platform,
+        via: "token",
+        url: prUrl,
+        sourceBranch,
+        targetBranch,
+        messages,
+      };
+    }
+    if (platform === "gitlab") {
+      const created = await createGitlabMrByToken({
+        remoteUrl: url,
+        token,
+        sourceBranch,
+        targetBranch,
+        title,
+        body,
+        reviewers,
+      });
+      messages.push("已用 GitLab Token API 创建 MR");
+      messages.push(...created.warnings);
+      return {
+        platform,
+        via: "token",
+        url: created.url,
+        sourceBranch,
+        targetBranch,
+        messages,
+      };
+    }
+    throw new GitError("无法识别远程平台", { code: "UNKNOWN_PLATFORM" });
+  }
+
+  // cli | download-cli
+  if (platform === "github" || platform === "unknown") {
+    const bin = options.cliPath || "gh";
+    const check = await checkGh(repoRoot, bin);
+    if (!check.ok) {
+      throw new GitError(check.error ?? "gh 不可用", { code: "CLI_UNAVAILABLE" });
+    }
+    const args = [
+      "pr",
+      "create",
+      "--base",
+      targetBranch,
+      "--head",
+      sourceBranch,
+      "--title",
+      title,
+      "--body",
+      body,
+    ];
+    if (reviewers.length > 0) {
+      // 同一批人：指派人（邮件提醒）+ 审核人
+      args.push("--assignee", reviewers.join(","));
+      args.push("--reviewer", reviewers.join(","));
+    }
+    const run = await runCmd(bin, args, repoRoot);
+    if (run.code !== 0) {
+      throw new GitError(
+        `gh pr create 失败：${(run.stderr || run.stdout).trim()}`,
+        { code: "CREATE_MR_FAILED", stderr: run.stderr, stdout: run.stdout },
+      );
+    }
+    const prUrl = (run.stdout.trim().split("\n").filter(Boolean).pop() ?? "").trim();
+    messages.push(`已用 gh 创建 PR`);
+    return {
+      platform,
+      via: "gh",
+      url: prUrl || buildCreateMrUrl(url, sourceBranch, targetBranch, platform),
+      sourceBranch,
+      targetBranch,
+      messages,
+    };
+  }
+
+  if (platform === "gitlab") {
+    const bin = options.cliPath || "glab";
+    const check = await checkGlab(repoRoot, bin);
+    if (!check.ok) {
+      throw new GitError(check.error ?? "glab 不可用", { code: "CLI_UNAVAILABLE" });
+    }
+    const args = [
+      "mr",
+      "create",
+      "--source-branch",
+      sourceBranch,
+      "--target-branch",
+      targetBranch,
+      "--title",
+      title,
+      "--description",
+      body,
+      "--yes",
+    ];
+    for (const r of reviewers) {
+      // 同一批人：指派人（邮件提醒）+ 审核人
+      args.push("--assignee", r);
+      args.push("--reviewer", r);
+    }
+    const run = await runCmd(bin, args, repoRoot);
+    if (run.code !== 0) {
+      throw new GitError(
+        `glab mr create 失败：${(run.stderr || run.stdout).trim()}`,
+        { code: "CREATE_MR_FAILED", stderr: run.stderr, stdout: run.stdout },
+      );
+    }
+    const mrUrl =
+      run.stdout.match(/https?:\/\/\S+/)?.[0] ??
+      buildCreateMrUrl(url, sourceBranch, targetBranch, platform);
+    messages.push(`已用 glab 创建 MR`);
+    return {
+      platform,
+      via: "glab",
+      url: mrUrl,
+      sourceBranch,
+      targetBranch,
+      messages,
+    };
+  }
+
+  throw new GitError("无法识别远程平台，请确认 origin 为 GitHub 或 GitLab", {
+    code: "UNKNOWN_PLATFORM",
+  });
+}

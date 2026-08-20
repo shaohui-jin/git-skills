@@ -1,20 +1,104 @@
-import {
-  DEMO_GRAPH,
-  DEMO_GRAPH_REPORT,
-  DEMO_PREVIEW,
-  DEMO_PREVIEW_REPORT,
-  demoWorkspaceMessage,
-} from "./demoFixtures";
-
 export type WebviewRequest =
   | { type: "ready" }
   | { type: "refreshWorkspace" }
   | { type: "setCwd"; path: string }
   | { type: "pickFolder" }
   | { type: "fetch"; remote?: string }
-  | { type: "graph"; into?: string; from?: string; noFetch?: boolean }
+  | {
+      type: "graph";
+      into?: string;
+      from?: string;
+      noFetch?: boolean;
+      maxNodes?: number;
+    }
   | { type: "preview"; into: string; from: string; noFetch?: boolean }
-  | { type: "blame"; into: string; from: string; noFetch?: boolean };
+  | { type: "blame"; into: string; from: string; noFetch?: boolean }
+  | { type: "survey"; intos: string[]; froms: string[]; noFetch?: boolean }
+  | { type: "mergeOrder"; into: string; branches: string[]; noFetch?: boolean }
+  | {
+      type: "applyResolve";
+      into: string;
+      from: string;
+      files: Array<{ path: string; resolvedContent: string }>;
+      remote?: string;
+      push?: boolean;
+      tempBranch?: string;
+    }
+  | {
+      type: "prepareCreateMr";
+      into: string;
+      from: string;
+      sourceBranch?: string;
+      remote?: string;
+    }
+  | {
+      type: "createMr";
+      sourceBranch: string;
+      targetBranch: string;
+      title?: string;
+      body?: string;
+      /** 指派人 + 审核人（同一批用户名） */
+      reviewers?: string[];
+      remote?: string;
+    }
+  | { type: "openExternal"; url: string }
+  | { type: "getGitConfig" }
+  | {
+      type: "saveGitConfig";
+      config: {
+        mrMethod: "cli" | "download-cli" | "token" | "browser" | null;
+        githubToken?: string;
+        gitlabToken?: string;
+        aiApiBaseUrl?: string;
+        aiApiKey?: string;
+        aiModel?: string;
+      };
+    }
+  | {
+      type: "validateToken";
+      platform: "github" | "gitlab";
+      githubToken?: string;
+      gitlabToken?: string;
+      persist?: boolean;
+      mrMethod?: "cli" | "download-cli" | "token" | "browser" | null;
+    }
+  | { type: "downloadCli"; kind: "gh" | "glab" }
+  | {
+      type: "cliAuthLogin";
+      scope: "system" | "bundled";
+      kind: "gh" | "glab";
+    }
+  | { type: "ping"; nonce: string }
+  | {
+      type: "aiResolveConflicts";
+      into: string;
+      from: string;
+      rules: Array<"preferMine" | "preferOnline" | "newerWins" | "mergeWhenPossible">;
+      extraNotes: string;
+      hunks: Array<{
+        id: string;
+        path: string;
+        leftText: string;
+        rightText: string;
+        baseText: string;
+        oursCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+        theirsCommits: Array<{
+          sha: string;
+          author: string;
+          message?: string;
+          time?: number;
+          authorEmail?: string;
+        }>;
+      }>;
+    }
+  | { type: "aiResolveCancelBridge" }
+  | { type: "aiResolveCopyPrompt" };
 
 export interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -25,88 +109,11 @@ export interface VsCodeApi {
 declare function acquireVsCodeApi(): VsCodeApi;
 
 declare const __GIT_INSIGHT_PREVIEW__: boolean | undefined;
-declare const __GIT_INSIGHT_DEMO__: boolean | undefined;
 
 let api: VsCodeApi | undefined;
 
 function dispatchHostMessage(data: unknown): void {
   window.dispatchEvent(new MessageEvent("message", { data }));
-}
-
-function createDemoBridge(): VsCodeApi {
-  const reply = (payload: unknown) => {
-    // 下一帧派发，模拟异步宿主
-    queueMicrotask(() => dispatchHostMessage(payload));
-  };
-
-  return {
-    postMessage(message) {
-      if (message.type === "ready" || message.type === "refreshWorkspace") {
-        reply(demoWorkspaceMessage());
-        reply({ type: "busy", busy: true, label: "加载演示分支图…" });
-        reply({
-          type: "graphResult",
-          data: DEMO_GRAPH,
-          report: DEMO_GRAPH_REPORT,
-          mermaid: "",
-        });
-        reply({ type: "busy", busy: false });
-        return;
-      }
-      if (message.type === "setCwd" || message.type === "pickFolder") {
-        reply({
-          type: "error",
-          message:
-            "GitHub Pages 为静态演示，无法打开本机仓库。请本地运行 pnpm preview。",
-          code: "DEMO_READONLY",
-        });
-        reply(demoWorkspaceMessage());
-        return;
-      }
-      if (message.type === "fetch") {
-        reply({
-          type: "fetchResult",
-          data: {
-            repoRoot: "(演示仓库)",
-            remote: "origin",
-            ok: true,
-            stdout: "(demo) skipped",
-            stderr: "",
-          },
-          report: "演示模式：未执行真实 fetch。",
-        });
-        return;
-      }
-      if (message.type === "graph") {
-        reply({ type: "busy", busy: true, label: "加载演示分支图…" });
-        reply({
-          type: "graphResult",
-          data: DEMO_GRAPH,
-          report: DEMO_GRAPH_REPORT,
-          mermaid: "",
-        });
-        reply({ type: "busy", busy: false });
-        return;
-      }
-      if (message.type === "preview" || message.type === "blame") {
-        reply({ type: "busy", busy: true, label: "合并预演（演示）…" });
-        const data = {
-          ...DEMO_PREVIEW,
-          into: message.into || DEMO_PREVIEW.into,
-          from: message.from || DEMO_PREVIEW.from,
-        };
-        reply({
-          type: "previewResult",
-          data,
-          report: DEMO_PREVIEW_REPORT,
-          mermaid: "",
-        });
-        reply({ type: "busy", busy: false });
-      }
-    },
-    getState: () => undefined,
-    setState: () => undefined,
-  };
 }
 
 function createBrowserBridge(): VsCodeApi {
@@ -165,24 +172,8 @@ function createBrowserBridge(): VsCodeApi {
   };
 }
 
-function isDemoBuild(): boolean {
-  if (typeof __GIT_INSIGHT_DEMO__ !== "undefined" && __GIT_INSIGHT_DEMO__) {
-    return true;
-  }
-  try {
-    return new URLSearchParams(location.search).get("demo") === "1";
-  } catch {
-    return false;
-  }
-}
-
 export function getVsCodeApi(): VsCodeApi {
   if (api) {
-    return api;
-  }
-
-  if (isDemoBuild()) {
-    api = createDemoBridge();
     return api;
   }
 
@@ -204,8 +195,4 @@ export function getVsCodeApi(): VsCodeApi {
 
 export function isPreviewMode(): boolean {
   return typeof __GIT_INSIGHT_PREVIEW__ !== "undefined" && !!__GIT_INSIGHT_PREVIEW__;
-}
-
-export function isDemoMode(): boolean {
-  return isDemoBuild();
 }

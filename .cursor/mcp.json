@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "git-insight": {
+      "command": "node",
+      "args": ["packages/mcp/dist/index.js"]
+    }
+  }
+}

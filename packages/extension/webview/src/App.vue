@@ -1,45 +1,585 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { isSameBranchForMr as coreIsSameBranchForMr } from "@shaohui_jin/git-insight-core/merge/branchName";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
+import ConflictResolvePanel from "./ConflictResolvePanel.vue";
+import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
+import GitConfigPanel from "./GitConfigPanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
+import MergeMatrix from "./MergeMatrix.vue";
+import type {
+  AiResolveHunkResult,
+  AiResolveRequestPayload,
+} from "./conflict/aiResolveTypes";
+import type { AiBridgeView } from "./AiResolveDialog.vue";
+import { normalizeBranches, type BranchOption } from "./graph/branchTree";
+import { overviewReport, pathReport } from "./graph/branchPathReport";
+import { applyTheme, initTheme } from "./theme";
 import type {
   BranchGraph,
+  CliStatusPayload,
   ConflictBlameResult,
-  ConflictFile,
-  ConflictHunk,
+  GitInsightConfigView,
   HostMessage,
+  MatrixTrail,
+  MergeSurveyResult,
+  PairProgress,
+  SuggestOrderResult,
   TabId,
+  TokenValidateView,
 } from "./types";
-import { getVsCodeApi, isDemoMode } from "./vscode";
+import { getVsCodeApi } from "./vscode";
+
+/** 浏览器 / MCP 深链：?into=&from=&cwd=&tab=preview&autoPreview=1 */
+interface UrlSeed {
+  into: string;
+  from: string;
+  cwd: string;
+  tab: TabId | "";
+  autoPreview: boolean;
+  /** setCwd 已发出、等 workspace 再种分支 */
+  awaitingCwd?: boolean;
+}
+
+function parseUrlSeed(): UrlSeed | null {
+  if (typeof window === "undefined" || !window.location.search) {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (!params.get("into") && !params.get("from") && !params.get("cwd") && !params.get("tab")) {
+    return null;
+  }
+  const tabRaw = params.get("tab")?.trim() ?? "";
+  const tab: TabId | "" =
+    tabRaw === "preview" || tabRaw === "graph" || tabRaw === "config" ? tabRaw : "";
+  return {
+    into: params.get("into")?.trim() ?? "",
+    from: params.get("from")?.trim() ?? "",
+    cwd: params.get("cwd")?.trim() ?? "",
+    tab,
+    autoPreview: params.get("autoPreview") !== "0",
+  };
+}
+
+const urlSeedPending = ref<UrlSeed | null>(parseUrlSeed());
+
+function applyUrlSeed(workspaceError?: string | null): void {
+  const seed = urlSeedPending.value;
+  if (!seed) {
+    return;
+  }
+
+  if (seed.cwd && cwd.value !== seed.cwd) {
+    if (workspaceError && seed.awaitingCwd) {
+      urlSeedPending.value = null;
+      return;
+    }
+    if (!seed.awaitingCwd) {
+      seed.awaitingCwd = true;
+      vscode.postMessage({ type: "setCwd", path: seed.cwd });
+    }
+    return;
+  }
+
+  if (seed.tab) {
+    tab.value = seed.tab;
+  } else if (seed.into || seed.from) {
+    tab.value = "preview";
+  }
+  if (seed.into) {
+    into.value = seed.into;
+  }
+  if (seed.from) {
+    from.value = seed.from;
+  }
+
+  const shouldPreview =
+    seed.autoPreview && into.value && from.value && !previewBlockReason.value;
+  urlSeedPending.value = null;
+
+  if (shouldPreview) {
+    setTimeout(() => {
+      if (!busy.value && into.value && from.value && !previewBlockReason.value) {
+        runPreview();
+      }
+    }, 400);
+  } else if (seed.into || seed.from) {
+    status.value = `已从 URL 种入分支：${into.value || "?"} ← ${from.value || "?"}`;
+  }
+}
 
 function short(sha: string): string {
   return sha.slice(0, 7);
 }
 
-function fileHunks(f: ConflictFile, all: ConflictHunk[]): ConflictHunk[] {
-  return f.hunks.length > 0 ? f.hunks : all.filter((h) => h.path === f.path);
+/**
+ * 规范化后同名（master ↔ origin/master）：不走本工具，自行 push/pull。
+ * 判定逻辑与宿主共用 core 的实现，避免两侧各写一份后悄悄漂移。
+ */
+function isSameBranchForMr(intoRef: string, fromRef: string): boolean {
+  const remotes = (cliStatus.value?.remotes ?? []).map((r) => r.name).filter(Boolean);
+  return coreIsSameBranchForMr(intoRef, fromRef, remotes);
+}
+
+function preferRemoteInto(list: BranchOption[]): string {
+  const remotes = list.filter((b) => b.remote);
+  const prefer =
+    remotes.find((b) => b.name === "master") ??
+    remotes.find((b) => b.name === "main") ??
+    remotes.find((b) => b.name === "develop") ??
+    remotes[0];
+  return prefer?.gitRef ?? "";
+}
+
+function onApplyResolve(payload: {
+  into: string;
+  from: string;
+  files: Array<{ path: string; resolvedContent: string }>;
+  push: boolean;
+}): void {
+  if (isSameBranchForMr(payload.into, payload.from)) {
+    error.value = "源/目标是同一分支，请自行 git push / pull，此处不处理";
+    status.value = error.value;
+    return;
+  }
+  // 弹自绘确认框，用户点「继续」才真正发起写请求（取消则清空待确认状态）
+  pendingApplyResolve.value = payload;
+}
+
+/** 一键解决并推送：用户在自绘确认框点「继续」 */
+function confirmApplyResolve(): void {
+  const payload = pendingApplyResolve.value;
+  if (!payload) {
+    return;
+  }
+  pendingApplyResolve.value = null;
+  loadingAction.value = "preview";
+  // payload 来自 ref 的 reactive Proxy，postMessage 结构化克隆会 DataCloneError，需先还原为纯对象
+  const plain = toPlainJson(payload);
+  vscode.postMessage({
+    type: "applyResolve",
+    into: plain.into,
+    from: plain.from,
+    files: plain.files,
+    push: plain.push,
+  });
+}
+
+/** 一键解决并推送：用户在自绘确认框点「取消」 */
+function cancelApplyResolve(): void {
+  pendingApplyResolve.value = null;
+  error.value = "已取消一键解决";
+  status.value = error.value;
+}
+
+/** 自绘确认框的展示文案 */
+const applyResolveConfirmMessage = computed(() => {
+  const p = pendingApplyResolve.value;
+  if (!p) {
+    return "";
+  }
+  const clean = !p.files?.length;
+  const lines = [
+    clean
+      ? `将推送临时分支（独立 worktree，不切换当前分支）：`
+      : `将解决冲突并${p.push ? "推送" : "提交"}（独立 worktree，不切换当前分支）：`,
+    `1) 基于「${p.into}」新建临时分支`,
+    `2) 合并「${p.from}」${clean ? "并提交" : "并写入选边结果"}`,
+  ];
+  if (p.push) {
+    lines.push(`3) 推送到 origin`);
+  }
+  lines.push(`\n完成后可在面板「一键申请 MR」。`);
+  return lines.join("\n");
+});
+
+const MAX_AI_HUNK_CHARS = 4000;
+
+function truncateAiText(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, max)}\n…(已截断，共 ${text.length} 字)`;
+}
+
+/** 只截断单块文本，不再丢弃超限 hunk；宿主侧按批数/字符自动分批 */
+function shrinkAiPayload(payload: AiResolveRequestPayload): AiResolveRequestPayload {
+  const hunks = payload.hunks.map((h) => ({
+    ...h,
+    leftText: truncateAiText(h.leftText, MAX_AI_HUNK_CHARS),
+    rightText: truncateAiText(h.rightText, MAX_AI_HUNK_CHARS),
+    baseText: truncateAiText(h.baseText, Math.floor(MAX_AI_HUNK_CHARS / 2)),
+    oursCommits: h.oursCommits.slice(0, 6),
+    theirsCommits: h.theirsCommits.slice(0, 6),
+  }));
+  return { ...payload, hunks };
+}
+
+/** 等待宿主 pong；用于确认扩展宿主已加载且通道可用 */
+function waitForPong(nonce: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onMsg);
+      reject(
+        new Error(
+          "宿主 ping 无响应。扩展宿主可能不是 0.1.1+，或面板连到了旧实例。\n" +
+            "请：命令面板 → Developer: Reload Window，再打开 Git Insight 重试。\n" +
+            "也可查看：查看 → 输出 → 下拉选「Git Insight」。",
+        ),
+      );
+    }, timeoutMs);
+    function onMsg(ev: MessageEvent): void {
+      const msg = ev.data as HostMessage;
+      if (msg?.type === "pong" && msg.nonce === nonce) {
+        clearTimeout(timer);
+        window.removeEventListener("message", onMsg);
+        resolve(msg.extensionVersion || "unknown");
+      }
+    }
+    window.addEventListener("message", onMsg);
+  });
+}
+
+function toPlainJson<T>(value: T): T {
+  // postMessage 只能传结构化克隆数据；Vue reactive Proxy 会触发 DataCloneError
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function onAiResolve(payload: AiResolveRequestPayload): Promise<void> {
+  aiBusy.value = true;
+  aiProgressPercent.value = 0;
+  aiProgressLabel.value = "检测宿主通道（ping）…";
+  aiError.value = null;
+  aiBridge.value = null;
+  aiResultHunks.value = null;
+  status.value = "AI 选边中…";
+  error.value = null;
+  if (aiWatchdog) {
+    clearTimeout(aiWatchdog);
+  }
+
+  const nonce = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    vscode.postMessage(toPlainJson({ type: "ping" as const, nonce }));
+    const ver = await waitForPong(nonce, 5_000);
+    aiProgressPercent.value = 2;
+    aiProgressLabel.value = `宿主已连通（v${ver}），发送冲突数据…`;
+    status.value = aiProgressLabel.value;
+
+    const slim = shrinkAiPayload(payload);
+    aiProgressLabel.value = `宿主已连通（v${ver}），发送 ${slim.hunks.length} 个冲突块…`;
+    status.value = aiProgressLabel.value;
+
+    aiWatchdog = setTimeout(() => {
+      if (aiBusy.value && (aiProgressPercent.value ?? 0) < 3) {
+        aiBusy.value = false;
+        aiError.value =
+          "已 ping 通宿主，但 AI 请求无回执（可能被载荷拦截）。\n" +
+          "请打开：查看 → 输出 →「Git Insight」，把日志复制给我。";
+        status.value = "AI 选边失败：无回执";
+        error.value = aiError.value;
+      }
+    }, 12_000);
+
+    const msg = toPlainJson({
+      type: "aiResolveConflicts" as const,
+      into: slim.into,
+      from: slim.from,
+      rules: slim.rules,
+      extraNotes: slim.extraNotes,
+      hunks: slim.hunks,
+    });
+    vscode.postMessage(msg);
+  } catch (err) {
+    aiBusy.value = false;
+    const raw = err instanceof Error ? err.message : String(err);
+    aiError.value = /DataCloneError|could not be cloned/i.test(raw)
+      ? `发送失败：消息里含无法克隆的数据（多为 Vue 响应式对象）。\n原始错误：${raw}`
+      : raw;
+    status.value = "AI 选边失败";
+    error.value = aiError.value;
+  }
+}
+
+function onRequestCreateMr(payload: { into: string; from: string }): void {
+  if (isSameBranchForMr(payload.into, payload.from)) {
+    error.value = "源/目标是同一分支，请自行 git push / pull，此处不申请 MR";
+    status.value = error.value;
+    return;
+  }
+  if (!canCreateMr.value) {
+    error.value = createMrBlockReason.value;
+    status.value = createMrBlockReason.value;
+    return;
+  }
+  askCreateMr(payload);
+}
+
+/** 正在申请 MR 的是哪一对；createMrResult 回来时靠它认回去记进度 */
+const mrRequestPair = ref<PairProgress | null>(null);
+
+/**
+ * 发起「准备申请 MR」。
+ *
+ * 源分支优先用调用方指明的，其次是**这一对自己**的临时分支。都没有才不传，
+ * 让 core 的 resolveDefaultSource 去推：它按 (into, from) 算出临时分支名、
+ * 存在就用，不存在才回落到 from 本身。
+ *
+ * 这个「存在就用」是个坑：仓库里躺着一条早先试出来的同名 `merge/*` 时，本该
+ * 直接用 from 的干净合并会被悄悄换成那条陈旧分支。所以能定死的地方就定死，
+ * 矩阵那边正是这么做的。
+ *
+ * 反过来，这里绝不能拿「最近一次解决产生的分支」兜底：批量处理时它指向的是别的分支对，
+ * 传上去等于用一个错的 explicit 覆盖掉 core 本来能推对的结果。
+ */
+function askCreateMr(pair: {
+  into: string;
+  from: string;
+  intoSha?: string;
+  fromSha?: string;
+  sourceBranch?: string;
+}): void {
+  const known = progressIndex.value.get(pairKey(pair.into, pair.from));
+  const intoSha = pair.intoSha ?? known?.intoSha ?? preview.value?.intoSha;
+  const fromSha = pair.fromSha ?? known?.fromSha ?? preview.value?.fromSha;
+  // sha 齐了才记得住进度；缺了就只发请求，不留一条无法判新旧的记录
+  mrRequestPair.value =
+    intoSha && fromSha
+      ? { ...known, into: pair.into, from: pair.from, intoSha, fromSha }
+      : null;
+  mrBusy.value = true;
+  vscode.postMessage({
+    type: "prepareCreateMr",
+    into: pair.into,
+    from: pair.from,
+    sourceBranch: pair.sourceBranch || known?.tempBranch || undefined,
+  });
+}
+
+/**
+ * 矩阵里对某一格直接申请 MR。冲突格子走的是已推的临时分支，干净格子直接用 from。
+ *
+ * 不走 createMrBlockReason：那套判断依赖当前 preview 的冲突状态，而从矩阵点过来时
+ * preview 可能是空的、或者是别的分支对的。这里该拦的只有预览模式和 MR 方式没配好，
+ * 其余交给宿主侧再校验一次（coreBridge 对这两条也有独立判断）。
+ */
+function requestMrFromMatrix(pair: {
+  into: string;
+  from: string;
+  intoSha?: string;
+  fromSha?: string;
+  sourceBranch?: string;
+}): void {
+  if (previewMode.value) {
+    error.value = "预览模式不支持申请 MR";
+    status.value = error.value;
+    return;
+  }
+  if (!methodReady.value) {
+    error.value =
+      methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
+    status.value = error.value;
+    tab.value = "config";
+    return;
+  }
+  askCreateMr(pair);
+}
+
+function submitCreateMr(payload: {
+  sourceBranch: string;
+  targetBranch: string;
+  title: string;
+  reviewers: string[];
+}): void {
+  mrBusy.value = true;
+  vscode.postMessage({
+    type: "createMr",
+    sourceBranch: payload.sourceBranch,
+    targetBranch: payload.targetBranch,
+    title: payload.title,
+    reviewers: payload.reviewers,
+  });
+}
+
+function openExternalUrl(url: string): void {
+  vscode.postMessage({ type: "openExternal", url });
 }
 
 const vscode = getVsCodeApi();
-const demoMode = isDemoMode();
 
-const tab = ref<TabId>("graph");
+const tab = ref<TabId>("config");
 const cwd = ref<string | null>(null);
-const pathInput = ref("");
-const branches = ref<string[]>([]);
+const branches = ref<BranchOption[]>([]);
 const into = ref("");
 const from = ref("");
 const busy = ref(false);
 const busyLabel = ref("");
+const busyPercent = ref<number | null>(null);
+/** 当前主操作，用于按钮上的 loading 文案 */
+const loadingAction = ref<"graph" | "preview" | "">("");
 const error = ref<string | null>(null);
 const status = ref("准备就绪");
 const previewMode = ref(false);
 
 const graph = ref<BranchGraph | null>(null);
+/** 服务端中文报告（备用）；画布交互以 overview / path 为准 */
 const graphReport = ref("");
+const selectedPath = ref<{ tipName: string; chain: string[] } | null>(null);
+/** 分支图 tab 的两种视角：单条链路的图，或多分支两两合并的矩阵 */
+const graphMode = ref<"graph" | "matrix">("graph");
+const survey = ref<MergeSurveyResult | null>(null);
+const mergeOrder = ref<SuggestOrderResult | null>(null);
 const preview = ref<ConflictBlameResult | null>(null);
-const previewReport = ref("");
+const aiBusy = ref(false);
+const aiProgressPercent = ref<number | null>(null);
+const aiProgressLabel = ref("");
+const aiResultToken = ref(0);
+const aiResultHunks = ref<AiResolveHunkResult[] | null>(null);
+const aiError = ref<string | null>(null);
+const aiBridge = ref<AiBridgeView | null>(null);
+let aiWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+function clearAiWatchdog(): void {
+  if (aiWatchdog) {
+    clearTimeout(aiWatchdog);
+    aiWatchdog = null;
+  }
+}
+/**
+ * 每一对分支走到哪了（已推临时分支 / 已提 MR）。
+ *
+ * 做成一张表而不是单个值，是因为矩阵会一条条处理多对：换到下一对预演时，
+ * 上一对的成果不该被忘掉，否则回矩阵就看不出哪些已经安排过了。
+ */
+const pairProgress = ref<PairProgress[]>([]);
+
+function pairKey(intoRef: string, fromRef: string): string {
+  return `${intoRef}\u0000${fromRef}`;
+}
+
+const progressIndex = computed(
+  () => new Map(pairProgress.value.map((p) => [pairKey(p.into, p.from), p])),
+);
+
+/** 按 (into, from) 增改一条进度；已有字段不传就保留 */
+function upsertProgress(entry: PairProgress): void {
+  const key = pairKey(entry.into, entry.from);
+  pairProgress.value = [
+    ...pairProgress.value.filter((p) => pairKey(p.into, p.from) !== key),
+    entry,
+  ];
+}
+
+function rememberResolved(entry: PairProgress): void {
+  const prev = progressIndex.value.get(pairKey(entry.into, entry.from));
+  // 重新解决一遍推的还是同一条临时分支，已建的 MR 会跟着更新，别倒退回「待申请」
+  const mr = prev?.tempBranch === entry.tempBranch ? prev?.mr : undefined;
+  upsertProgress({ ...entry, mr });
+}
+
+/**
+ * 临时分支已推、但还没走过申请 MR 的条数。只给预演页的回程条用。
+ *
+ * 只算冲突那条路径（有 tempBranch 的），因为回程条本身就只串冲突那趟批处理。
+ * 干净格子进的是矩阵头部那条 MR 队列，两个计数各管各的场景，别混。
+ *
+ * 浏览器方式只是打开创建页、提没提我们看不见，但也不能因此一直催，
+ * 所以算「走过了」，只在矩阵里用另一个措辞标出来提醒确认。
+ */
+const mrPendingCount = computed(
+  () => pairProgress.value.filter((p) => p.tempBranch && !p.mr).length,
+);
+
+/** 从矩阵跳进预演时的批处理上下文；null 表示不是从矩阵来的 */
+const matrixTrail = ref<MatrixTrail | null>(null);
+const mrDialogOpen = ref(false);
+const mrDraft = ref<MrDialogDraft | null>(null);
+const mrBusy = ref(false);
+/** 待「一键解决并推送」自绘确认框确认的请求；非 null 表示确认框未关 */
+const pendingApplyResolve = ref<{
+  into: string;
+  from: string;
+  files: Array<{ path: string; resolvedContent: string }>;
+  push: boolean;
+} | null>(null);
+
+const gitConfig = ref<GitInsightConfigView | null>(null);
+const cliStatus = ref<CliStatusPayload | null>(null);
+const gitConfigPath = ref("");
+const methodReady = ref(false);
+const methodReadyReason = ref<string | undefined>(undefined);
+const githubTokenStatus = ref<TokenValidateView | null>(null);
+const gitlabTokenStatus = ref<TokenValidateView | null>(null);
+/** 进入页面后对已有 Token 的预校验去重键 */
+let lastTokenPrecheckKey = "";
+
+const sameBranchForMr = computed(() =>
+  isSameBranchForMr(into.value, from.value),
+);
+
+/** 稳定引用，避免每次渲染新数组导致 GraphView 整图重建、点击高亮丢失 */
+const graphDefaultRemote = computed(
+  () => cliStatus.value?.defaultRemote || gitConfig.value?.defaultRemote || "",
+);
+const graphRemotes = computed(() =>
+  (cliStatus.value?.remotes ?? []).map((r) => r.name),
+);
+
+const tempPushDoneForPair = computed(
+  () => !!progressIndex.value.get(pairKey(into.value, from.value))?.tempBranch,
+);
+
+const previewBlockReason = computed(() => {
+  if (!into.value || !from.value) {
+    return "请选择目标分支与待合并分支";
+  }
+  const intoOpt = branches.value.find((b) => b.gitRef === into.value);
+  if (intoOpt && !intoOpt.remote) {
+    return "目标分支须为远程分支（本地请自行 pull / merge）";
+  }
+  if (sameBranchForMr.value) {
+    return "源/目标是同一分支，请自行 git push / pull，此处不处理";
+  }
+  return "";
+});
+
+const createMrBlockReason = computed(() => {
+  if (previewMode.value) {
+    return "预览模式不支持申请 MR";
+  }
+  if (sameBranchForMr.value) {
+    return "源/目标是同一分支，请自行 git push / pull";
+  }
+  if (!methodReady.value) {
+    return methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
+  }
+  const hasConflicts =
+    !!preview.value &&
+    !preview.value.clean &&
+    (preview.value.conflictFiles?.length ?? 0) > 0;
+  if (hasConflicts && !tempPushDoneForPair.value) {
+    return "请先「一键解决并推送」";
+  }
+  return "";
+});
+
+const canCreateMr = computed(() => !createMrBlockReason.value);
+
+const displayGraphReport = computed(() => {
+  if (!graph.value) {
+    return graphReport.value;
+  }
+  if (selectedPath.value) {
+    return pathReport(graph.value, selectedPath.value.chain, selectedPath.value.tipName);
+  }
+  return overviewReport(graph.value);
+});
+
+function onGraphSelect(payload: { tipName: string; chain: string[] } | null): void {
+  selectedPath.value = payload;
+}
 
 function onHostMessage(event: MessageEvent<HostMessage>) {
   const msg = event.data;
@@ -47,46 +587,180 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     return;
   }
 
+  if (msg.type === "theme") {
+    applyTheme(msg.theme);
+    return;
+  }
   if (msg.type === "focusTab") {
-    tab.value = msg.tab === "preview" ? "preview" : "graph";
+    tab.value =
+      msg.tab === "preview" ? "preview" : msg.tab === "config" ? "config" : "graph";
+    return;
+  }
+  if (msg.type === "seedPreview") {
+    tab.value = "preview";
+    if (msg.into?.trim()) {
+      into.value = msg.into.trim();
+    }
+    if (msg.from?.trim()) {
+      from.value = msg.from.trim();
+    }
+    status.value = `已从外部种入分支：${into.value || "?"} ← ${from.value || "?"}`;
+    if (msg.autoPreview !== false && into.value && from.value && !previewBlockReason.value) {
+      setTimeout(() => {
+        if (!busy.value && into.value && from.value && !previewBlockReason.value) {
+          runPreview();
+        }
+      }, 400);
+    }
     return;
   }
   if (msg.type === "busy") {
     busy.value = msg.busy;
     busyLabel.value = msg.label ?? "";
+    if (typeof msg.percent === "number") {
+      busyPercent.value = msg.percent;
+    }
+    if (aiBusy.value) {
+      if (msg.label) {
+        aiProgressLabel.value = msg.label;
+      }
+      if (typeof msg.percent === "number") {
+        aiProgressPercent.value = msg.percent;
+      }
+      if (!msg.busy && aiProgressPercent.value != null && aiProgressPercent.value < 100) {
+        // 宿主结束 busy；若尚未收到 result，保持 aiBusy 等 result/error
+      }
+    }
+    if (!msg.busy) {
+      loadingAction.value = "";
+      busyPercent.value = null;
+    }
+    return;
+  }
+  if (msg.type === "pong") {
+    // waitForPong 的独立 listener 会处理；此处忽略
+    return;
+  }
+  if (msg.type === "progress") {
+    busy.value = true;
+    busyLabel.value = msg.label;
+    busyPercent.value = msg.percent;
+    if (aiBusy.value) {
+      clearAiWatchdog();
+      aiProgressLabel.value = msg.label || "AI 选边中…";
+      aiProgressPercent.value = msg.percent;
+      status.value = `${aiProgressLabel.value} ${Math.round(msg.percent)}%`;
+    }
+    return;
+  }
+  if (msg.type === "aiResolveBridgeReady") {
+    clearAiWatchdog();
+    aiBridge.value = {
+      port: msg.port,
+      callbackUrl: msg.callbackUrl,
+      prompt: msg.prompt,
+      promptFile: msg.promptFile,
+      conflictsFile: msg.conflictsFile,
+      resultFile: msg.resultFile,
+      openedChat: msg.openedChat,
+      copied: msg.copied,
+      pasted: msg.pasted,
+      submitted: msg.submitted,
+      batchIndex: msg.batchIndex,
+      batchTotal: msg.batchTotal,
+    };
+    const batchPrefix =
+      msg.batchTotal && msg.batchTotal > 1
+        ? `第 ${msg.batchIndex ?? "?"}/${msg.batchTotal} 批 · `
+        : "";
+    if (msg.submitted) {
+      aiProgressLabel.value = `${batchPrefix}已自动发送，监听 ${msg.callbackUrl}`;
+    } else if (msg.pasted) {
+      aiProgressLabel.value = `${batchPrefix}已粘贴到 Chat，监听 ${msg.callbackUrl}`;
+    } else if (msg.copied) {
+      aiProgressLabel.value = `${batchPrefix}已复制提示词，监听 ${msg.callbackUrl}`;
+    } else {
+      aiProgressLabel.value = `${batchPrefix}请复制提示词，监听 ${msg.callbackUrl}`;
+    }
+    aiProgressPercent.value = 30;
+    status.value = aiProgressLabel.value;
+    return;
+  }
+  if (msg.type === "aiResolveConflictsResult") {
+    clearAiWatchdog();
+    aiBusy.value = false;
+    aiBridge.value = null;
+    aiProgressPercent.value = 100;
+    aiProgressLabel.value = "完成";
+    aiResultHunks.value = msg.hunks;
+    aiResultToken.value += 1;
+    aiError.value = null;
+    status.value = msg.model ? `AI 选边完成（${msg.model}）` : "AI 选边完成";
+    busy.value = false;
+    busyPercent.value = null;
     return;
   }
   if (msg.type === "error") {
     error.value = msg.message;
     status.value = msg.message;
+    loadingAction.value = "";
+    mrBusy.value = false;
+    // 报错即这趟请求结束。busy 卡住的后果是整个面板所有按钮一起变灰，
+    // 而人只看到「点不动」，不值得赌宿主每条错误路径都记得收尾
+    busy.value = false;
+    busyPercent.value = null;
+    if (aiBusy.value) {
+      clearAiWatchdog();
+      aiBusy.value = false;
+      aiBridge.value = null;
+      aiError.value = msg.message;
+      aiProgressPercent.value = null;
+      aiProgressLabel.value = "";
+    }
     return;
   }
   if (msg.type === "workspace") {
-    cwd.value = msg.cwd;
-    branches.value = msg.branches;
-    previewMode.value = !!msg.previewMode;
-    if (msg.cwd) {
-      pathInput.value = msg.cwd;
+    if (cwd.value !== msg.cwd) {
+      lastTokenPrecheckKey = "";
+      githubTokenStatus.value = null;
+      gitlabTokenStatus.value = null;
     }
+    cwd.value = msg.cwd;
+    branches.value = normalizeBranches(msg.branches);
+    previewMode.value = !!msg.previewMode;
     if (msg.error) {
       error.value = msg.error;
       status.value = msg.error;
     } else {
       error.value = null;
-      status.value = msg.cwd ? `仓库：${msg.cwd}` : "未检测到仓库，请选择或输入目录";
-      if (into.value && !msg.branches.includes(into.value)) {
+      const localCount = msg.branches.filter((b) => !b.remote).length;
+      const remoteCount = msg.branches.length - localCount;
+      status.value = msg.cwd
+        ? `仓库：${msg.cwd}（本地 ${localCount} / 远程 ${remoteCount}）`
+        : "未检测到仓库，请选择或输入目录";
+      const normalized = normalizeBranches(msg.branches);
+      const refs = normalized.map((b) => b.gitRef);
+      const remoteRefs = new Set(
+        normalized.filter((b) => b.remote).map((b) => b.gitRef),
+      );
+      // 目标分支只允许远程
+      if (into.value && !remoteRefs.has(into.value)) {
         into.value = "";
       }
-      if (from.value && !msg.branches.includes(from.value)) {
+      if (from.value && !refs.includes(from.value)) {
         from.value = "";
       }
       if (!into.value) {
-        into.value = msg.branches.find((b) => !b.includes("/")) ?? msg.branches[0] ?? "";
+        into.value = preferRemoteInto(normalized);
       }
       if (!from.value) {
-        from.value = msg.branches.find((b) => b !== into.value) ?? "";
+        from.value =
+          normalized.find((b) => !b.remote && b.gitRef !== into.value)?.gitRef ??
+          normalized.find((b) => b.gitRef !== into.value)?.gitRef ??
+          "";
       }
     }
+    applyUrlSeed(msg.error ?? null);
     return;
   }
   if (msg.type === "fetchResult") {
@@ -99,16 +773,216 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "graphResult") {
     graph.value = msg.data;
     graphReport.value = msg.report;
-    status.value = `分支图已更新（${msg.data.nodes.length} 节点）`;
+    selectedPath.value = null;
+    const tips = msg.data.tips.length;
+    const fetchNote =
+      msg.data.fetched === false
+        ? "（未 fetch）"
+        : msg.data.fetchOk === false
+          ? "（fetch 失败，可能与线上不一致）"
+          : msg.data.fetched
+            ? "（已 fetch）"
+            : "";
+    status.value = msg.data.truncated
+      ? `分支图已更新（${tips} 个分支 tip，提交元数据已截断）${fetchNote}`
+      : `分支图已更新（${tips} 个分支 tip）${fetchNote}`;
+    error.value =
+      msg.data.fetched && msg.data.fetchOk === false
+        ? msg.data.fetchError || "Fetch 失败，分支图可能落后于线上"
+        : null;
+    loadingAction.value = "";
+    busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "surveyResult") {
+    survey.value = msg.data;
+    // 顺序结果是针对旧那批分支算的，换了矩阵就不该再挂着
+    mergeOrder.value = null;
+    const cells = msg.data.cells;
+    // 重跑后 sha 变了的「已处理」标记要清掉：临时分支是基于旧提交建的，
+    // 留着会让人以为那一格已经安排妥了
+    const fresh = new Map(cells.map((c) => [pairKey(c.into, c.from), c]));
+    pairProgress.value = pairProgress.value.filter((p) => {
+      const cell = fresh.get(pairKey(p.into, p.from));
+      return !cell || (cell.intoSha === p.intoSha && cell.fromSha === p.fromSha);
+    });
+    const dirty = cells.filter((c) => c.outcome === "conflicts").length;
+    status.value =
+      dirty === 0
+        ? `矩阵预演完成：${cells.length} 组全部可干净合并`
+        : `矩阵预演完成：${cells.length} 组中 ${dirty} 组有冲突`;
+    error.value = null;
+    busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "mergeOrderResult") {
+    mergeOrder.value = msg.data;
+    const best = msg.data.best;
+    status.value = best.blockedAt
+      ? `顺序推演完成：前 ${best.cleanPrefix}/${best.order.length} 个可干净合入，之后从 ${best.blockedAt} 起需人工`
+      : `顺序推演完成：${best.order.length} 个分支可依次干净合入`;
+    error.value = null;
+    busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "applyResolveResult") {
+    // 推没推成功都建了临时分支，矩阵那批结果都已过时
+    matrixStale.value = true;
+    if (msg.pushed) {
+      rememberResolved({
+        into: msg.into,
+        from: msg.from,
+        intoSha: msg.intoSha,
+        fromSha: msg.fromSha,
+        tempBranch: msg.tempBranch,
+      });
+      into.value = msg.into;
+      from.value = msg.from;
+    }
+    status.value = [
+      `已处理临时分支 ${msg.tempBranch}`,
+      `commit ${short(msg.commitSha)}`,
+      msg.pushed ? "已推送" : "未推送",
+      msg.usedWorktree
+        ? msg.previousBranch
+          ? `当前仍在 ${msg.previousBranch}`
+          : "工作区未切换"
+        : null,
+      msg.pushed ? "可继续「一键申请 MR」" : "推送未成功，暂不可申请 MR",
+      msg.pushed && trailRemaining.value > 0
+        ? `矩阵还剩 ${trailRemaining.value} 条待处理`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    error.value = null;
+    loadingAction.value = "";
+    busyPercent.value = null;
+    return;
+  }
+  if (msg.type === "gitConfigResult") {
+    gitConfig.value = msg.config;
+    cliStatus.value = msg.cliStatus;
+    gitConfigPath.value = msg.configPath;
+    methodReady.value = msg.methodReady;
+    methodReadyReason.value = msg.methodReadyReason;
+    if (msg.tokenValidation) {
+      const v = msg.tokenValidation;
+      if (v.platform === "github") {
+        githubTokenStatus.value = v;
+      } else {
+        gitlabTokenStatus.value = v;
+      }
+      // 校验结果驱动 C 方案就绪态（比「仅有 token 文本」更准）
+      if (msg.config.mrMethod === "token") {
+        methodReady.value = v.ok;
+        methodReadyReason.value = v.ok ? undefined : v.titleStatus || v.summary;
+      }
+    }
+    status.value = methodReady.value
+      ? `Git 配置已就绪（${msg.config.mrMethod ?? "未选"}）`
+      : methodReadyReason.value || "请完善 Git 配置";
+    maybePrecheckTokens(msg.config, msg.cliStatus);
+    return;
+  }
+  if (msg.type === "tokenValidateResult") {
+    const view: TokenValidateView = {
+      ok: msg.ok,
+      platform: msg.platform,
+      formatOk: msg.formatOk,
+      formatMessage: msg.formatMessage,
+      apiChecked: msg.apiChecked,
+      apiOk: msg.apiOk,
+      login: msg.login,
+      expiresAt: msg.expiresAt,
+      expiresMessage: msg.expiresMessage,
+      statusLabel: msg.statusLabel,
+      error: msg.error,
+      summary: msg.summary,
+      titleStatus: msg.titleStatus,
+    };
+    if (msg.platform === "github") {
+      githubTokenStatus.value = view;
+    } else {
+      gitlabTokenStatus.value = view;
+    }
+    if (gitConfig.value?.mrMethod === "token") {
+      const plat = cliStatus.value?.platformHint;
+      const relevant =
+        plat === "gitlab"
+          ? msg.platform === "gitlab"
+          : plat === "github"
+            ? msg.platform === "github"
+            : true;
+      if (relevant) {
+        methodReady.value = msg.ok;
+        methodReadyReason.value = msg.ok ? undefined : msg.titleStatus || msg.summary;
+      }
+    }
+    status.value = msg.titleStatus || msg.summary;
+    error.value = msg.ok ? null : msg.titleStatus || msg.summary;
+    return;
+  }
+  if (msg.type === "downloadCliResult") {
+    status.value = msg.messages.join(" · ") || `已下载 ${msg.kind}`;
+    return;
+  }
+  if (msg.type === "prepareCreateMrResult") {
+    mrBusy.value = false;
+    mrDraft.value = {
+      platform: msg.platform,
+      cli: msg.cli,
+      method: msg.method,
+      sourceBranch: msg.sourceBranch,
+      targetBranch: msg.targetBranch,
+      title: msg.title,
+      candidates: msg.candidates,
+      createMrUrl: msg.createMrUrl,
+      messages: msg.messages,
+      cliError: msg.cliError,
+    };
+    mrDialogOpen.value = true;
+    status.value = msg.method
+      ? `已准备申请 MR（${msg.platform} / ${msg.method}）`
+      : msg.cliError || "请检查 Git 配置";
+    return;
+  }
+  if (msg.type === "createMrResult") {
+    mrBusy.value = false;
+    mrDialogOpen.value = false;
+    // 记到发起时那一对上，矩阵才能把这一格标成「已提 MR」
+    if (mrRequestPair.value) {
+      upsertProgress({
+        ...mrRequestPair.value,
+        mr: { url: msg.url, via: msg.via },
+      });
+      mrRequestPair.value = null;
+    }
+    const created = msg.via === "browser" ? "已打开创建页" : "MR 已创建";
+    status.value = [
+      `${created}：${msg.sourceBranch} → ${msg.targetBranch}`,
+      msg.url ?? "",
+      mrPendingCount.value > 0 ? `矩阵还剩 ${mrPendingCount.value} 条待申请` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
     error.value = null;
     return;
   }
   if (msg.type === "previewResult") {
     preview.value = msg.data;
-    previewReport.value = msg.report;
+    // 这一对之前处理过、但两侧 sha 已经变了：临时分支是基于旧提交建的，作废重来
+    const prior = progressIndex.value.get(pairKey(msg.data.into, msg.data.from));
+    if (prior && (prior.intoSha !== msg.data.intoSha || prior.fromSha !== msg.data.fromSha)) {
+      pairProgress.value = pairProgress.value.filter((p) => p !== prior);
+    }
+    into.value = msg.data.into;
+    from.value = msg.data.from;
+    loadingAction.value = "";
+    busyPercent.value = null;
     if (msg.data.unrelatedHistories || msg.data.outcome === "unrelated") {
       status.value = "合并预演：无关历史（无共同祖先）";
-      error.value = "两条分支没有共同祖先，详见报告";
+      error.value = "两条分支没有共同祖先";
     } else if (msg.data.clean) {
       status.value = "可干净合并";
       error.value = null;
@@ -121,6 +995,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
 }
 
 onMounted(() => {
+  initTheme();
   window.addEventListener("message", onHostMessage as EventListener);
   vscode.postMessage({ type: "ready" });
 });
@@ -129,160 +1004,629 @@ onUnmounted(() => {
   window.removeEventListener("message", onHostMessage as EventListener);
 });
 
-function openByPath() {
-  const path = pathInput.value.trim();
-  if (!path) {
-    error.value = "请输入本机路径或 GitHub 仓库（owner/repo）";
-    return;
-  }
-  vscode.postMessage({ type: "setCwd", path });
-}
-
-function pickFolder() {
-  vscode.postMessage({ type: "pickFolder" });
-}
-
 function loadGraph() {
-  // 分支图与侧栏 into/from 无关：始终加载全库 tip 图；默认 fetch
-  vscode.postMessage({ type: "graph" });
+  busy.value = true;
+  busyLabel.value = "正在加载全量分支图…";
+  busyPercent.value = 0;
+  loadingAction.value = "graph";
+  vscode.postMessage({ type: "graph", maxNodes: 0 });
 }
 
 function runPreview() {
-  // 默认 fetch（不传 noFetch）
+  if (previewBlockReason.value) {
+    error.value = previewBlockReason.value;
+    status.value = previewBlockReason.value;
+    return;
+  }
+  busy.value = true;
+  busyLabel.value = "合并预演中…";
+  busyPercent.value = 0;
+  loadingAction.value = "preview";
   vscode.postMessage({
     type: "preview",
     into: into.value,
     from: from.value,
   });
 }
+
+/** 上一批矩阵的行列，供解决完之后原样重跑 */
+const lastSurvey = ref<{ intos: string[]; froms: string[] } | null>(null);
+/** 解决过之后矩阵数据就旧了：临时分支是新建的，那批结果里还没有 */
+const matrixStale = ref(false);
+
+function runSurvey(payload: { intos: string[]; froms: string[] }): void {
+  lastSurvey.value = payload;
+  matrixStale.value = false;
+  busy.value = true;
+  busyLabel.value = "批量预演中…";
+  busyPercent.value = 0;
+  vscode.postMessage({ type: "survey", intos: payload.intos, froms: payload.froms });
+}
+
+function runMergeOrder(payload: { into: string; branches: string[] }): void {
+  busy.value = true;
+  busyLabel.value = "推演合并顺序中…";
+  busyPercent.value = 0;
+  vscode.postMessage({
+    type: "mergeOrder",
+    into: payload.into,
+    branches: payload.branches,
+  });
+}
+
+/**
+ * 矩阵里点某一格「去完整预演」：带着这对分支切到预演 tab。
+ *
+ * 同时把整批待办和当前位置记下来（trail），预演页顶部才能显示
+ * 「第 2/3 条 · 上一条 / 下一条 / 返回矩阵」——否则跳过去就断了线索。
+ */
+function goPreviewFromMatrix(payload: {
+  into: string;
+  from: string;
+  queue?: Array<{ into: string; from: string }>;
+}): void {
+  const queue = payload.queue ?? [];
+  const at = queue.findIndex(
+    (p) => p.into === payload.into && p.from === payload.from,
+  );
+  matrixTrail.value = queue.length > 0 && at >= 0 ? { pairs: queue, index: at } : null;
+  into.value = payload.into;
+  from.value = payload.from;
+  // 别让上一对的冲突正文在新结果回来之前继续挂着
+  preview.value = null;
+  tab.value = "preview";
+  if (!previewBlockReason.value) {
+    runPreview();
+  }
+}
+
+/**
+ * 这一对是否已「一键解决并推送」过。
+ *
+ * 认 tempBranch 而不是「表里有没有这条记录」：干净格子提完 MR 也会留一条记录，
+ * 但它压根没走过解决这一步。
+ */
+function isResolved(pair: { into: string; from: string }): boolean {
+  return !!progressIndex.value.get(pairKey(pair.into, pair.from))?.tempBranch;
+}
+
+/** 这批里还有几条没「一键解决并推送」过 */
+const trailRemaining = computed(() => {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return 0;
+  }
+  return trail.pairs.filter((p) => !isResolved(p)).length;
+});
+
+const trailCurrent = computed(() => {
+  const trail = matrixTrail.value;
+  return trail ? trail.pairs[trail.index] : undefined;
+});
+
+/** 当前这一对的 MR 进展 */
+const trailMr = computed(
+  () => progressIndex.value.get(pairKey(into.value, from.value))?.mr,
+);
+
+function trailGo(delta: number): void {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return;
+  }
+  const next = trail.index + delta;
+  const pair = trail.pairs[next];
+  if (!pair) {
+    return;
+  }
+  matrixTrail.value = { pairs: trail.pairs, index: next };
+  into.value = pair.into;
+  from.value = pair.from;
+  preview.value = null;
+  if (!previewBlockReason.value) {
+    runPreview();
+  }
+}
+
+/** 跳到下一条还没处理的；没有了就回矩阵 */
+function trailNextPending(): void {
+  const trail = matrixTrail.value;
+  if (!trail) {
+    return;
+  }
+  const at = trail.pairs.findIndex((p, i) => i > trail.index && !isResolved(p));
+  if (at < 0) {
+    backToMatrix();
+    return;
+  }
+  trailGo(at - trail.index);
+}
+
+/**
+ * 回矩阵。若期间解决过，顺手原样重跑一遍。
+ *
+ * 不重跑就会看见解决之前的旧结果——那正是「我到底处理过没有」看不出来的根源。
+ * 重跑很便宜：两侧 sha 没变，预演结果全部命中缓存，实际只多查一次分支列表。
+ * 跳过 fetch，回个矩阵不该等网络。
+ */
+function backToMatrix(): void {
+  tab.value = "graph";
+  graphMode.value = "matrix";
+  const last = lastSurvey.value;
+  if (!matrixStale.value || !last || busy.value) {
+    return;
+  }
+  matrixStale.value = false;
+  // busy 交给宿主置位。这趟是切 tab 时自动发的，不是人点出来的：万一宿主没回，
+  // 本地抢先置的 busy 会把矩阵上所有按钮永久禁用，而人根本不知道自己在等什么
+  vscode.postMessage({
+    type: "survey",
+    intos: last.intos,
+    froms: last.froms,
+    noFetch: true,
+  });
+}
+
+// 人在侧栏手动换了分支，就不再是矩阵那趟批处理了，回程条继续挂着只会误导
+watch([into, from], ([nextInto, nextFrom]) => {
+  const cur = trailCurrent.value;
+  if (cur && (cur.into !== nextInto || cur.from !== nextFrom)) {
+    matrixTrail.value = null;
+  }
+});
+
+function actionButtonText(kind: "graph" | "preview"): string {
+  if (loadingAction.value !== kind) {
+    return kind === "graph" ? "加载分支图" : "开始预演";
+  }
+  const pct =
+    busyPercent.value != null && busyPercent.value >= 0
+      ? `${busyPercent.value}%`
+      : "";
+  if (kind === "graph") {
+    return pct ? `加载中 ${pct}` : "加载中…";
+  }
+  return pct ? `预演中 ${pct}` : "预演中…";
+}
+
+function statusBusyText(): string {
+  const pct =
+    busyPercent.value != null && busyPercent.value >= 0
+      ? ` ${busyPercent.value}%`
+      : "";
+  return `${busyLabel.value || "处理中…"}${pct}`;
+}
+
+function saveGitConfig(payload: {
+  mrMethod: GitInsightConfigView["mrMethod"];
+  githubToken: string;
+  gitlabToken: string;
+  defaultRemote?: string;
+  aiApiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
+}): void {
+  vscode.postMessage({
+    type: "saveGitConfig",
+    config: payload,
+  });
+}
+
+function validateToken(payload: {
+  platform: "github" | "gitlab";
+  githubToken: string;
+  gitlabToken: string;
+  persist: boolean;
+  mrMethod: GitInsightConfigView["mrMethod"];
+}): void {
+  vscode.postMessage({
+    type: "validateToken",
+    platform: payload.platform,
+    githubToken: payload.githubToken,
+    gitlabToken: payload.gitlabToken,
+    persist: payload.persist,
+    mrMethod: payload.mrMethod,
+  });
+}
+
+function clearTokenValidation(platform: "github" | "gitlab"): void {
+  if (platform === "github") {
+    githubTokenStatus.value = null;
+  } else {
+    gitlabTokenStatus.value = null;
+  }
+}
+
+/** 进入配置时：若已有对应 Token，自动校验一次 */
+function maybePrecheckTokens(
+  config: GitInsightConfigView,
+  status: CliStatusPayload,
+): void {
+  if (previewMode.value) {
+    return;
+  }
+  const plat = status.platformHint;
+  const gh = config.githubToken?.trim() ?? "";
+  const gl = config.gitlabToken?.trim() ?? "";
+  let platform: "github" | "gitlab" | null = null;
+  let token = "";
+  if (plat === "github" && gh) {
+    platform = "github";
+    token = gh;
+  } else if (plat === "gitlab" && gl) {
+    platform = "gitlab";
+    token = gl;
+  } else if (plat === "unknown") {
+    if (gh) {
+      platform = "github";
+      token = gh;
+    } else if (gl) {
+      platform = "gitlab";
+      token = gl;
+    }
+  }
+  if (!platform || !token) {
+    return;
+  }
+  const key = `${cwd.value ?? ""}|${platform}|${token}`;
+  if (key === lastTokenPrecheckKey) {
+    return;
+  }
+  // 已有成功校验结果则跳过
+  if (platform === "github" && githubTokenStatus.value?.ok) {
+    lastTokenPrecheckKey = key;
+    return;
+  }
+  if (platform === "gitlab" && gitlabTokenStatus.value?.ok) {
+    lastTokenPrecheckKey = key;
+    return;
+  }
+  lastTokenPrecheckKey = key;
+  validateToken({
+    platform,
+    githubToken: config.githubToken ?? "",
+    gitlabToken: config.gitlabToken ?? "",
+    persist: true,
+    mrMethod: config.mrMethod,
+  });
+}
+
+function refreshGitConfig(): void {
+  vscode.postMessage({ type: "getGitConfig" });
+}
+
+function downloadCli(kind: "gh" | "glab"): void {
+  vscode.postMessage({ type: "downloadCli", kind });
+}
+
+function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab" }): void {
+  vscode.postMessage({ type: "cliAuthLogin", ...payload });
+}
 </script>
 
 <template>
   <div class="app">
-    <div v-if="demoMode" class="demo-banner">
-      当前为 GitHub Pages <strong>静态站</strong>（gh-pages，无真实 git）。完整能力请本地
-      <code>pnpm preview</code>。
-      <a class="demo-docs" href="./docs/">文档</a>
-    </div>
     <header class="topbar">
       <div class="topbar-path">
-        <input
-          v-model="pathInput"
-          class="path"
-          type="text"
-          :title="cwd ?? pathInput"
-          :placeholder="
-            demoMode
-              ? '离线样例 — 无真实 git'
-              : '本机路径，或 GitHub：owner/repo / https://github.com/owner/repo'
-          "
-          :disabled="demoMode"
-          @keyup.enter="openByPath"
-        />
-        <button class="btn secondary" :disabled="busy || demoMode" @click="openByPath">打开</button>
-        <button
-          class="btn secondary"
-          :disabled="busy || demoMode"
-          title="系统目录对话框（本地预览可用；云端请填 GitHub 地址）"
-          @click="pickFolder"
-        >
-          浏览…
-        </button>
+        <span class="topbar-label">仓库</span>
+        <span class="topbar-cwd" :title="cwd ?? ''">{{ cwd || "未打开仓库" }}</span>
       </div>
       <div class="topbar-actions">
-        <button
-          class="btn secondary"
-          :disabled="busy || !cwd"
-          @click="vscode.postMessage({ type: 'refreshWorkspace' })"
-        >
-          刷新分支
-        </button>
-        <button
-          class="btn secondary"
-          :disabled="busy || !cwd"
-          title="手动再 fetch 一次（加载图/预演已默认 fetch）"
-          @click="vscode.postMessage({ type: 'fetch' })"
-        >
-          Fetch
-        </button>
-        <button
-          v-if="tab === 'graph'"
-          class="btn"
-          :disabled="busy || !cwd"
-          @click="loadGraph"
-        >
-          加载分支图
-        </button>
-        <button
-          v-else
-          class="btn"
-          :disabled="busy || !cwd || !into || !from"
-          @click="runPreview"
-        >
-          开始预演
-        </button>
+        <div class="topbar-tools">
+          <button
+            class="btn secondary btn-sm"
+            :disabled="busy || !cwd"
+            title="仅同步远程 refs，不刷图"
+            @click="vscode.postMessage({ type: 'fetch' })"
+          >
+            Fetch
+          </button>
+        </div>
+        <div class="topbar-primary">
+          <button
+            v-if="tab === 'graph'"
+            class="btn"
+            :class="{ loading: loadingAction === 'graph' }"
+            :disabled="busy || !cwd"
+            :title="loadingAction === 'graph' ? busyLabel : undefined"
+            @click="loadGraph"
+          >
+            <span v-if="loadingAction === 'graph'" class="btn-spinner" aria-hidden="true" />
+            {{ actionButtonText("graph") }}
+          </button>
+          <button
+            v-else-if="tab === 'preview'"
+            class="btn"
+            :class="{ loading: loadingAction === 'preview' }"
+            :disabled="busy || !cwd || !into || !from || !!previewBlockReason"
+            :title="
+              previewBlockReason ||
+              (loadingAction === 'preview' ? busyLabel : undefined)
+            "
+            @click="runPreview"
+          >
+            <span v-if="loadingAction === 'preview'" class="btn-spinner" aria-hidden="true" />
+            {{ actionButtonText("preview") }}
+          </button>
+          <button
+            v-else
+            class="btn secondary"
+            :disabled="busy"
+            title="配置完成后可去分支图或合并预演"
+            @click="tab = 'graph'"
+          >
+            下一步：分支图
+          </button>
+        </div>
       </div>
     </header>
 
-    <div class="status" :class="{ error: !!error }">
-      {{ busy ? busyLabel || "处理中…" : status }}
+    <div class="status" :class="{ error: !!error, busy }">
+      <span class="status-dot" aria-hidden="true" />
+      <div class="status-body">
+        <template v-if="busy">
+          <span class="status-text">{{ statusBusyText() }}</span>
+          <span
+            v-if="busyPercent != null"
+            class="status-bar"
+            :style="{ '--pct': `${busyPercent}%` }"
+            aria-hidden="true"
+          />
+        </template>
+        <template v-else>
+          <span class="status-text">{{ status }}</span>
+        </template>
+      </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab" :class="{ active: tab === 'graph' }" @click="tab = 'graph'">分支图</button>
-      <button class="tab" :class="{ active: tab === 'preview' }" @click="tab = 'preview'">
+    <div class="tabs" role="tablist">
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'config' }"
+        :aria-selected="tab === 'config'"
+        @click="tab = 'config'"
+      >
+        <span class="tab-step">1</span>
+        Git 配置
+      </button>
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'graph' }"
+        :aria-selected="tab === 'graph'"
+        @click="tab = 'graph'"
+      >
+        <span class="tab-step">2</span>
+        分支图
+      </button>
+      <button
+        class="tab"
+        role="tab"
+        :class="{ active: tab === 'preview' }"
+        :aria-selected="tab === 'preview'"
+        @click="tab = 'preview'"
+      >
+        <span class="tab-step">3</span>
         合并预演
       </button>
     </div>
 
-    <div class="main" :class="{ 'main--full': tab === 'graph' }">
-      <aside v-if="tab === 'preview'" class="sidebar">
-        <label>
-          目标分支 (--into)
+    <div class="main" :class="{ 'main--full': tab === 'graph' || tab === 'config' }">
+      <aside v-if="tab === 'preview'" class="sidebar sidebar--legend">
+        <div class="sidebar-head">
+          <h3 class="sidebar-title mono">LEGEND</h3>
+          <p class="hint">FROM → INTO → MR</p>
+        </div>
+        <label class="field-online">
+          <span class="field-online-caption">目标分支（线上 / 仅远程）</span>
           <BranchTreeSelect
             v-model="into"
             :branches="branches"
+            remote-only
             :disabled="busy || !cwd"
-            placeholder="选择目标分支…"
+            placeholder="选择远程目标，如 origin/test…"
           />
         </label>
-        <label>
-          待合并分支 (--from)
+        <div class="merge-flow-mark" aria-hidden="true">← 合入</div>
+        <label class="field-mine">
+          <span class="field-mine-caption">我的分支（待合入，可本地）</span>
           <BranchTreeSelect
             v-model="from"
             :branches="branches"
             :disabled="busy || !cwd"
-            placeholder="选择待合并分支…"
+            placeholder="选择功能分支（本地或远程）…"
           />
         </label>
-        <p class="hint">选择两分支后点顶部「开始预演」：冲突文件、正文与来源溯源。</p>
+        <p class="hint">
+          目标须为远程分支；若两边是同一分支（如 master ↔ origin/master），请自行 push /
+          pull，此处不处理。
+        </p>
+        <p v-if="previewBlockReason" class="hint hint--danger">
+          {{ previewBlockReason }}
+        </p>
       </aside>
 
       <section class="content">
+        <template v-if="tab === 'config'">
+          <GitConfigPanel
+            :config="gitConfig"
+            :cli-status="cliStatus"
+            :config-path="gitConfigPath"
+            :method-ready="methodReady"
+            :method-ready-reason="methodReadyReason"
+            :github-token-status="githubTokenStatus"
+            :gitlab-token-status="gitlabTokenStatus"
+            :busy="busy || mrBusy"
+            :preview-mode="previewMode"
+            @save="saveGitConfig"
+            @validate-token="validateToken"
+            @clear-token-validation="clearTokenValidation"
+            @refresh="refreshGitConfig"
+            @download-cli="downloadCli"
+            @cli-auth-login="cliAuthLogin"
+            @open-url="openExternalUrl"
+          />
+        </template>
+
         <template v-if="tab === 'graph'">
-          <div v-if="graph" class="panel-stack panel-stack--split">
-            <div class="card card--viz">
-              <h3>可视化</h3>
-              <GraphView :graph="graph" />
+          <div class="graph-modes">
+            <div class="seg" role="group" aria-label="分支图视角">
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: graphMode === 'graph' }"
+                @click="graphMode = 'graph'"
+              >
+                分支图
+              </button>
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: graphMode === 'matrix' }"
+                @click="graphMode = 'matrix'"
+              >
+                合并矩阵
+              </button>
             </div>
-            <div class="card card--report">
-              <h3>报告</h3>
-              <div class="report-scroll">
-                <MarkdownView :source="graphReport" />
+            <p class="hint">
+              {{
+                graphMode === "graph"
+                  ? "点分支 tip 看它到目标的链路"
+                  : "一次预演多条分支两两合并的结果，并推演最省事的合入顺序"
+              }}
+            </p>
+          </div>
+
+          <template v-if="graphMode === 'graph'">
+            <div v-if="graph" class="panel-stack panel-stack--split">
+              <div class="card card--viz">
+                <h3>可视化（仅分支）</h3>
+                <GraphView
+                  :graph="graph"
+                  :default-remote="graphDefaultRemote"
+                  :remotes="graphRemotes"
+                  @select="onGraphSelect"
+                />
+              </div>
+              <div class="card card--report">
+                <h3>{{ selectedPath ? "链路报告" : "总览报告" }}</h3>
+                <div class="report-scroll">
+                  <MarkdownView :source="displayGraphReport" />
+                </div>
               </div>
             </div>
-          </div>
-          <div v-else class="empty empty--fill">打开仓库后，点顶部「加载分支图」</div>
+            <div v-else class="empty empty--fill">
+              打开仓库后，点击右上角「加载分支图」
+            </div>
+          </template>
+
+          <MergeMatrix
+            v-else
+            :branches="branches"
+            :survey="survey"
+            :order="mergeOrder"
+            :busy="busy"
+            :progress="pairProgress"
+            @survey="runSurvey"
+            @order="runMergeOrder"
+            @go-preview="goPreviewFromMatrix"
+            @create-mr="requestMrFromMatrix"
+            @open-url="openExternalUrl"
+          />
         </template>
 
         <template v-if="tab === 'preview'">
-          <div v-if="preview" class="panel-stack panel-stack--split">
-            <div class="preview-main">
-              <div class="card">
-                <h3>
-                  合并预演结果
+          <!-- 从矩阵跳过来时的回程条：始终能看出自己在整批里的哪一步 -->
+          <div v-if="matrixTrail && trailCurrent" class="trail">
+            <button class="trail-back" type="button" @click="backToMatrix">
+              ← 合并矩阵
+            </button>
+            <span class="trail-pos mono">
+              {{ matrixTrail.index + 1 }} / {{ matrixTrail.pairs.length }}
+            </span>
+            <span class="trail-pair mono">
+              <span class="mine">{{ trailCurrent.from }}</span>
+              <span class="trail-arrow" aria-hidden="true">→</span>
+              <span class="online">{{ trailCurrent.into }}</span>
+            </span>
+            <span v-if="trailMr" class="stat-pill ok">
+              {{ trailMr.via === "browser" ? "已开创建页" : "已提 MR" }}
+            </span>
+            <span
+              v-else-if="tempPushDoneForPair"
+              class="stat-pill warn"
+              title="临时分支已推送，还没申请 MR"
+            >
+              待申请 MR
+            </span>
+            <span v-if="trailRemaining > 0" class="stat-pill warn">
+              剩 <strong>{{ trailRemaining }}</strong> 条待处理
+            </span>
+            <span v-else-if="mrPendingCount > 0" class="stat-pill warn">
+              剩 <strong>{{ mrPendingCount }}</strong> 条待申请 MR
+            </span>
+            <span v-else class="stat-pill ok">这批都走完了</span>
+            <span class="trail-spacer" />
+            <button
+              v-if="tempPushDoneForPair && !trailMr"
+              class="btn btn-sm"
+              type="button"
+              :disabled="busy || mrBusy"
+              title="用这一对自己的临时分支申请 MR"
+              @click="requestMrFromMatrix({ into, from })"
+            >
+              申请 MR
+            </button>
+            <button
+              class="btn secondary btn-sm"
+              type="button"
+              :disabled="busy || matrixTrail.index === 0"
+              @click="trailGo(-1)"
+            >
+              上一条
+            </button>
+            <button
+              class="btn secondary btn-sm"
+              type="button"
+              :disabled="busy || matrixTrail.index >= matrixTrail.pairs.length - 1"
+              @click="trailGo(1)"
+            >
+              下一条
+            </button>
+            <button
+              class="btn btn-sm"
+              type="button"
+              :disabled="busy"
+              :title="
+                trailRemaining > 0 ? '跳到下一条还没处理的' : '这批都处理完了，回矩阵'
+              "
+              @click="trailNextPending"
+            >
+              {{ trailRemaining > 0 ? "处理下一条" : "回矩阵" }}
+            </button>
+          </div>
+
+          <div v-if="preview" class="preview-host">
+            <!-- 正常：纵向全宽 -->
+            <div
+              v-if="preview.clean || preview.conflictFiles.length === 0"
+              class="preview-pane preview-pane--clean"
+            >
+              <div
+                class="flow-map"
+                :class="
+                  preview.unrelatedHistories || preview.outcome === 'unrelated'
+                    ? 'flow-map--warn'
+                    : preview.clean
+                      ? 'flow-map--clean'
+                      : 'flow-map--conflict'
+                "
+              >
+                <div class="flow-map-head">
+                  <span class="flow-map-title mono">MERGE MAP</span>
                   <span
-                    class="badge"
+                    class="flow-stamp"
                     :class="
                       preview.clean
                         ? 'ok'
@@ -293,107 +1637,152 @@ function runPreview() {
                   >
                     {{
                       preview.unrelatedHistories || preview.outcome === "unrelated"
-                        ? "无关历史"
+                        ? "UNRELATED"
                         : preview.clean
-                          ? "可干净合并"
-                          : `${preview.conflictFiles.length} 个冲突`
+                          ? "CLEAN"
+                          : `${preview.conflictFiles.length} CONFLICTS`
                     }}
                   </span>
-                </h3>
-                <p class="mono">
-                  {{ preview.into }} ({{ short(preview.intoSha) }}) ← {{ preview.from }} ({{
-                    short(preview.fromSha)
-                  }})
-                </p>
-                <p class="mono">
-                  merge-base:
-                  {{ preview.mergeBase ? short(preview.mergeBase) : "（无共同祖先）" }}
-                </p>
-              </div>
-
-              <div
-                v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'"
-                class="card"
-              >
-                <p>
-                  两条分支没有共同祖先（<code>git merge-base</code> 失败）。完整说明见右侧报告。
-                </p>
-              </div>
-
-              <div v-else-if="preview.clean" class="card">
-                <p>
-                  无冲突，可以将 <code>{{ preview.from }}</code> 合入
-                  <code>{{ preview.into }}</code>。
-                </p>
-              </div>
-
-              <template v-if="!preview.clean && preview.conflictFiles.length > 0">
-                <div class="card">
-                  <h3>冲突文件</h3>
-                  <ul>
-                    <li v-for="f in preview.conflictFiles" :key="f.path" class="mono">
-                      {{ f.path }}
-                    </li>
-                  </ul>
                 </div>
-
-                <div
-                  v-for="f in preview.conflictFiles"
-                  :key="`detail-${f.path}`"
-                  class="card conflict-card"
-                >
-                  <h3 class="mono">{{ f.path }}</h3>
-
-                  <div
-                    v-for="(h, idx) in fileHunks(f, preview.blamed ?? [])"
-                    :key="`${f.path}-h-${idx}`"
-                    class="hunk"
-                  >
-                    <div class="mono">
-                      目标行 {{ h.oursRange[0] }}-{{ h.oursRange[1] }} · 待合并行
-                      {{ h.theirsRange[0] }}-{{ h.theirsRange[1] }}
-                    </div>
-                    <div class="hunk-cols">
-                      <div>
-                        <div class="muted">目标侧写入</div>
-                        <ul>
-                          <li v-for="c in h.oursCommits" :key="c.sha" class="mono">
-                            {{ short(c.sha) }} {{ c.author }}{{ c.pr ? ` ${c.pr}` : "" }}
-                            {{ c.message ?? "" }}
-                          </li>
-                        </ul>
-                      </div>
-                      <div>
-                        <div class="muted">待合并侧写入</div>
-                        <ul>
-                          <li v-for="c in h.theirsCommits" :key="c.sha" class="mono">
-                            {{ short(c.sha) }} {{ c.author }}{{ c.pr ? ` ${c.pr}` : "" }}
-                            {{ c.message ?? "" }}
-                          </li>
-                        </ul>
-                      </div>
-                    </div>
+                <div class="flow-map-body">
+                  <div class="flow-end flow-end--mine" :title="preview.from">
+                    <span class="flow-end-kicker">FROM · 我的</span>
+                    <span class="flow-end-ref mono">{{ preview.from }}</span>
+                    <span class="flow-end-sha mono">{{ short(preview.fromSha) }}</span>
                   </div>
+                  <div class="flow-bridge" aria-hidden="true">
+                    <span class="flow-bridge-track" />
+                    <span class="flow-bridge-node" />
+                    <span class="flow-bridge-caption mono">
+                      base
+                      {{ preview.mergeBase ? short(preview.mergeBase) : "none" }}
+                    </span>
+                  </div>
+                  <div class="flow-end flow-end--online" :title="preview.into">
+                    <span class="flow-end-kicker">INTO · 线上</span>
+                    <span class="flow-end-ref mono">{{ preview.into }}</span>
+                    <span class="flow-end-sha mono">{{ short(preview.intoSha) }}</span>
+                  </div>
+                </div>
+                <div class="flow-map-foot">
+                  <p v-if="preview.unrelatedHistories || preview.outcome === 'unrelated'">
+                    无共同祖先（<code>git merge-base</code> 失败）。常见原因：历史被替换，或来自不同根提交。
+                  </p>
+                  <p v-else-if="preview.clean">
+                    无冲突：<code class="tag-mine">{{ preview.from }}</code>
+                    可合入
+                    <code class="tag-online">{{ preview.into }}</code>
+                  </p>
+                  <p v-else>未检测到可解析的冲突文件内容。</p>
+                  <div
+                    v-if="preview.clean && !previewMode && !sameBranchForMr"
+                    class="btn-row preview-cta"
+                  >
+                    <button
+                      type="button"
+                      class="btn"
+                      :disabled="busy || mrBusy || !canCreateMr"
+                      :title="createMrBlockReason || '申请 MR'"
+                      @click="onRequestCreateMr({ into: preview.into, from: preview.from })"
+                    >
+                      一键申请 MR
+                    </button>
+                    <span v-if="createMrBlockReason" class="muted">{{ createMrBlockReason }}</span>
+                  </div>
+                  <p v-else-if="preview.clean && sameBranchForMr" class="muted preview-cta">
+                    源/目标是同一分支，请自行 <code>git push</code> / <code>git pull</code>，此处不申请 MR。
+                  </p>
+                </div>
+              </div>
+            </div>
 
-                  <div class="conflict-body">
-                    <div class="muted">冲突内容</div>
-                    <pre v-if="f.conflictContent" class="conflict-pre">{{ f.conflictContent }}</pre>
-                    <p v-else class="muted">未能生成冲突标记文本</p>
+            <!-- 有冲突：上 7:3 摘要+解决头，下 文件列表+解决区 -->
+            <ConflictResolvePanel
+              v-else-if="cwd"
+              :files="preview.conflictFiles"
+              :cwd="cwd"
+              :into="preview.into"
+              :from="preview.from"
+              :preview-mode="previewMode"
+              :can-create-mr="canCreateMr"
+              :create-mr-block-reason="createMrBlockReason"
+              :ai-busy="aiBusy"
+              :ai-progress-percent="aiProgressPercent"
+              :ai-progress-label="aiProgressLabel"
+              :ai-result-token="aiResultToken"
+              :ai-result-hunks="aiResultHunks"
+              :ai-error="aiError"
+              :ai-bridge="aiBridge"
+              @apply-resolve="onApplyResolve"
+              @request-create-mr="onRequestCreateMr"
+              @ai-resolve="onAiResolve"
+              @ai-copy-prompt="vscode.postMessage({ type: 'aiResolveCopyPrompt' })"
+              @ai-cancel-bridge="
+                vscode.postMessage({ type: 'aiResolveCancelBridge' });
+                aiBusy = false;
+                aiBridge = null;
+              "
+              @clear-ai-error="
+                aiError = null;
+                aiBridge = null;
+                aiProgressLabel = '';
+                aiProgressPercent = null;
+              "
+            >
+              <template #summary>
+                <div class="flow-map flow-map--conflict flow-map--compact">
+                  <div class="flow-map-head">
+                    <span class="flow-map-title mono">MERGE MAP</span>
+                    <span class="flow-stamp danger">{{ preview.conflictFiles.length }} CONFLICTS</span>
+                  </div>
+                  <div class="flow-map-body">
+                    <div class="flow-end flow-end--mine" :title="preview.from">
+                      <span class="flow-end-kicker">FROM · 我的</span>
+                      <span class="flow-end-ref mono">{{ preview.from }}</span>
+                      <span class="flow-end-sha mono">{{ short(preview.fromSha) }}</span>
+                    </div>
+                    <div class="flow-bridge" aria-hidden="true">
+                      <span class="flow-bridge-track" />
+                      <span class="flow-bridge-node" />
+                      <span class="flow-bridge-caption mono">
+                        base
+                        {{ preview.mergeBase ? short(preview.mergeBase) : "none" }}
+                      </span>
+                    </div>
+                    <div class="flow-end flow-end--online" :title="preview.into">
+                      <span class="flow-end-kicker">INTO · 线上</span>
+                      <span class="flow-end-ref mono">{{ preview.into }}</span>
+                      <span class="flow-end-sha mono">{{ short(preview.intoSha) }}</span>
+                    </div>
                   </div>
                 </div>
               </template>
-            </div>
-
-            <div class="card card--report card--report-fill">
-              <h3>完整报告</h3>
-              <div class="report-scroll">
-                <MarkdownView :source="previewReport" />
-              </div>
-            </div>
+            </ConflictResolvePanel>
           </div>
-          <div v-else class="empty empty--fill">选择目标 / 待合并分支后点击「开始预演」</div>
+          <div v-else class="empty empty--fill">
+            在左侧选定合并方向后，点击右上角「开始预演」
+          </div>
         </template>
       </section>
     </div>
+
+    <CreateMrDialog
+      :open="mrDialogOpen"
+      :draft="mrDraft"
+      :busy="mrBusy || busy"
+      @close="mrDialogOpen = false"
+      @submit="submitCreateMr"
+      @open-url="openExternalUrl"
+    />
+
+    <ConfirmDialog
+      :open="pendingApplyResolve !== null"
+      title="确认解决并推送"
+      :message="applyResolveConfirmMessage"
+      confirm-label="继续"
+      :danger="true"
+      @confirm="confirmApplyResolve"
+      @cancel="cancelApplyResolve"
+    />
   </div>
 </template>

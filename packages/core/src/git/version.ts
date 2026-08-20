@@ -22,8 +22,15 @@ export async function getGitVersion(cwd: string): Promise<GitVersion> {
   };
 }
 
+/** 同一进程内 git 版本不会变，避免每次预演都多 spawn 一次 `git --version` */
+const supportedCache = new Map<string, GitVersion>();
+
 /** merge-tree --write-tree needs Git >= 2.38 */
 export async function assertMergeTreeSupported(cwd: string): Promise<GitVersion> {
+  const cached = supportedCache.get(cwd);
+  if (cached) {
+    return cached;
+  }
   const version = await getGitVersion(cwd);
   const ok =
     version.major > 2 ||
@@ -35,5 +42,6 @@ export async function assertMergeTreeSupported(cwd: string): Promise<GitVersion>
       { code: "GIT_TOO_OLD" },
     );
   }
+  supportedCache.set(cwd, version);
   return version;
 }

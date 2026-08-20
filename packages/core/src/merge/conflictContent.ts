@@ -5,6 +5,31 @@ import { runGit } from "../git/runner.js";
 
 const MAX_CHARS = 24_000;
 
+const HUNK_END = ">>>>>>>";
+
+/**
+ * 截断超长冲突文本，尽量在一个完整的冲突块（以 `>>>>>>>` 结尾）之后切断，
+ * 避免把 `<<<<<<<` / `>>>>>>>` 从中间切断破坏 diff3 结构。
+ */
+function truncate(text: string): string {
+  if (text.length <= MAX_CHARS) {
+    return text;
+  }
+  // 从 MAX_CHARS 往前找最后一个完整的 hunk 结束标记
+  const searchRegion = text.slice(0, MAX_CHARS);
+  const lastHunkEnd = searchRegion.lastIndexOf(HUNK_END);
+  // 找不到完整 hunk（极端情况）：硬截断
+  if (lastHunkEnd === -1) {
+    return `${searchRegion}\n\n…（内容过长已截断，此处可能位于冲突块中间）\n`;
+  }
+  // 在 `>>>>>>> xxx` 行尾截断（包含换行）
+  const lineEnd = text.indexOf("\n", lastHunkEnd);
+  if (lineEnd === -1 || lineEnd >= MAX_CHARS) {
+    return `${text.slice(0, lastHunkEnd + HUNK_END.length)}\n\n…（内容过长已截断）\n`;
+  }
+  return `${text.slice(0, lineEnd)}\n\n…（内容过长已截断）\n`;
+}
+
 async function showFile(
   cwd: string,
   rev: string,
@@ -15,13 +40,6 @@ async function showFile(
     return null;
   }
   return result.stdout;
-}
-
-function truncate(text: string): string {
-  if (text.length <= MAX_CHARS) {
-    return text;
-  }
-  return `${text.slice(0, MAX_CHARS)}\n\n…（内容过长已截断）\n`;
 }
 
 /**
@@ -39,9 +57,11 @@ export async function buildConflictContent(
   theirsContent: string | null;
   baseContent: string | null;
 }> {
-  const oursContent = await showFile(cwd, intoSha, path);
-  const theirsContent = await showFile(cwd, fromSha, path);
-  const baseContent = await showFile(cwd, baseSha, path);
+  const [oursContent, theirsContent, baseContent] = await Promise.all([
+    showFile(cwd, intoSha, path),
+    showFile(cwd, fromSha, path),
+    showFile(cwd, baseSha, path),
+  ]);
 
   if (oursContent === null && theirsContent === null) {
     return {
@@ -56,11 +76,11 @@ export async function buildConflictContent(
   if (oursContent === null || theirsContent === null) {
     const parts = [
       `<<<<<<< ours (${intoSha.slice(0, 7)})`,
-      oursContent ?? "（目标侧无此文件 / 已删除）",
+      oursContent ?? "（线上侧无此文件 / 已删除）",
       "||||||| base",
       baseContent ?? "（base 无此文件）",
       "=======",
-      theirsContent ?? "（待合并侧无此文件 / 已删除）",
+      theirsContent ?? "（我的分支侧无此文件 / 已删除）",
       `>>>>>>> theirs (${fromSha.slice(0, 7)})`,
       "",
     ];
