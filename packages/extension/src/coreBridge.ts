@@ -1,6 +1,7 @@
 import {
   applyStashedResolve,
   buildBranchGraph,
+  buildResolversFromTemplates,
   createMergeRequest,
   crossPairs,
   detectMrPlatform,
@@ -16,6 +17,7 @@ import {
   reportMergeRehearsal,
   reportMergeSurvey,
   resolveDefaultRemote,
+  resolverTemplateMeta,
   suggestMergeOrder,
   surveyMerges,
   resolveRepoRoot,
@@ -465,6 +467,8 @@ export async function handleWebviewRequest(
           type: "gitConfigResult",
           config: cfg,
           cliStatus,
+          // readonly 需展开为普通数组，避免 webview postMessage 结构化克隆问题
+          templates: [...resolverTemplateMeta],
           configPath: cfgPath(),
           methodReady: ready.ok,
           methodReadyReason: ready.reason,
@@ -599,6 +603,7 @@ export async function handleWebviewRequest(
           type: "gitConfigResult",
           config: cfg,
           cliStatus,
+          templates: [...resolverTemplateMeta],
           configPath: cfgPath(),
           methodReady: ready.ok,
           methodReadyReason: ready.reason,
@@ -619,6 +624,8 @@ export async function handleWebviewRequest(
       aiApiBaseUrl: req.config.aiApiBaseUrl ?? prev.aiApiBaseUrl ?? "",
       aiApiKey: req.config.aiApiKey ?? prev.aiApiKey ?? "",
       aiModel: req.config.aiModel ?? prev.aiModel ?? "",
+      autoResolveEnabled: req.config.autoResolveEnabled ?? prev.autoResolveEnabled ?? false,
+      autoResolveTemplates: req.config.autoResolveTemplates ?? prev.autoResolveTemplates ?? [],
     });
     const cliStatus = cwd
       ? await buildCliStatusCached(cwd, cliStorageDir, saved.defaultRemote)
@@ -630,6 +637,7 @@ export async function handleWebviewRequest(
           type: "gitConfigResult",
           config: saved,
           cliStatus,
+          templates: [...resolverTemplateMeta],
           configPath: cfgPath(),
           methodReady: ready.ok,
           methodReadyReason: ready.reason,
@@ -800,6 +808,12 @@ export async function handleWebviewRequest(
       }
       // files 可为空：干净合并（如同名 master→origin/master）仅推临时分支
       const remote = await resolveOpRemote(cwd, req.remote, loadCfg);
+      // 冲突自动解决：总开关开启时，把用户勾选的模板编译为 resolver 注入（内置 union 永远在内）
+      const cfg = await loadCfg();
+      const resolvers =
+        cfg.autoResolveEnabled && (cfg.autoResolveTemplates ?? []).length > 0
+          ? buildResolversFromTemplates(cfg.autoResolveTemplates ?? [])
+          : undefined;
       const data = await applyStashedResolve({
         cwd,
         into: req.into,
@@ -808,6 +822,7 @@ export async function handleWebviewRequest(
         remote,
         push: req.push,
         tempBranch: req.tempBranch,
+        resolvers,
         onProgress,
       });
       return {
@@ -870,6 +885,7 @@ export async function handleWebviewRequest(
           type: "gitConfigResult",
           config: saved,
           cliStatus,
+          templates: [...resolverTemplateMeta],
           configPath: cfgPath(),
           methodReady: ready.ok,
           methodReadyReason: ready.reason,
@@ -918,6 +934,7 @@ export async function handleWebviewRequest(
             type: "gitConfigResult",
             config,
             cliStatus,
+            templates: [...resolverTemplateMeta],
             configPath: cfgPath(),
             methodReady: ready.ok,
             methodReadyReason: ready.reason,

@@ -107,9 +107,11 @@ export type {
 } from "./merge/applyResolve.js";
 export {
   autoResolveConflicts,
+  buildResolversFromTemplates,
   builtinResolvers,
   readThreeWay,
   regenerate,
+  resolverTemplateMeta,
   takeOurs,
   takeTheirs,
   union,
@@ -118,6 +120,7 @@ export type {
   AutoResolveOutcome,
   ConflictResolver,
   ResolveContext,
+  ResolverTemplateMeta,
 } from "./merge/resolvers.js";
 export {
   branchNameForMr,

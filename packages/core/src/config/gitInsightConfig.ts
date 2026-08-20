@@ -21,6 +21,16 @@ export interface GitInsightProjectConfig {
   aiApiKey?: string;
   /** 例：gpt-4o-mini / deepseek-chat / qwen2.5-coder */
   aiModel?: string;
+  /**
+   * 是否启用冲突自动解决（总开关）。false/null = 仅用内置 union，不使用任何预设模板。
+   * 这是"出问题时一键关闭、退回安全默认"的逃生通道。
+   */
+  autoResolveEnabled?: boolean;
+  /**
+   * 已启用的预设模板 id 列表（见 core 的 resolverTemplateMeta）。仅 autoResolveEnabled=true 时生效。
+   * 未知 id 会被忽略（容错，不崩）。
+   */
+  autoResolveTemplates?: string[];
   updatedAt: number;
 }
 
@@ -37,6 +47,8 @@ export function defaultGitInsightConfig(): GitInsightProjectConfig {
     aiApiBaseUrl: "https://api.openai.com/v1",
     aiApiKey: "",
     aiModel: "gpt-4o-mini",
+    autoResolveEnabled: false,
+    autoResolveTemplates: [],
     updatedAt: Date.now(),
   };
 }

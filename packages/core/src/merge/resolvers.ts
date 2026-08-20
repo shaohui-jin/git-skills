@@ -176,6 +176,92 @@ export function regenerate(opts: {
 export const builtinResolvers: readonly ConflictResolver[] = [union];
 
 /**
+ * regenerate 允许的命令白名单（方案 1：纯预设模板）。
+ * 只认命令名；参数固定写死在模板里，不经 shell（见 applyResolve.ts 的 runInWorktree）。
+ * 用户在配置里只能勾选模板，不能自由填命令，杜绝 RCE 注入。
+ */
+export const RESOLVER_ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
+  "pnpm",
+  "npm",
+  "yarn",
+  "bun",
+  "node",
+  "git",
+]);
+
+/** 内建预设模板的描述（供配置页 UI 展示；本身不含执行能力） */
+export interface ResolverTemplateMeta {
+  id: string;
+  label: string;
+  /** 匹配冲突文件路径：路径以该字符串结尾即命中（覆盖根目录与子目录下的同名文件） */
+  match: string;
+  cmd: string;
+  args: string[];
+}
+
+/** 方案 1 内建模板（lockfile 重算是核心痛点；`cmd`/`args` 固定，仅能命名不可自定义） */
+export const resolverTemplateMeta: readonly ResolverTemplateMeta[] = [
+  {
+    id: "pnpm-lock",
+    label: "重算 pnpm lockfile",
+    match: "pnpm-lock.yaml",
+    cmd: "pnpm",
+    args: ["install", "--lockfile-only"],
+  },
+  {
+    id: "npm-lock",
+    label: "重算 npm lockfile",
+    match: "package-lock.json",
+    cmd: "npm",
+    args: ["install", "--package-lock-only"],
+  },
+  {
+    id: "yarn-lock",
+    label: "重算 yarn lockfile",
+    match: "yarn.lock",
+    cmd: "yarn",
+    args: ["install"],
+  },
+];
+
+function regenerateFromMeta(meta: ResolverTemplateMeta): ConflictResolver | null {
+  if (!RESOLVER_ALLOWED_COMMANDS.has(meta.cmd)) {
+    // cmd 不在白名单：这是配置/代码变动时兜底，绝不执行未知命令
+    return null;
+  }
+  return regenerate({
+    id: meta.id,
+    label: meta.label,
+    match: (path) => path.endsWith(meta.match),
+    cmd: meta.cmd,
+    args: meta.args,
+  });
+}
+
+/**
+ * 根据用户勾选的模板 id 构建 resolver 列表，注入 applyStashedResolve。
+ *
+ * - 内置 union 永远保留在首位，保证 `.gitignore` 类默认行为不回退。
+ * - 启用的模板追加在 union 之后，按序尝试，命中即生效。
+ * - 未知 id / 非白名单命令自动忽略（容错，不因脏数据崩掉整个流程）。
+ */
+export function buildResolversFromTemplates(enabledIds: readonly string[]): ConflictResolver[] {
+  const resolvers: ConflictResolver[] = [union];
+  const byId = new Map(resolverTemplateMeta.map((m) => [m.id, m]));
+  for (const id of enabledIds) {
+    const meta = byId.get(id);
+    if (!meta) {
+      continue;
+    }
+    const r = regenerateFromMeta(meta);
+    if (r) {
+      resolvers.push(r);
+    }
+  }
+  return resolvers;
+}
+
+/**
  * 取冲突三方的内容。文件在某一侧不存在（增/删冲突）时该侧为 null。
  */
 export async function readThreeWay(

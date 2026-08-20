@@ -178,6 +178,8 @@ export async function saveUserConfig(
     aiApiBaseUrl: config.aiApiBaseUrl ?? "https://api.openai.com/v1",
     aiApiKey: config.aiApiKey ?? "",
     aiModel: config.aiModel ?? "gpt-4o-mini",
+    autoResolveEnabled: config.autoResolveEnabled ?? false,
+    autoResolveTemplates: config.autoResolveTemplates ?? [],
     updatedAt: Date.now(),
   };
   await memento.update(GLOBAL_CONFIG_KEY, next);

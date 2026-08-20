@@ -26,6 +26,7 @@ import type {
   MatrixTrail,
   MergeSurveyResult,
   PairProgress,
+  ResolverTemplateView,
   SuggestOrderResult,
   TabId,
   TokenValidateView,
@@ -506,6 +507,7 @@ const pendingApplyResolve = ref<{
 } | null>(null);
 
 const gitConfig = ref<GitInsightConfigView | null>(null);
+const resolverTemplates = ref<ResolverTemplateView[]>([]);
 const cliStatus = ref<CliStatusPayload | null>(null);
 const gitConfigPath = ref("");
 const methodReady = ref(false);
@@ -862,6 +864,7 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   }
   if (msg.type === "gitConfigResult") {
     gitConfig.value = msg.config;
+    resolverTemplates.value = msg.templates ?? [];
     cliStatus.value = msg.cliStatus;
     gitConfigPath.value = msg.configPath;
     methodReady.value = msg.methodReady;
@@ -1205,6 +1208,8 @@ function saveGitConfig(payload: {
   aiApiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
+  autoResolveEnabled?: boolean;
+  autoResolveTemplates?: string[];
 }): void {
   vscode.postMessage({
     type: "saveGitConfig",
@@ -1457,6 +1462,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             :method-ready-reason="methodReadyReason"
             :github-token-status="githubTokenStatus"
             :gitlab-token-status="gitlabTokenStatus"
+            :templates="resolverTemplates"
             :busy="busy || mrBusy"
             :preview-mode="previewMode"
             @save="saveGitConfig"

@@ -5,6 +5,7 @@ import type {
   GitInsightProjectConfig,
   MergeSurveyResult,
   MrMethod,
+  ResolverTemplateMeta,
   SuggestOrderResult,
 } from "@shaohui_jin/git-insight-core";
 
@@ -79,6 +80,8 @@ export type WebviewRequest =
         aiApiBaseUrl?: string;
         aiApiKey?: string;
         aiModel?: string;
+        autoResolveEnabled?: boolean;
+        autoResolveTemplates?: string[];
       };
     }
   | {
@@ -230,6 +233,8 @@ export type HostMessage =
       config: GitInsightProjectConfig;
       cliStatus: CliStatusPayload;
       configPath: string;
+      /** 内建 resolver 模板元数据（供配置页勾选展示） */
+      templates: ResolverTemplateMeta[];
       /** 方式是否就绪（不含推送顺序） */
       methodReady: boolean;
       methodReadyReason?: string;

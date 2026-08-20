@@ -393,7 +393,11 @@ npm publish --dry-run --access public --prefix "packages/mcp"
 
 scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 
-### 3.2 用户接入（用户自己的 .cursor/mcp.json）
+### 3.2 用户接入与配置（用户自己的 .cursor/mcp.json）
+
+MCP 走 **stdio**，任何 MCP 宿主（Cursor、Claude Code、VS Code、其他支持 MCP 的 Agent）通过 JSON 配置即可接入。以下示例以 Cursor / Claude Code 常见的 `.mcp.json`（项目级）或用户级 `mcp.json` 为例。
+
+**最小接入（零配置，自动探测仓库）**：
 
 ```json
 {
@@ -406,7 +410,166 @@ scope `@shaohui_jin` 不可用时改用 `@<npm-username>/mcp-server`。
 }
 ```
 
-`GIT_INSIGHT_MCP_CWD` 现**已可选**；fallback 链：请求里传 `cwd` > `GIT_INSIGHT_MCP_CWD` 环境变量 > `process.cwd()` > 向上找 .git。
+**指定仓库路径（推荐，多仓库 / 用 IDE 打开非仓库目录时用）**：
+
+```json
+{
+  "mcpServers": {
+    "git-insight": {
+      "command": "npx",
+      "args": ["-y", "@shaohui_jin/git-insight-mcp-server@latest"],
+      "env": {
+        "GIT_INSIGHT_MCP_CWD": "D:/myproject/the-repo"
+      }
+    }
+  }
+}
+```
+
+> `GIT_INSIGHT_MCP_CWD` 必须是**本地绝对路径**，不能填 GitHub URL。改完配置要**重启 MCP 宿主**（Cursor / Claude Code 均需重载）才生效。
+
+**本地源码直连（开发 / 内网不出网时用）**：
+
+```json
+{
+  "mcpServers": {
+    "git-insight": {
+      "command": "node",
+      "args": ["D:/code/git-skill/packages/mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+#### 环境变量一览
+
+| 变量 | 作用 | 默认 |
+|------|------|------|
+| `GIT_INSIGHT_MCP_CWD` | 指定工作仓库的本地绝对路径；省略则自动探测 | 自动探测 |
+| `GIT_INSIGHT_MCP_ALLOW_WRITE` | 置为 `1` 才注册写工具 `apply_resolve` / `create_mr`，否则只读 | 未设置 → 只读 |
+
+**仓库定位 fallback 链**（优先级从高到低，任一命中即用）：
+
+```text
+请求里显式传的 cwd  >  GIT_INSIGHT_MCP_CWD 环境变量  >  宿主启动目录 process.cwd()  >  从该目录向上找最近的 .git
+```
+
+都找不到 git 仓库时返回错误，提示你显式配置 `GIT_INSIGHT_MCP_CWD` 或在请求里传 `cwd`。
+
+#### 只读 / 写 两档安全模型
+
+- **只读（默认）**：只暴露 5 个读工具，全部标 `readOnlyHint`，宿主可免确认直接调。全部基于 `git merge-tree / for-each-ref` 查询，除 fetch 外不碰仓库。
+- **写（需主动开启）**：启动前设 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，多出 `apply_resolve`（落盘并推送）与 `create_mr`（创建 MR/PR）两个写工具，且**每次调用还必须显式传 `confirm: true`**。
+
+> 两道门是有意的：模型自己编不出环境变量，人也不会因为一次粗心的工具调用就把分支推上去了。
+
+### 3.3 MCP 工具用法（调用示例）
+
+所有工具都返回 **markdown 文本报告**（少数错误返回 `isError`）。公共可选参数：
+
+- `cwd`：仓库路径（可省略，走上面的 fallback 链）
+- `noFetch`：`true` 则跳过 fetch，只用本地已有的 remote-tracking refs（快，但可能落后于线上）
+
+> **默认每次调用都会 fetch 一次**；批量扫描（如 matrix）整批只 fetch 一次。`noFetch` 示例：
+
+```text
+call merge_preview({ into: "origin/master", from: "feat/xxx", noFetch: true })
+```
+
+#### 读工具（默认可用）
+
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `git_branch_graph` | 分支 tip 与链路；可选给 into/from 得 merge-base 与各自独有提交数 | `into`、`from`、`noFetch` |
+| `merge_preview` | 单分支预演要不要冲突；`detail:true` 附冲突正文 + 逐行 blame 溯源（慢） | `into`、`from`、`detail`、`noFetch` |
+| `merge_survey` | 批量矩阵：`froms × intos` 每种组合预演一次，只报路径不生成正文 | `intos[]`、`froms[]`、`noFetch` |
+| `merge_order` | 多分支合进同一目标时推演最省事的顺序 | `into`、`branches[]`、`noFetch` |
+| `mr_prepare` | 识别平台/GitHub/GitLab、可用 CLI、默认标题与可选审核人，给网页创建地址（只读） | `into`、`from`、`sourceBranch?` |
+
+**单分支预演**（最常见的裸调用）：
+
+```text
+call merge_preview({ into: "origin/master", from: "feature/login" })
+→ `feature/login` → `origin/master` 可干净合并。        # 或
+→ `feature/login` → `origin/master` 有 3 个冲突文件：
+  - src/api/auth.ts
+  - pnpm-lock.yaml
+```
+
+**想看冲突细节（正文 + 谁改的，慢）**：
+
+```text
+call merge_preview({ into: "origin/master", from: "feature/login", detail: true })
+```
+
+**批量矩阵（发布前扫一遍）**：
+
+```text
+call merge_survey({ intos: ["origin/master", "origin/release-2.0"], froms: ["feature/a", "feature/b", "hotfix/c"] })
+```
+
+**合入顺序建议**：
+
+```text
+call merge_order({ into: "origin/master", branches: ["feature/a", "feature/b", "hotfix/c"] })
+```
+
+**准备 MR（只读，不创建）**：
+
+```text
+call mr_prepare({ into: "origin/master", from: "feature/login" })
+→ 平台：github（CLI：gh） · 源 → 目标：feature/login → master · 默认标题：… · 网页创建：https://…
+```
+
+#### 写工具（需 `GIT_INSIGHT_MCP_ALLOW_WRITE=1`，且调用显式传 `confirm: true`）
+
+| 工具 | 作用 | 关键参数 |
+|------|------|----------|
+| `apply_resolve` | 把裁决好的冲突内容落到临时分支并可选推送 | `into`、`from`、`files[]`、`push?`、`confirm` |
+| `create_mr` | 调用 gh/glab CLI 或远程 API 创建 MR/PR | `sourceBranch`、`targetBranch`、`title?`、`body?`、`reviewers[]`、`confirm` |
+
+**落盘并推送（handle 冲突解决）**：
+
+```text
+call apply_resolve({
+  confirm: true,
+  into: "origin/master",
+  from: "feature/login",
+  files: [{ path: "src/api/auth.ts", resolvedContent: "…完整解决后的文件内容…" }],
+  push: true
+})
+→ 临时分支 merge/login-into-master · commit 3a9f2c1 · 已推送 · 创建页：…
+```
+
+> `files: []` 表示这次合并本身就干净，只建临时分支并推送。
+
+**创建 MR**：
+
+```text
+call create_mr({
+  confirm: true,
+  sourceBranch: "feature/login",
+  targetBranch: "master",
+  title: "feat: 登录改造",
+  body: "关联 issue #123",
+  reviewers: ["alice", "bob"]
+})
+→ MR 已创建：feature/login → master
+  https://github.com/…/pull/456
+```
+
+#### 与 CLI / 扩展的对应关系
+
+| MCP 工具 | 等价 CLI 命令 / 能力 |
+|----------|----------------|
+| `git_branch_graph` | `git-insight graph` |
+| `merge_preview`（detail:false） | `git-insight preview-merge` |
+| `merge_preview`（detail:true） | `git-insight merge-rehearsal` |
+| `merge_survey` | `git-insight survey` |
+| `merge_order` | `git-insight merge-order` |
+| `mr_prepare` | `git-insight prepare-mr` |
+| `apply_resolve` | `git-insight apply-resolve`（对应扩展面板「一键解决并推送」） |
+| `create_mr` | `git-insight create-mr`（对应扩展面板「一键申请 MR」） |
 
 ---
 

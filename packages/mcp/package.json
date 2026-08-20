@@ -1,6 +1,6 @@
 {
   "name": "@shaohui_jin/git-insight-mcp-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "MCP server exposing git-insight branch graph, merge preview, batch survey, merge-order planning and MR creation",
   "type": "module",
   "bin": {

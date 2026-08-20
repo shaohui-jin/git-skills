@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { CliStatusPayload, GitInsightConfigView, TokenValidateView } from "./types";
+import type {
+  CliStatusPayload,
+  GitInsightConfigView,
+  ResolverTemplateView,
+  TokenValidateView,
+} from "./types";
 
 const props = defineProps<{
   config: GitInsightConfigView | null;
@@ -12,6 +17,8 @@ const props = defineProps<{
   gitlabTokenStatus?: TokenValidateView | null;
   busy?: boolean;
   previewMode?: boolean;
+  /** 内建 resolver 模板元数据（供勾选展示） */
+  templates?: ResolverTemplateView[];
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +31,8 @@ const emit = defineEmits<{
       aiApiBaseUrl: string;
       aiApiKey: string;
       aiModel: string;
+      autoResolveEnabled: boolean;
+      autoResolveTemplates: string[];
     },
   ];
   validateToken: [
@@ -51,10 +60,13 @@ const aiApiKey = ref("");
 const aiModel = ref("gpt-4o-mini");
 const githubChecking = ref(false);
 const gitlabChecking = ref(false);
+const aiSectionOpen = ref(false);
+const resolverSectionOpen = ref(false);
+const autoResolveEnabled = ref(false);
+const autoResolveChecked = ref<string[]>([]);
 
 const remoteList = computed(() => props.cliStatus?.remotes ?? []);
 const hasRepoRemotes = computed(() => remoteList.value.length > 0);
-const aiSectionOpen = ref(false);
 
 const selectedRemoteInfo = computed(() => {
   const name = defaultRemote.value.trim();
@@ -102,6 +114,8 @@ watch(
     aiApiBaseUrl.value = c.aiApiBaseUrl ?? "https://api.openai.com/v1";
     aiApiKey.value = c.aiApiKey ?? "";
     aiModel.value = c.aiModel ?? "gpt-4o-mini";
+    autoResolveEnabled.value = c.autoResolveEnabled ?? false;
+    autoResolveChecked.value = [...(c.autoResolveTemplates ?? [])];
   },
   { immediate: true },
 );
@@ -310,7 +324,30 @@ function persistConfig(): void {
     aiApiBaseUrl: aiApiBaseUrl.value,
     aiApiKey: aiApiKey.value,
     aiModel: aiModel.value,
+    autoResolveEnabled: autoResolveEnabled.value,
+    autoResolveTemplates: [...autoResolveChecked.value],
   });
+}
+
+/** 总开关：勾选/取消勾选即触发即时保存 */
+function toggleAutoResolve(): void {
+  autoResolveEnabled.value = !autoResolveEnabled.value;
+  persistConfig();
+}
+
+/** 单条模板：勾选/取消勾选即触发即时保存 */
+function toggleTemplate(id: string): void {
+  if (autoResolveChecked.value.includes(id)) {
+    autoResolveChecked.value = autoResolveChecked.value.filter((x) => x !== id);
+  } else {
+    autoResolveChecked.value = [...autoResolveChecked.value, id];
+  }
+  persistConfig();
+}
+
+function templateLabel(t: ResolverTemplateView): string {
+  const args = t.args.length > 0 ? ` ${t.args.join(" ")}` : "";
+  return `${t.label}（${t.cmd}${args}）`;
 }
 
 function onDefaultRemoteChange(): void {
@@ -740,6 +777,53 @@ const gitlabTitleStatus = computed(() => {
               示例 Ollama：Base URL = <code>http://127.0.0.1:11434/v1</code>，模型 =
               <code>qwen2.5-coder</code>，Key 留空。
             </p>
+          </div>
+        </div>
+
+        <div class="ai-section">
+          <button
+            type="button"
+            class="ai-section-toggle"
+            :aria-expanded="resolverSectionOpen"
+            @click="resolverSectionOpen = !resolverSectionOpen"
+          >
+            <span class="tree-caret">{{ resolverSectionOpen ? "▾" : "▸" }}</span>
+            冲突自动解决（resolver）
+            <span class="muted ai-section-hint">可选 · 默认折叠</span>
+          </button>
+          <div v-if="resolverSectionOpen" class="ai-section-body">
+            <label class="auto-resolve-toggle" :class="{ disabled: busy || previewMode }">
+              <input
+                type="checkbox"
+                :checked="autoResolveEnabled"
+                :disabled="busy || previewMode"
+                @change="toggleAutoResolve"
+              />
+              <span class="auto-resolve-text">
+                启用冲突自动解决（勾选后，一键解决并推送时自动处理此类文件）
+              </span>
+            </label>
+            <p class="muted" style="margin: 0">
+              默认仅对 <code>.gitignore</code> 等行集合文件取并集；启用后按下方勾选的模板，
+              交给对应命令重新生成（如 lockfile）。仅用于未被你手动选边的机械冲突。
+            </p>
+            <div v-if="!props.templates || props.templates.length === 0" class="muted">
+              暂无可用模板
+            </div>
+            <label
+              v-for="t in props.templates ?? []"
+              :key="t.id"
+              class="auto-resolve-toggle"
+              :class="{ disabled: busy || previewMode || !autoResolveEnabled }"
+            >
+              <input
+                type="checkbox"
+                :checked="autoResolveChecked.includes(t.id)"
+                :disabled="busy || previewMode || !autoResolveEnabled"
+                @change="toggleTemplate(t.id)"
+              />
+              <span class="auto-resolve-text">{{ templateLabel(t) }}</span>
+            </label>
           </div>
         </div>
       </div>

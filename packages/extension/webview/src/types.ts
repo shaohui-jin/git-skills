@@ -196,7 +196,19 @@ export interface GitInsightConfigView {
   aiApiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
+  /** 冲突自动解决总开关 */
+  autoResolveEnabled?: boolean;
+  /** 已启用的模板 id 列表 */
+  autoResolveTemplates?: string[];
   updatedAt: number;
+}
+
+/** core 内建 resolver 模板的描述（供配置页勾选展示；不含执行能力） */
+export interface ResolverTemplateView {
+  id: string;
+  label: string;
+  cmd: string;
+  args: string[];
 }
 
 export interface GitRemoteView {
@@ -290,6 +302,7 @@ export type HostMessage =
       config: GitInsightConfigView;
       cliStatus: CliStatusPayload;
       configPath: string;
+      templates: ResolverTemplateView[];
       methodReady: boolean;
       methodReadyReason?: string;
       tokenValidation?: TokenValidateView;
