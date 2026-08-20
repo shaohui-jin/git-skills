@@ -78,21 +78,6 @@ const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
   error: "失败",
 };
 
-function addPicked(): void {
-  const picks = pickValue.value.filter(Boolean);
-  if (picks.length === 0) {
-    return;
-  }
-  const bucket = picking.value === "into" ? intos : froms;
-  const merged = new Set([...bucket.value, ...picks]);
-  bucket.value = [...merged];
-  if (picking.value === "into") {
-    intoPickValue.value = [];
-  } else {
-    fromPickValue.value = [];
-  }
-}
-
 /** BranchTreeSelect multi 模式 confirm */
 function onPickedConfirm(values: string[]): void {
   if (values.length === 0) {
@@ -106,6 +91,12 @@ function onPickedConfirm(values: string[]): void {
 function drop(kind: "into" | "from", name: string): void {
   const bucket = kind === "into" ? intos : froms;
   bucket.value = bucket.value.filter((b) => b !== name);
+  // 同步清除下拉选项中的选中状态
+  if (kind === "into") {
+    intoPickValue.value = intoPickValue.value.filter((b) => b !== name);
+  } else {
+    fromPickValue.value = fromPickValue.value.filter((b) => b !== name);
+  }
 }
 
 const canRun = computed(
@@ -469,9 +460,6 @@ watch(
             :placeholder="picking === 'into' ? '选择线上目标…' : '选择待合入分支…'"
             @confirm="onPickedConfirm"
           />
-          <button class="btn secondary" type="button" :disabled="pickValue.length === 0" @click="addPicked">
-            加入
-          </button>
         </div>
         <div class="matrix-setup-actions">
           <button class="btn" type="button" :disabled="!canRun" @click="runSurvey">
