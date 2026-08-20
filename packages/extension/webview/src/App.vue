@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";
 import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
 import GitConfigPanel from "./GitConfigPanel.vue";
 import GraphView from "./GraphView.vue";
 import MarkdownView from "./MarkdownView.vue";
@@ -143,15 +144,56 @@ function onApplyResolve(payload: {
     status.value = error.value;
     return;
   }
+  // 弹自绘确认框，用户点「继续」才真正发起写请求（取消则清空待确认状态）
+  pendingApplyResolve.value = payload;
+}
+
+/** 一键解决并推送：用户在自绘确认框点「继续」 */
+function confirmApplyResolve(): void {
+  const payload = pendingApplyResolve.value;
+  if (!payload) {
+    return;
+  }
+  pendingApplyResolve.value = null;
   loadingAction.value = "preview";
+  // payload 来自 ref 的 reactive Proxy，postMessage 结构化克隆会 DataCloneError，需先还原为纯对象
+  const plain = toPlainJson(payload);
   vscode.postMessage({
     type: "applyResolve",
-    into: payload.into,
-    from: payload.from,
-    files: payload.files,
-    push: payload.push,
+    into: plain.into,
+    from: plain.from,
+    files: plain.files,
+    push: plain.push,
   });
 }
+
+/** 一键解决并推送：用户在自绘确认框点「取消」 */
+function cancelApplyResolve(): void {
+  pendingApplyResolve.value = null;
+  error.value = "已取消一键解决";
+  status.value = error.value;
+}
+
+/** 自绘确认框的展示文案 */
+const applyResolveConfirmMessage = computed(() => {
+  const p = pendingApplyResolve.value;
+  if (!p) {
+    return "";
+  }
+  const clean = !p.files?.length;
+  const lines = [
+    clean
+      ? `将推送临时分支（独立 worktree，不切换当前分支）：`
+      : `将解决冲突并${p.push ? "推送" : "提交"}（独立 worktree，不切换当前分支）：`,
+    `1) 基于「${p.into}」新建临时分支`,
+    `2) 合并「${p.from}」${clean ? "并提交" : "并写入选边结果"}`,
+  ];
+  if (p.push) {
+    lines.push(`3) 推送到 origin`);
+  }
+  lines.push(`\n完成后可在面板「一键申请 MR」。`);
+  return lines.join("\n");
+});
 
 const MAX_AI_HUNK_CHARS = 4000;
 
@@ -455,6 +497,13 @@ const matrixTrail = ref<MatrixTrail | null>(null);
 const mrDialogOpen = ref(false);
 const mrDraft = ref<MrDialogDraft | null>(null);
 const mrBusy = ref(false);
+/** 待「一键解决并推送」自绘确认框确认的请求；非 null 表示确认框未关 */
+const pendingApplyResolve = ref<{
+  into: string;
+  from: string;
+  files: Array<{ path: string; resolvedContent: string }>;
+  push: boolean;
+} | null>(null);
 
 const gitConfig = ref<GitInsightConfigView | null>(null);
 const cliStatus = ref<CliStatusPayload | null>(null);
@@ -1724,6 +1773,16 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
       @close="mrDialogOpen = false"
       @submit="submitCreateMr"
       @open-url="openExternalUrl"
+    />
+
+    <ConfirmDialog
+      :open="pendingApplyResolve !== null"
+      title="确认解决并推送"
+      :message="applyResolveConfirmMessage"
+      confirm-label="继续"
+      :danger="true"
+      @confirm="confirmApplyResolve"
+      @cancel="cancelApplyResolve"
     />
   </div>
 </template>

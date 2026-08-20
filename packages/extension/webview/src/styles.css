@@ -2305,6 +2305,28 @@ button.btn.loading {
   border-top: 1px solid var(--border);
 }
 
+/* —— 通用确认框 ConfirmDialog —— */
+.confirm-dialog-message {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+button.btn.danger {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--danger) 92%, #fff) 0%,
+    var(--danger) 100%
+  );
+  color: #fff;
+}
+
+button.btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+
 button.linkish {
   appearance: none;
   border: none;

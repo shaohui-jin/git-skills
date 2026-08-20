@@ -151,6 +151,7 @@ function submit(): void {
         <template v-else>
           使用 <code>{{ draft.cli || "CLI" }}</code> 创建。可多选指派人 / 审核人（同一批人同时设置两种角色）后提交。
         </template>
+        点「创建」即确认并立即执行，不可撤销。
       </p>
 
       <div class="mr-route">
@@ -212,7 +213,7 @@ function submit(): void {
         </button>
         <button
           type="button"
-          class="btn"
+          class="btn danger"
           :disabled="busy || !canSubmit || !sourceBranch.trim() || !targetBranch.trim()"
           @click="submit"
         >

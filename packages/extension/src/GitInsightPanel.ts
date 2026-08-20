@@ -446,51 +446,6 @@ export class GitInsightPanel {
       return;
     }
 
-    if (req.type === "applyResolve") {
-      const push = req.push !== false;
-      const cleanTemp = !req.files?.length;
-      const pick = await vscode.window.showWarningMessage(
-        cleanTemp
-          ? `将推送临时分支（独立 worktree，不切换当前分支）：\n` +
-              `1) 基于「${req.into}」新建临时分支\n` +
-              `2) 合并「${req.from}」并提交\n` +
-              (push ? `3) 推送到 origin\n` : "") +
-              `\n完成后可在面板「一键申请 MR」。`
-          : `将解决冲突并${push ? "推送" : "提交"}（独立 worktree，不切换当前分支）：\n` +
-              `1) 基于「${req.into}」新建临时分支\n` +
-              `2) 合并「${req.from}」并写入选边结果\n` +
-              (push ? `3) 推送到 origin\n` : "") +
-              `\n完成后可在面板「一键申请 MR」。`,
-        { modal: true },
-        "继续",
-      );
-      if (pick !== "继续") {
-        await this.post({
-          type: "error",
-          message: cleanTemp ? "已取消推送临时分支" : "已取消一键解决",
-          code: "CANCELLED",
-        });
-        return;
-      }
-    }
-
-    if (req.type === "createMr") {
-      const people =
-        req.reviewers?.length
-          ? `\n指派人 / 审核人：${req.reviewers.join(", ")}`
-          : "\n指派人 / 审核人：（未指定）";
-      const pick = await vscode.window.showWarningMessage(
-        `将按「Git 配置」中的方式创建 ${req.sourceBranch} → ${req.targetBranch} 的 MR/PR。` +
-          people,
-        { modal: true },
-        "创建",
-      );
-      if (pick !== "创建") {
-        await this.post({ type: "error", message: "已取消创建 MR", code: "CANCELLED" });
-        return;
-      }
-    }
-
     const label = busyLabelForRequest(req);
 
     if (label) {
