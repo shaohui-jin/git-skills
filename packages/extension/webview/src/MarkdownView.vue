@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { marked } from "marked";
 import { computed } from "vue";
+import { sanitizeReportHtml } from "./sanitizeReportHtml";
 
 const props = defineProps<{
   source: string;
@@ -14,12 +15,15 @@ marked.setOptions({
 const html = computed(() => {
   const src = props.source?.trim() ?? "";
   if (!src) {
-    return "<p class=\"md-empty\">暂无报告</p>";
+    return "";
   }
-  return marked.parse(src, { async: false }) as string;
+  return sanitizeReportHtml(marked.parse(src, { async: false }) as string);
 });
 </script>
 
 <template>
-  <div class="md-body" v-html="html" />
+  <div class="md-body">
+    <p v-if="!html" class="md-empty">暂无报告</p>
+    <div v-else v-html="html" />
+  </div>
 </template>

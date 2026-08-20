@@ -1,3 +1,5 @@
+import type { MergeChainResult, SuggestOrderResult } from "../merge/chain.js";
+import type { MergeSurveyResult, SurveyOutcome } from "../merge/survey.js";
 import type {
   BranchGraph,
   ConflictBlameResult,
@@ -15,29 +17,36 @@ export function reportGraph(graph: BranchGraph): string {
     ``,
     `- 仓库：${graph.repoRoot}`,
     `- 分支 tip 数：${graph.tips.length}`,
-    `- 提交节点：${graph.nodes.length}${graph.truncated ? `（已截断，上限 ${graph.maxNodes}）` : ""}`,
+    `- 分支 tip：${graph.tips.length}（可视化画布仅展示 tip 链路；提交元数据 ${graph.nodes.length} 条${graph.truncated ? `，已截断上限 ${graph.maxNodes}` : ""}）`,
   ];
+  if (graph.fetched) {
+    lines.push(
+      `- 本次 fetch：${graph.fetchOk ? "成功" : `失败（数据可能落后于线上）${graph.fetchError ? `：${graph.fetchError}` : ""}`}`,
+    );
+  } else {
+    lines.push(`- 本次 fetch：已跳过`);
+  }
 
   if (graph.lineage) {
     lines.push(``, `## 溯源（相对两分支）`);
     lines.push(`- merge-base：\`${short(graph.lineage.mergeBase)}\``);
-    lines.push(`- 目标分支独有提交：${graph.lineage.intoOnlyCount}`);
-    lines.push(`- 待合并分支独有提交：${graph.lineage.fromOnlyCount}`);
+    lines.push(`- 线上目标独有提交：${graph.lineage.intoOnlyCount}`);
+    lines.push(`- 我的分支独有提交：${graph.lineage.fromOnlyCount}`);
     if (graph.lineage.branchedFrom) {
       const b = graph.lineage.branchedFrom;
       lines.push(
-        `- 待合并侧首个独有提交：\`${short(b.sha)}\` ${b.author} — ${b.message}`,
+        `- 我的分支侧首个独有提交：\`${short(b.sha)}\` ${b.author} — ${b.message}`,
       );
     }
   }
 
-  const localTips = graph.tips.filter((t) => !t.remote).slice(0, 20);
-  const remoteTips = graph.tips.filter((t) => t.remote).slice(0, 20);
-  lines.push(``, `## 本地分支（最多 20）`);
+  const localTips = graph.tips.filter((t) => !t.remote);
+  const remoteTips = graph.tips.filter((t) => t.remote);
+  lines.push(``, `## 本地分支（${localTips.length}）`);
   for (const t of localTips) {
     lines.push(`- \`${t.name}\` → \`${short(t.sha)}\`${t.upstream ? ` (↑ ${t.upstream})` : ""}`);
   }
-  lines.push(``, `## 远程跟踪分支（最多 20）`);
+  lines.push(``, `## 远程跟踪分支（${remoteTips.length}）`);
   for (const t of remoteTips) {
     lines.push(`- \`${t.name}\` → \`${short(t.sha)}\``);
   }
@@ -53,16 +62,20 @@ function appendConflictDetails(lines: string[], result: ConflictBlameResult): vo
     if (hunks.length > 0) {
       lines.push(`#### 来源溯源`);
       for (const hunk of hunks) {
-        lines.push(`- 目标侧行 ${hunk.oursRange[0]}-${hunk.oursRange[1]}：`);
+        lines.push(`- 线上侧行 ${hunk.oursRange[0]}-${hunk.oursRange[1]}：`);
         for (const c of hunk.oursCommits) {
+          const when =
+            c.time != null ? ` · ${new Date(c.time * 1000).toLocaleString("zh-CN")}` : "";
           lines.push(
-            `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
+            `  - \`${short(c.sha)}\` ${c.author}${when}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
           );
         }
-        lines.push(`- 待合并侧行 ${hunk.theirsRange[0]}-${hunk.theirsRange[1]}：`);
+        lines.push(`- 我的分支侧行 ${hunk.theirsRange[0]}-${hunk.theirsRange[1]}：`);
         for (const c of hunk.theirsCommits) {
+          const when =
+            c.time != null ? ` · ${new Date(c.time * 1000).toLocaleString("zh-CN")}` : "";
           lines.push(
-            `  - \`${short(c.sha)}\` ${c.author}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
+            `  - \`${short(c.sha)}\` ${c.author}${when}${c.pr ? ` ${c.pr}` : ""}${c.message ? ` — ${c.message}` : ""}`,
           );
         }
       }
@@ -79,10 +92,10 @@ function appendConflictDetails(lines: string[], result: ConflictBlameResult): vo
       lines.push(``, `#### 冲突内容`);
       lines.push(`- （未能生成冲突标记文本）`);
       if (f.oursContent != null || f.theirsContent != null) {
-        lines.push(``, `<details><summary>目标侧原文</summary>`, ``, "```");
+        lines.push(``, `<details><summary>线上侧原文</summary>`, ``, "```");
         lines.push((f.oursContent ?? "（无）").slice(0, 8000));
         lines.push("```", `</details>`);
-        lines.push(``, `<details><summary>待合并侧原文</summary>`, ``, "```");
+        lines.push(``, `<details><summary>我的分支侧原文</summary>`, ``, "```");
         lines.push((f.theirsContent ?? "（无）").slice(0, 8000));
         lines.push("```", `</details>`);
       }
@@ -106,8 +119,8 @@ export function reportMergeRehearsal(result: ConflictBlameResult): string {
     `# 合并预演`,
     ``,
     `- 仓库：${result.repoRoot}`,
-    `- 目标分支 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
-    `- 待合并分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
+    `- 线上目标 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
+    `- 我的分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
     `- merge-base：${result.mergeBase ? `\`${short(result.mergeBase)}\`` : "（无共同祖先，无法计算）"}`,
     `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
     `- 结果：${outcomeLabel(result)}`,
@@ -131,7 +144,7 @@ export function reportMergeRehearsal(result: ConflictBlameResult): string {
   }
 
   if (result.clean) {
-    lines.push(``, `无冲突，可以将 \`${result.from}\` 合入 \`${result.into}\`。`);
+    lines.push(``, `无冲突，可以将我的分支 \`${result.from}\` 合入线上 \`${result.into}\`。`);
     return lines.join("\n");
   }
 
@@ -152,8 +165,8 @@ export function reportMerge(result: MergePreviewResult): string {
     `# 合并预演`,
     ``,
     `- 仓库：${result.repoRoot}`,
-    `- 目标分支 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
-    `- 待合并分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
+    `- 线上目标 (--into)：\`${result.into}\` @ \`${short(result.intoSha)}\``,
+    `- 我的分支 (--from)：\`${result.from}\` @ \`${short(result.fromSha)}\``,
     `- merge-base：\`${short(result.mergeBase)}\``,
     `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
     `- 结果：${result.clean ? "**可干净合并**" : `**存在冲突（${result.conflictFiles.length} 个文件）**`}`,
@@ -172,6 +185,133 @@ export function reportMerge(result: MergePreviewResult): string {
 
 export function reportBlame(result: ConflictBlameResult): string {
   return reportMergeRehearsal(result);
+}
+
+const OUTCOME_MARK: Record<SurveyOutcome, string> = {
+  clean: "✅",
+  conflicts: "⚠️",
+  unrelated: "🚫",
+  same: "—",
+  error: "❌",
+};
+
+const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
+  clean: "干净",
+  conflicts: "冲突",
+  unrelated: "无共同祖先",
+  same: "同名，跳过",
+  error: "失败",
+};
+
+/** 矩阵：行 = 我的分支(from)，列 = 线上目标(into)，格子里是结论 + 冲突文件数 */
+export function reportMergeSurvey(result: MergeSurveyResult): string {
+  const intos: string[] = [];
+  const froms: string[] = [];
+  for (const c of result.cells) {
+    if (!intos.includes(c.into)) {
+      intos.push(c.into);
+    }
+    if (!froms.includes(c.from)) {
+      froms.push(c.from);
+    }
+  }
+  const byKey = new Map(result.cells.map((c) => [`${c.into}\0${c.from}`, c]));
+
+  const lines: string[] = [
+    `# 批量合并预演`,
+    ``,
+    `- 仓库：${result.repoRoot}`,
+    `- 组合数：${result.cells.length}（${froms.length} 个来源 × ${intos.length} 个目标）`,
+    `- 本次是否 fetch：${result.fetched ? "是" : "否"}`,
+    ``,
+    `| from \\ into | ${intos.map((i) => `\`${i}\``).join(" | ")} |`,
+    `| --- | ${intos.map(() => "---").join(" | ")} |`,
+  ];
+
+  for (const from of froms) {
+    const cells = intos.map((into) => {
+      const c = byKey.get(`${into}\0${from}`);
+      if (!c) {
+        return "";
+      }
+      const n = c.conflictPaths.length;
+      return `${OUTCOME_MARK[c.outcome]} ${OUTCOME_TEXT[c.outcome]}${n > 0 ? ` (${n})` : ""}`;
+    });
+    lines.push(`| \`${from}\` | ${cells.join(" | ")} |`);
+  }
+
+  const dirty = result.cells.filter((c) => c.conflictPaths.length > 0);
+  if (dirty.length > 0) {
+    lines.push(``, `## 冲突明细`);
+    for (const c of dirty) {
+      lines.push(``, `### \`${c.from}\` → \`${c.into}\`（${c.conflictPaths.length} 个文件）`);
+      for (const p of c.conflictPaths) {
+        lines.push(`- \`${p}\``);
+      }
+    }
+  }
+
+  const failed = result.cells.filter((c) => c.outcome === "error");
+  if (failed.length > 0) {
+    lines.push(``, `## 未能预演`);
+    for (const c of failed) {
+      lines.push(`- \`${c.from}\` → \`${c.into}\`：${c.error ?? "未知原因"}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function chainLines(result: MergeChainResult, title: string): string[] {
+  const lines = [`### ${title}`, ``];
+  result.steps.forEach((s, i) => {
+    const mark = OUTCOME_MARK[s.outcome];
+    const n = s.conflictPaths.length;
+    lines.push(
+      `${i + 1}. ${mark} \`${s.from}\` — ${OUTCOME_TEXT[s.outcome]}${n > 0 ? `（${n} 个文件）` : ""}`,
+    );
+  });
+  result.order.slice(result.steps.length).forEach((from, i) => {
+    lines.push(`${result.steps.length + i + 1}. ⏸ \`${from}\` — 未推演（前面已卡住）`);
+  });
+  return lines;
+}
+
+export function reportMergeOrder(result: SuggestOrderResult): string {
+  const { best, baseline } = result;
+  const total = best.order.length;
+  const lines: string[] = [
+    `# 合并顺序建议`,
+    ``,
+    `- 目标分支：\`${best.into}\` @ \`${short(best.intoSha)}\``,
+    `- 待合入：${total} 个`,
+    `- 建议顺序可连续干净合入：**${best.cleanPrefix} / ${total}**（原顺序 ${baseline.cleanPrefix} / ${total}）`,
+    best.blockedAt
+      ? `- 从 \`${best.blockedAt}\` 开始需要人工处理${
+          best.blockedPaths.length > 0
+            ? `（${best.blockedPaths.length} 个文件）`
+            : best.blockedReason
+              ? `：${best.blockedReason}`
+              : ""
+        }`
+      : `- 全部可干净合入`,
+    ``,
+    `> 模拟全程在对象库内完成，不改工作区、不建分支。`,
+    ``,
+  ];
+
+  lines.push(...chainLines(best, "建议顺序"));
+  if (best.cleanPrefix > baseline.cleanPrefix) {
+    lines.push(``, ...chainLines(baseline, "原顺序（对比）"));
+  }
+
+  if (best.blockedPaths.length > 0) {
+    lines.push(``, `## 卡住那一步的冲突文件`);
+    for (const p of best.blockedPaths) {
+      lines.push(`- \`${p}\``);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function reportFetch(result: FetchResult): string {

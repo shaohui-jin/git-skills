@@ -4,7 +4,7 @@
     {
       "label": "build-extension",
       "type": "shell",
-      "command": "pnpm --filter @git-insight/core build && pnpm --filter git-insight build",
+      "command": "pnpm --filter @shaohui_jin/git-insight-core build && pnpm --filter git-insight build",
       "options": {
         "cwd": "${workspaceFolder}"
       },

@@ -1,98 +1,79 @@
 ---
 name: git-branch-insight
 description: >-
-  Analyzes Git branch lineage and runs merge rehearsal between any two branches
-  (conflict files, conflict content with markers, and authorship provenance)
-  via merge-tree without touching the worktree. Defaults to git fetch before
-  analysis. Use when the user asks about branch graphs, merge preview, merge
-  conflicts, conflict sources, or comparing local/remote branches.
+  Git branch graph, merge rehearsal, conflict resolve, and MR/PR creation
+  (cli / token / extension UI). Invoke with /git-branch-insight then state
+  into/from or intent. Defaults to git fetch.
+disable-model-invocation: true
 ---
 
 # Git Branch Insight
 
-用 `@git-insight/core`（CLI：`git-insight`）分析当前仓库。不要手写脆弱的 git 解析；优先跑 CLI，再把 `report` / `mermaid` 用中文转述给用户。
+## 怎么用（用户侧）
 
-## 前置条件
+1. Agent 聊天输入 `/git-branch-insight`（斜杠菜单选本 Skill）
+2. **同一条消息或下一条**写清需求，例如：
+   - `把 feature/x 合进 origin/develop，有冲突列出内容`
+   - `预演后能开 MR 再问我用 cli / token / ui`
+   - `只看分支图`
 
-- 系统已安装 Git >= 2.38
-- 在目标仓库根目录执行，或传 `--cwd <repo>`
-- 本 monorepo 内先构建：`pnpm --filter @git-insight/core build`
-- 调用：`pnpm --filter @git-insight/core exec node dist/cli.js <command> ...`
+不要让用户自己拼 CLI；由本 Skill 编排。
 
-## 默认行为
+## 闭环
 
-- **默认 fetch**：`graph` / `preview-merge` 都会先 `git fetch --prune origin`（失败则继续用本地 refs）
-- 仅当用户明确要求「不要拉远端 / 离线」时加 `--no-fetch`
-- **不修改工作区**：合并预演只用 `merge-tree` + `merge-file -p`
-
-## 命令
-
-### 1. 分支图（可零参）
-
-```bash
-git-insight graph
-git-insight graph --into main --from feature/x
+```text
+fetch/graph → preview-merge →（冲突：确认选边 + apply-resolve）→ 询问 MR 方式 → 执行
 ```
 
-### 2. 合并预演（任意两分支；含冲突正文与溯源）
+## 硬性规则
+
+1. `--into` = **远程**（如 `origin/develop`）
+2. 同名（`master` ↔ `origin/master`）→ 停止，自行 push/pull
+3. `apply-resolve` / `create-mr` 前必须用户确认
+4. 冲突必须展示 `conflictContent`
+5. 左=线上 into，右=我的 from
+
+## CLI
+
+先：`pnpm --filter @shaohui_jin/git-insight-core build`
 
 ```bash
-git-insight preview-merge --into <目标分支> --from <待合并分支>
+pnpm --filter @shaohui_jin/git-insight-core exec node dist/cli.js <command> …
 ```
 
-兼容旧名（行为相同）：
+| 阶段 | 命令 |
+|------|------|
+| 同步 | `fetch`（未传 `--remote` 时读扩展配置 `defaultRemote`，见 `~/.git-insight/user-config.json`） |
+| 图 | `graph` |
+| 预演 | `preview-merge --into <远程> --from <我的>` |
+| 落盘 | `apply-resolve --into … --from … --stash stash.json` |
+| 准备 MR | `prepare-mr --into … --from …` |
+| 创建 MR | `create-mr --source … --target … --method cli\|token` |
 
-```bash
-git-insight conflict-blame --into <目标> --from <待合并>
-```
+干净：`stash` 可用 `{ "files": [] }`。
 
-结果必须完整转述：
+## 申请 MR（先问）
 
-- 可干净合并 **或** 冲突文件列表
-- **每个冲突文件的冲突内容**（含 `<<<<<<<` 标记文本，来自 `data.conflictFiles[].conflictContent`）
-- 两侧写入来源（作者 / commit，来自 hunks / blamed）
-- 优先展示 `report` 字段（已含上述内容）
+| 选项 | 做法 |
+|------|------|
+| cli | `create-mr --method cli` |
+| token | `create-mr --method token` 或 `GIT_INSIGHT_*_TOKEN` |
 
-### 3. 仅 fetch
-
-```bash
-git-insight fetch
-```
-
-## Agent 工作流
-
-1. 确认仓库路径
-2. 映射意图 → `graph` 或 `preview-merge`
-3. 执行 CLI，解析 JSON
-4. `ok: false` → 解释 `error`
-5. `ok: true`：
-   - 展示 `report`（中文）
-   - 若有冲突，**不得只说「有冲突」**，必须列出文件并展示冲突内容 / 溯源要点
-   - 需要图时附上 `mermaid`
-
-## 输出约定
+## 输出
 
 ```markdown
 ## 结论
-（干净合并 / 冲突 N 个文件）
-
 ## 冲突详情
-（每个文件：路径、溯源、冲突内容代码块）
-
 ## 图
-```mermaid
-…
+## 建议动作（含 MR：cli|token 待选）
+## 结果
 ```
-```
 
-## 不要做的事
+## 不要做
 
-- 不要为了预演执行真实 `git merge` / `checkout`
-- 不要把 PR 号当作核心参数
-- 不要跳过默认 fetch（除非用户要求离线）
-- 冲突时不要只汇报「失败/有冲突」而省略冲突正文
+- 预演不用真实 merge/checkout
+- 未确认不写仓、不开 MR
+- 不同名强行建 MR
+- 不把流程拆成让用户自己点 CLI
 
-## 更多
-
-- [examples.md](examples.md)
-- [reference.md](reference.md)
+详情：[`docs/guide.md`](../../docs/guide.md) §四。

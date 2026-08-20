@@ -1,77 +1,51 @@
-# Git Insight 扩展（次交付）
+# Git Insight
 
-在 Cursor / VS Code 中打开 **网页版可视化**（Webview），能力全部来自 `@git-insight/core`。
+Cursor / VS Code 扩展：Git 分支图、合并冲突预演、冲突选边 / AI 选边、一键解决并推送、申请 MR/PR；安装后附带 Agent Skill `/git-branch-insight`。
 
-## 功能
+- 扩展 ID：`jinshaohui.git-insight`
+- 引擎：`@shaohui_jin/git-insight-core`
+- 仓库：[shaohui-jin/git-skills](https://github.com/shaohui-jin/git-skills)
+- **功能与实现进度**：[docs/features.md](../../docs/features.md)
 
-| 能力 | 说明 |
-|------|------|
-| 分支图 | G6 可视化 + 中文报告 |
-| **合并预演** | 任意两分支：是否可合并、冲突文件、冲突正文、来源溯源 |
-| **Fetch 按钮** | 手动 `git fetch --prune origin`（网页端默认不自动 fetch） |
+## 安装
 
-## 命令
+**Cursor 扩展市场（Open VSX）**
 
-- `Git Insight: Open Web Visualization`
-- `Git Insight: Preview Merge Conflicts`
-- `Git Insight: Trace Conflict Sources`
+1. 扩展面板搜索 `Git Insight` 或 `jinshaohui.git-insight`
+2. 安装并 Reload Window
 
-## 本地浏览器预览（不装扩展）
-
-前端为 **Vue 3 + AntV G6**（分支图可视化；选型见 [docs/graph-engine.md](../../docs/graph-engine.md)）。在仓库根目录：
+**本地 VSIX**
 
 ```bash
-pnpm install
-pnpm preview
+# 仓库根目录
+pnpm package:vsix
+cursor --install-extension git-insight.vsix --force
 ```
 
-浏览器打开 http://127.0.0.1:5173/ 。
+Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（及 `~/.agents/skills/…`），并写入自带 CLI 路径。若斜杠菜单没有，命令面板执行：`Git Insight: 同步 Agent Skill 到全局`。
 
-### 指定仓库的方式
+## 使用
 
-1. **启动参数**
-   ```bash
-   pnpm preview:repo -- --cwd D:\path\to\your\repo
-   ```
-2. **网页输入本机路径** → 「打开」
-3. **网页输入 GitHub** → `owner/repo` 或 `https://github.com/owner/repo`（服务端真实 `git clone`）
-4. **「浏览…」** → 本机系统对话框（仅本地预览 / 扩展）
+### 面板（可视化）
 
-云端部署（Docker / GHCR / Codespaces）见 [docs/github-deploy.md](../../docs/github-deploy.md)。
+1. 命令面板搜 Git Insight：`Open Web`（配置）/ `合并预演` / `打开预演（可带 into/from）` / `同步 Agent Skill 到全局`
+2. 在面板完成 Git 配置：默认远程 + A/B/C/D MR 方式（AI 选边可折叠配置）
+3. 分支图 → 合并预演 →（如有冲突）一键解决并推送 → 申请 MR
 
-### 关于 HTTPS（常见误解）
+### Agent Skill（任意仓库）
 
-浏览器自带的 `showDirectoryPicker` / 部分目录 API **确实要求安全上下文（HTTPS 或 localhost）**。  
-**本项目没有用那套 API**，因此：
-
-| 场景 | 协议 | 能否选目录 |
-|------|------|------------|
-| `pnpm preview`（http://127.0.0.1） | HTTP | 能：WebSocket → Node → 系统对话框；或手输路径 |
-| Cursor / VS Code 扩展 Webview | `vscode-webview://`（不是浏览器 HTTP 页） | 能：`vscode.window.showOpenDialog` |
-
-`http://127.0.0.1` 本身也是浏览器认定的安全上下文；即便如此，我们仍走宿主选目录，避免拿不到绝对路径。
-
-页面内还可：**Fetch**、分支图、冲突预演、冲突溯源（均走 `@git-insight/core`）。
-
-## 开发构建
-
-```bash
-pnpm install
-pnpm --filter @git-insight/core build
-pnpm --filter git-insight build
+```text
+/git-branch-insight
+把 feature/x 合进 origin/develop；能开 MR 再问我
 ```
 
-## 在 Cursor / VS Code 中加载
+闭环：预演 →（确认后）落盘 → 申请 MR 时三选一（本机 `gh`/`glab` · Token · 唤起本扩展 UI）。
 
-1. 打开本仓库或任意 Git 仓库作为工作区
-2. 运行「Developer: Install Extension from Location…」选中 `packages/extension`
-   - 或用 F5 调试（需 `.vscode/launch.json`）
-3. 命令面板执行 `Git Insight: Open Web Visualization`
+约定：
 
-## 与 Skill 的差异
+- **目标分支**仅远程（如 `origin/test`）；**我的分支**可选本地或远程
+- 源/目标短名相同（如 `master` ↔ `origin/master`）不处理，请自行 `git push` / `pull`
+- 「AI 选边（模型）」可选：`vscode.lm` → OpenAI 兼容 API / Ollama → Chat 桥（详见 [docs/guide.md §2.5](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md#25-ai-选边扩展)）
 
-| | Skill | 本扩展网页 |
-|--|-------|------------|
-| Fetch | 默认自动 | 工具栏手动（可选「操作前先 Fetch」） |
-| 交互 | 对话 + 报告 | 可视化面板 |
-| 引擎 | 同一 `@git-insight/core` | 同一 |
+完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)（§1.4 安装 · §四 Skill · **§五 指令一览**）。  
+变更记录：[CHANGELOG.md](./CHANGELOG.md)（随 VSIX 发布，Cursor / Open VSX 市场可见）。
