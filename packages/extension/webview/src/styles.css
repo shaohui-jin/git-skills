@@ -4173,3 +4173,190 @@ button.btn.tiny {
   display: flex;
   gap: 6px;
 }
+
+/* ============================ 批量合并 ============================ */
+
+/* 对话框关闭钮（mr-dialog-head 内）：批量确认框与后续弹层共用 */
+.modal-x {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--dim);
+  font-size: var(--fs-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-x:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--fg);
+}
+
+.modal-x:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 批量确认对话框：比 MR 弹窗更宽（清单带序号/来源/移动按钮三列信息） */
+.batch-modal {
+  width: min(720px, 100%);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+.batch-dryrun {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--dim);
+  font-size: var(--fs-sm);
+  padding: var(--space-6) 0;
+  justify-content: center;
+}
+
+.batch-blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.batch-blocked .matrix-paths {
+  max-height: 140px;
+  overflow: auto;
+}
+
+.batch-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  letter-spacing: var(--track-mono);
+}
+
+.batch-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.batch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+
+.batch-row:last-child {
+  border-bottom: none;
+}
+
+.batch-row-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.batch-row-n {
+  flex: 0 0 20px;
+  text-align: right;
+  color: var(--dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.batch-row-src {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+}
+
+.batch-row-outcome {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: var(--fs-micro);
+}
+
+.batch-row-move {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.batch-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.modal-foot-spacer {
+  flex: 1 1 auto;
+}
+
+/* 矩阵顶部的批量结果横幅 */
+.batch-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--clean) 40%, transparent);
+  background: color-mix(in srgb, var(--clean) 8%, transparent);
+  font-size: var(--fs-sm);
+}
+
+.batch-banner--warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.batch-banner-name {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.batch-banner-msg {
+  flex: 1 1 auto;
+  min-width: 200px;
+  color: var(--dim);
+  font-size: var(--fs-xs);
+}

@@ -22,8 +22,40 @@ export type WebviewRequest =
       files: Array<{ path: string; resolvedContent: string }>;
       remote?: string;
       push?: boolean;
+      /** 矩阵模式：不推送也保留本地临时分支 */
+      keepLocal?: boolean;
       tempBranch?: string;
     }
+  | {
+      /** 批量合并干跑预演（零副作用，确认对话框内自动跑） */
+      type: "batchMergePlan";
+      into: string;
+      entries: Array<{
+        from: string;
+        /** 冲突格子已解决过：必须有可用临时分支 */
+        resolved?: boolean;
+        commitSha?: string;
+      }>;
+      noFetch?: boolean;
+      remote?: string;
+    }
+  | {
+      /** 批量合并实跑：worktree 累积真合并 + 单次 push（sha 护栏内置） */
+      type: "batchMergeRun";
+      into: string;
+      batchBranch: string;
+      items: Array<{
+        from: string;
+        source: string;
+        sourceKind: "branch" | "temp-local" | "temp-remote";
+        sourceSha: string;
+      }>;
+      noFetch?: boolean;
+      remote?: string;
+    }
+  | { type: "pushBranch"; branch: string; remote?: string }
+  | { type: "batchMrPrecheck"; into: string; batchBranch: string; remote?: string }
+  | { type: "deleteLocalBranches"; branches: string[] }
   | {
       type: "prepareCreateMr";
       into: string;

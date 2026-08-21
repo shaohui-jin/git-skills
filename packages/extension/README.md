@@ -1,6 +1,6 @@
 # Git Insight
 
-Cursor / VS Code 扩展：Git 分支图、合并冲突预演、冲突选边 / AI 选边、一键解决并推送、申请 MR/PR；安装后附带 Agent Skill `/git-branch-insight`。
+Cursor / VS Code 扩展：Git 分支图、合并冲突预演、冲突选边 / AI 选边、一键解决并推送、合并矩阵与批量合并（单个总 MR）、合入顺序建议、申请 MR/PR；安装后附带 Agent Skill `/git-branch-insight`。
 
 - 扩展 ID：`jinshaohui.git-insight`
 - 引擎：`@shaohui_jin/git-insight-core`
@@ -28,9 +28,10 @@ Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（
 
 ### 面板（可视化）
 
-1. 命令面板搜 Git Insight：`Open Web`（配置）/ `合并预演` / `打开预演（可带 into/from）` / `同步 Agent Skill 到全局`
-2. 在面板完成 Git 配置：默认远程 + A/B/C/D MR 方式（AI 选边可折叠配置）
-3. 分支图 → 合并预演 →（如有冲突）一键解决并推送 → 申请 MR
+1. 命令面板搜 Git Insight：`打开面板` / `合并预演` / `打开预演（可带 into/from）` / `立即检查合并冲突` / `同步 Agent Skill 到全局`（合并矩阵在面板内切换）
+2. 在面板完成 Git 配置：默认远程 + gh/glab/Token/浏览器四种 MR 方式（AI 选边、冲突自动解决可折叠配置）
+3. 单对流程：分支图 → 合并预演 →（如有冲突）选边 → 一键解决并推送 → 申请 MR
+4. 多分支批量：合并矩阵 → 看清 N×M 两两冲突 → 算顺序 → 逐条解决（矩阵模式只提交本地临时分支）→「一键处理合并并推送」（干跑预演 → 确认清单可排除/调序 → 累积合并 + 单次推送）→ 一键申请总 MR
 
 ### Agent Skill（任意仓库）
 
@@ -45,6 +46,7 @@ Reload 后扩展会把 Skill 同步到 `~/.cursor/skills/git-branch-insight/`（
 
 - **目标分支**仅远程（如 `origin/test`）；**我的分支**可选本地或远程
 - 源/目标短名相同（如 `master` ↔ `origin/master`）不处理，请自行 `git push` / `pull`
+- 批量合并前先干跑预演：序贯冲突（分支间互相冲突）或源分支已变动（sha 护栏）会在执行前拦截
 - 「AI 选边（模型）」可选：`vscode.lm` → OpenAI 兼容 API / Ollama → Chat 桥（详见 [docs/guide.md §2.5](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md#25-ai-选边扩展)）
 
 完整说明：[docs/guide.md](https://github.com/shaohui-jin/git-skills/blob/master/docs/guide.md)（§1.4 安装 · §四 Skill · **§五 指令一览**）。  

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { isSameBranchForMr as coreIsSameBranchForMr } from "@shaohui_jin/git-insight-core/merge/branchName";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import BatchMergeDialog from "./BatchMergeDialog.vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import ConflictResolvePanel from "./ConflictResolvePanel.vue";
 import CreateMrDialog, { type MrDialogDraft } from "./CreateMrDialog.vue";
@@ -18,6 +19,10 @@ import { normalizeBranches, type BranchOption } from "./graph/branchTree";
 import { overviewReport, pathReport } from "./graph/branchPathReport";
 import { applyTheme, initTheme } from "./theme";
 import type {
+  BatchMergePlanResult,
+  BatchMergeRunResult,
+  BatchMrPrecheckResult,
+  BatchRunItem,
   BranchGraph,
   CliStatusPayload,
   ConflictBlameResult,
@@ -157,6 +162,10 @@ function confirmApplyResolve(): void {
   }
   pendingApplyResolve.value = null;
   loadingAction.value = "preview";
+  // 矩阵模式下解决不推送：临时分支留在本地（keepLocal），
+  // 推送收敛到「一键处理合并并推送」的批量流程，避免解决和推送两趟网络
+  const inMatrix = !!matrixTrail.value;
+  applyKeptLocal.value = inMatrix;
   // payload 来自 ref 的 reactive Proxy，postMessage 结构化克隆会 DataCloneError，需先还原为纯对象
   const plain = toPlainJson(payload);
   vscode.postMessage({
@@ -164,7 +173,8 @@ function confirmApplyResolve(): void {
     into: plain.into,
     from: plain.from,
     files: plain.files,
-    push: plain.push,
+    push: inMatrix ? false : plain.push,
+    keepLocal: inMatrix || undefined,
   });
 }
 
@@ -181,18 +191,26 @@ const applyResolveConfirmMessage = computed(() => {
   if (!p) {
     return "";
   }
+  // 矩阵模式强制不推送，文案得说实话，不然确认框说完推、结果没推
+  const inMatrix = !!matrixTrail.value;
   const clean = !p.files?.length;
   const lines = [
     clean
-      ? `将推送临时分支（独立 worktree，不切换当前分支）：`
-      : `将解决冲突并${p.push ? "推送" : "提交"}（独立 worktree，不切换当前分支）：`,
+      ? `将创建临时分支（独立 worktree，不切换当前分支）：`
+      : `将解决冲突并${inMatrix || !p.push ? "提交" : "推送"}（独立 worktree，不切换当前分支）：`,
     `1) 基于「${p.into}」新建临时分支`,
     `2) 合并「${p.from}」${clean ? "并提交" : "并写入选边结果"}`,
   ];
-  if (p.push) {
+  if (inMatrix) {
+    lines.push(`3) 保留在本地不推送——回矩阵后「一键处理合并并推送」会带上它`);
+  } else if (p.push) {
     lines.push(`3) 推送到 origin`);
   }
-  lines.push(`\n完成后可在面板「一键申请 MR」。`);
+  lines.push(
+    inMatrix
+      ? `\n全部处理完回矩阵，「一键处理合并并推送」会统一执行并申请总 MR。`
+      : `\n完成后可在面板「一键申请 MR」。`,
+  );
   return lines.join("\n");
 });
 
@@ -498,6 +516,129 @@ const matrixTrail = ref<MatrixTrail | null>(null);
 const mrDialogOpen = ref(false);
 const mrDraft = ref<MrDialogDraft | null>(null);
 const mrBusy = ref(false);
+
+/* ---------------- 批量合并状态机 ---------------- */
+
+const batchDialogOpen = ref(false);
+/** 干跑结果；null = 还在跑或还没跑 */
+const batchPlan = ref<BatchMergePlanResult | null>(null);
+/** 干跑针对的目标（replan 时要用） */
+const batchInto = ref("");
+/** 实跑中：对话框禁用一切操作，不许中途关 */
+const batchRunning = ref(false);
+const batchRunError = ref<string | null>(null);
+/** 实跑成功后的结果；非 null 时矩阵顶部展示横幅 */
+const batchResult = ref<BatchMergeRunResult | null>(null);
+/** 这次 applyResolve 是否走了矩阵模式的 keepLocal；结果回来时靠它记 keptLocal */
+const applyKeptLocal = ref(false);
+
+/**
+ * 矩阵「一键处理合并并推送」：弹出确认对话框并自动跑干跑。
+ *
+ * froms 是矩阵当前展示序（含建议排序）；已解决过的格子标 resolved，
+ * core 会优先用临时分支（本地 → 远端 → 没有则拒绝整批）。
+ */
+function onBatchMerge(payload: { into: string; froms: string[] }): void {
+  if (previewMode.value) {
+    error.value = "预览模式不支持批量合并";
+    status.value = error.value;
+    return;
+  }
+  if (busy.value) {
+    return;
+  }
+  const cells = survey.value?.cells ?? [];
+  const cellByFrom = new Map(
+    cells.filter((c) => c.into === payload.into).map((c) => [c.from, c]),
+  );
+  const entries = payload.froms.map((from) => {
+    const cell = cellByFrom.get(from);
+    const known = progressIndex.value.get(pairKey(payload.into, from));
+    const resolved =
+      !!known?.tempBranch ||
+      (cell?.outcome === "conflicts" && !!cell.tempBranch);
+    return { from, resolved: resolved || undefined };
+  });
+  batchInto.value = payload.into;
+  batchPlan.value = null;
+  batchRunError.value = null;
+  batchDialogOpen.value = true;
+  vscode.postMessage({ type: "batchMergePlan", into: payload.into, entries });
+}
+
+/** 确认框里排除/调序后自动重跑干跑 */
+function onBatchReplan(entries: Array<{ from: string; resolved?: boolean }>): void {
+  if (!batchInto.value || batchRunning.value) {
+    return;
+  }
+  batchPlan.value = null;
+  batchRunError.value = null;
+  vscode.postMessage({
+    type: "batchMergePlan",
+    into: batchInto.value,
+    entries,
+    noFetch: true,
+  });
+}
+
+/** 确认执行：干跑全绿才可能走到这里 */
+function onBatchRun(payload: {
+  into: string;
+  batchBranch: string;
+  items: BatchRunItem[];
+}): void {
+  batchRunError.value = null;
+  batchRunning.value = true;
+  vscode.postMessage({
+    type: "batchMergeRun",
+    into: payload.into,
+    batchBranch: payload.batchBranch,
+    items: payload.items,
+  });
+}
+
+function onBatchCancel(): void {
+  if (batchRunning.value) {
+    return;
+  }
+  batchDialogOpen.value = false;
+  batchPlan.value = null;
+}
+
+/** 横幅「一键申请 MR」：先终检（fetch 最新 into 后 merge-tree 复核）再弹 MR 对话框 */
+function onBatchMr(payload: { into: string; batchBranch: string }): void {
+  if (previewMode.value) {
+    error.value = "预览模式不支持申请 MR";
+    status.value = error.value;
+    return;
+  }
+  if (!methodReady.value) {
+    error.value =
+      methodReadyReason.value || "请先在「Git 配置」中选择并保存可用的 MR 方式";
+    status.value = error.value;
+    tab.value = "config";
+    return;
+  }
+  vscode.postMessage({
+    type: "batchMrPrecheck",
+    into: payload.into,
+    batchBranch: payload.batchBranch,
+  });
+}
+
+/** push 失败后的「重推」：本地批量分支还在，补一次 push 就行 */
+function onBatchPush(payload: { into: string; batchBranch: string }): void {
+  vscode.postMessage({ type: "pushBranch", branch: payload.batchBranch });
+}
+
+/** 清理：删本地批量分支 + 参与过合并的 merge/* 临时分支 */
+function onBatchCleanup(payload: { into: string; branches: string[] }): void {
+  if (payload.branches.length === 0) {
+    return;
+  }
+  vscode.postMessage({ type: "deleteLocalBranches", branches: payload.branches });
+}
+
 /** 待「一键解决并推送」自绘确认框确认的请求；非 null 表示确认框未关 */
 const pendingApplyResolve = ref<{
   into: string;
@@ -529,9 +670,11 @@ const graphRemotes = computed(() =>
   (cliStatus.value?.remotes ?? []).map((r) => r.name),
 );
 
-const tempPushDoneForPair = computed(
-  () => !!progressIndex.value.get(pairKey(into.value, from.value))?.tempBranch,
-);
+const tempPushDoneForPair = computed(() => {
+  const rec = progressIndex.value.get(pairKey(into.value, from.value));
+  // keptLocal 的临时分支只在本地，提不了 MR，不算「推送完成」
+  return !!rec?.tempBranch && !rec.keptLocal;
+});
 
 const previewBlockReason = computed(() => {
   if (!into.value || !from.value) {
@@ -707,6 +850,16 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     status.value = msg.message;
     loadingAction.value = "";
     mrBusy.value = false;
+    // 批量实跑失败（sha 护栏 / 中途冲突）：停下并留在对话框里展示错误，可取消重来
+    if (batchRunning.value) {
+      batchRunning.value = false;
+      batchRunError.value = msg.message;
+      batchDialogOpen.value = true;
+    }
+    // 干跑失败（如 resolved 格子无临时分支）：对话框里展示错误，等用户取消
+    if (batchDialogOpen.value && !batchRunning.value) {
+      batchRunError.value = msg.message;
+    }
     // 报错即这趟请求结束。busy 卡住的后果是整个面板所有按钮一起变灰，
     // 而人只看到「点不动」，不值得赌宿主每条错误路径都记得收尾
     busy.value = false;
@@ -830,13 +983,15 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
   if (msg.type === "applyResolveResult") {
     // 推没推成功都建了临时分支，矩阵那批结果都已过时
     matrixStale.value = true;
-    if (msg.pushed) {
+    if (msg.pushed || applyKeptLocal.value) {
       rememberResolved({
         into: msg.into,
         from: msg.from,
         intoSha: msg.intoSha,
         fromSha: msg.fromSha,
         tempBranch: msg.tempBranch,
+        // 矩阵模式 keepLocal：分支只在本地，矩阵里标「已解决·本地」
+        keptLocal: !msg.pushed || undefined,
       });
       into.value = msg.into;
       from.value = msg.from;
@@ -844,13 +999,17 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     status.value = [
       `已处理临时分支 ${msg.tempBranch}`,
       `commit ${short(msg.commitSha)}`,
-      msg.pushed ? "已推送" : "未推送",
+      msg.pushed
+        ? "已推送"
+        : applyKeptLocal.value
+          ? "已保留在本地（矩阵批量流程会带上它）"
+          : "未推送",
       msg.usedWorktree
         ? msg.previousBranch
           ? `当前仍在 ${msg.previousBranch}`
           : "工作区未切换"
         : null,
-      msg.pushed ? "可继续「一键申请 MR」" : "推送未成功，暂不可申请 MR",
+      msg.pushed ? "可继续「一键申请 MR」" : null,
       msg.pushed && trailRemaining.value > 0
         ? `矩阵还剩 ${trailRemaining.value} 条待处理`
         : null,
@@ -860,6 +1019,75 @@ function onHostMessage(event: MessageEvent<HostMessage>) {
     error.value = null;
     loadingAction.value = "";
     busyPercent.value = null;
+    applyKeptLocal.value = false;
+    return;
+  }
+  if (msg.type === "batchMergePlanResult") {
+    batchPlan.value = msg.data;
+    if (!msg.data.clean) {
+      status.value = `批量干跑：${msg.data.blockedReason ?? "存在冲突"}`;
+    } else {
+      status.value = `批量干跑通过：${msg.data.items.length} 个分支可依次合入，等待确认执行`;
+    }
+    return;
+  }
+  if (msg.type === "batchMergeRunResult") {
+    batchRunning.value = false;
+    batchRunError.value = null;
+    batchResult.value = msg.data;
+    batchDialogOpen.value = false;
+    batchPlan.value = null;
+    // 实跑改写了仓库：矩阵结果过时，回矩阵时会自动重跑
+    matrixStale.value = true;
+    const merged = msg.data.steps.filter((s) => s.outcome === "merged").length;
+    status.value = [
+      `批量合并完成：${msg.data.batchBranch}`,
+      `合入 ${merged} 个分支 · commit ${short(msg.data.commitSha)}`,
+      msg.data.pushed
+        ? "已推送，可申请总 MR"
+        : `推送失败（${msg.data.pushError ?? "未知原因"}），可重推`,
+    ].join(" · ");
+    error.value = msg.data.pushed ? null : msg.data.pushError ?? null;
+    return;
+  }
+  if (msg.type === "pushBranchResult") {
+    status.value = `已推送 ${msg.branch}（${short(msg.sha)}）`;
+    if (batchResult.value && batchResult.value.batchBranch === msg.branch) {
+      batchResult.value = { ...batchResult.value, pushed: true, pushError: undefined };
+      status.value = `已推送批量分支 ${msg.branch}，可申请总 MR`;
+    }
+    return;
+  }
+  if (msg.type === "batchMrPrecheckResult") {
+    const pre: BatchMrPrecheckResult = msg.data;
+    if (pre.upToDate) {
+      status.value = "MR 前终检通过：目标分支已包含在批量分支中";
+    } else if (pre.clean) {
+      status.value = "MR 前终检通过：批量分支仍可干净合入目标";
+    } else {
+      error.value = `MR 前终检发现冲突：${pre.conflictPaths.join("、")}；目标分支已更新，请重跑矩阵重新批量`;
+      status.value = error.value;
+      return;
+    }
+    // 终检通过：用批量分支弹总 MR 对话框（target = into）
+    askCreateMr({
+      into: pre.into,
+      from: pre.batchBranch,
+      sourceBranch: pre.batchBranch,
+    });
+    return;
+  }
+  if (msg.type === "deleteLocalBranchesResult") {
+    const ok = msg.deleted.length;
+    const fail = msg.failed.length;
+    status.value =
+      fail > 0
+        ? `已清理 ${ok} 条本地分支，${fail} 条失败（${msg.failed.map((f) => f.branch).join("、")}）`
+        : `已清理 ${ok} 条本地分支`;
+    // 批量分支删了，横幅没存在的意义了
+    if (fail === 0) {
+      batchResult.value = null;
+    }
     return;
   }
   if (msg.type === "gitConfigResult") {
@@ -1534,11 +1762,16 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
             :order="mergeOrder"
             :busy="busy"
             :progress="pairProgress"
+            :batch-result="batchResult"
             @survey="runSurvey"
             @order="runMergeOrder"
             @go-preview="goPreviewFromMatrix"
             @create-mr="requestMrFromMatrix"
             @open-url="openExternalUrl"
+            @batch-merge="onBatchMerge"
+            @batch-mr="onBatchMr"
+            @batch-push="onBatchPush"
+            @batch-cleanup="onBatchCleanup"
           />
         </template>
 
@@ -1710,6 +1943,7 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
               :into="preview.into"
               :from="preview.from"
               :preview-mode="previewMode"
+              :matrix-mode="!!matrixTrail"
               :can-create-mr="canCreateMr"
               :create-mr-block-reason="createMrBlockReason"
               :ai-busy="aiBusy"
@@ -1783,12 +2017,25 @@ function cliAuthLogin(payload: { scope: "system" | "bundled"; kind: "gh" | "glab
 
     <ConfirmDialog
       :open="pendingApplyResolve !== null"
-      title="确认解决并推送"
+      :title="matrixTrail ? '确认完成冲突处理' : '确认解决并推送'"
       :message="applyResolveConfirmMessage"
       confirm-label="继续"
       :danger="true"
       @confirm="confirmApplyResolve"
       @cancel="cancelApplyResolve"
+    />
+
+    <!-- 批量合并确认：干跑预演 + 清单微调 + 实跑 -->
+    <BatchMergeDialog
+      :open="batchDialogOpen"
+      :into="batchInto"
+      :plan="batchPlan"
+      :busy="busy"
+      :running="batchRunning"
+      :run-error="batchRunError"
+      @replan="onBatchReplan"
+      @run="onBatchRun"
+      @cancel="onBatchCancel"
     />
   </div>
 </template>

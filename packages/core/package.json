@@ -1,6 +1,6 @@
 {
   "name": "@shaohui_jin/git-insight-core",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Git branch graph, merge conflict preview, and conflict provenance engine",
   "type": "module",
   "main": "./dist/index.js",

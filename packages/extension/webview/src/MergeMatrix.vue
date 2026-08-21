@@ -8,6 +8,7 @@
 import { computed, ref, watch } from "vue";
 import BranchTreeSelect from "./BranchTreeSelect.vue";
 import type {
+  BatchMergeRunResult,
   MergeSurveyCell,
   MergeSurveyResult,
   PairProgress,
@@ -23,6 +24,8 @@ const props = defineProps<{
   busy: boolean;
   /** 每一对走到哪了（已推临时分支 / 已提 MR）；用来把进度标回格子上 */
   progress: PairProgress[];
+  /** 批量合并结果；非 null 时顶部展示横幅（一键申请 MR / 重推 / 清理） */
+  batchResult: BatchMergeRunResult | null;
 }>();
 
 const emit = defineEmits<{
@@ -50,6 +53,14 @@ const emit = defineEmits<{
     },
   ): void;
   (e: "openUrl", url: string): void;
+  /** 点「一键处理合并并推送」：把当前矩阵的合入顺序（含建议排序）交给 App 去干跑 */
+  (e: "batchMerge", payload: { into: string; froms: string[] }): void;
+  /** 批量成功后用批量分支申请单个总 MR */
+  (e: "batchMr", payload: { into: string; batchBranch: string }): void;
+  /** push 失败后的「重推」 */
+  (e: "batchPush", payload: { into: string; batchBranch: string }): void;
+  /** 批量成功后清理参与合并的本地临时分支 */
+  (e: "batchCleanup", payload: { into: string; branches: string[] }): void;
 }>();
 
 const intos = ref<string[]>([]);
@@ -277,7 +288,10 @@ interface TempBranchInfo {
 function tempBranchFor(cell: MergeSurveyCell): TempBranchInfo | undefined {
   const rec = progressFor(cell);
   if (rec?.tempBranch) {
-    return { name: rec.tempBranch, pushed: true, fresh: true };
+    // 矩阵模式下解决的产物只在本地（keepLocal），推送收敛到批量流程；
+    // 旧记录（单预演页推过）才标 pushed
+    const keptLocal = !!rec.keptLocal;
+    return { name: rec.tempBranch, pushed: !keptLocal, fresh: true };
   }
   if (cell.outcome !== "conflicts" || !cell.tempBranch) {
     return undefined;
@@ -292,7 +306,8 @@ function stageOf(cell: MergeSurveyCell): Stage {
   }
   const temp = tempBranchFor(cell);
   if (temp) {
-    // 只在本地、没推上去：MR 提不了，得先补一次推送
+    // local（只在本地）与 resolved（已推）都是「已解决」档：批量资格同权，
+    // 子标签区分「本地 / 已推送」。矩阵模式下解决不推送，local 是常态而非异常
     return temp.pushed ? "resolved" : "local";
   }
   return cell.outcome === "clean" ? "ready" : "open";
@@ -302,7 +317,7 @@ function stageOf(cell: MergeSurveyCell): Stage {
 const STAGE_TEXT: Record<Stage, string> = {
   open: "",
   ready: "",
-  local: "未推送",
+  local: "已解决·本地",
   resolved: "已处理",
   page: "已开创建页",
   mr: "已提 MR",
@@ -347,10 +362,10 @@ const conflictCells = computed(() =>
 /** 队列一律按 stageOf 分档，跟格子上显示的状态同源，免得计数和格子对不上 */
 const conflictQueue = computed(() => toPairs(conflictCells.value));
 
-/** 还没解决的，外加解决了但没推上去的——后者也得回预演页重来一次 */
+/** 还没解决的；解决了但只在本地不再算 pending（批量资格 local 与 resolved 同权） */
 function stillPending(cell: MergeSurveyCell): boolean {
   const stage = stageOf(cell);
-  return stage === "open" || stage === "local";
+  return stage === "open";
 }
 
 const pendingQueue = computed(() => toPairs(conflictCells.value.filter(stillPending)));
@@ -358,16 +373,13 @@ const pendingQueue = computed(() => toPairs(conflictCells.value.filter(stillPend
 /**
  * 还没提过 MR、现在就能提的格子；批处理的最后一段。
  *
- * 冲突走完解决拿到临时分支（resolved），干净的本来就能直接提（ready），两条
- * 路径在这里合流，按矩阵顺序从上往下排——冲突清完之后还得挨个点开干净格子，
- * 等于走到一半没路了。
- *
- * 仍然不收 local：那条临时分支没推上远端，提不了。
+ * 冲突走完解决拿到临时分支（local / resolved 都算：本地分支批量流程会带上它），
+ * 干净的本来就能直接提（ready），两条路径在这里合流。
  */
 const mrCells = computed(() =>
   allCells.value.filter((c) => {
     const stage = stageOf(c);
-    return stage === "resolved" || stage === "ready";
+    return stage === "resolved" || stage === "local" || stage === "ready";
   }),
 );
 
@@ -390,13 +402,29 @@ function cellTitle(cell: MergeSurveyCell): string {
   const source = temp ? `临时分支 ${temp.name}` : `直接用 ${cell.from}`;
   const note =
     stage === "local"
-      ? "只在本地，还没推送，暂时提不了 MR"
+      ? "已解决，保留在本地；批量合并时会自动带上，或先补推送再单独提 MR"
       : stage === "resolved"
         ? "还没申请 MR"
         : stage === "page"
           ? "创建页已打开，请确认是否已提交"
           : `MR：${progressFor(cell)?.mr?.url ?? "已创建"}`;
   return `${source} · ${note}`;
+}
+
+/**
+ * 发起批量：把参与格子的 from 按当前展示序（含建议排序）交出去。
+ * 已提 MR / 开过创建页的格子不进批量；能否发起由 canBatch 兜底。
+ */
+function startBatch(): void {
+  if (!canBatch.value) {
+    return;
+  }
+  const froms = allCells.value
+    .filter((c) => !["mr", "page"].includes(stageOf(c)))
+    .map((c) => c.from);
+  if (froms.length > 0) {
+    emit("batchMerge", { into: batchInto.value, froms });
+  }
 }
 
 function goPreview(pair: { into: string; from: string }): void {
@@ -489,6 +517,57 @@ const summary = computed(() => {
     conflicts: cells.filter((c) => c.outcome === "conflicts").length,
     files: new Set(cells.flatMap((c) => c.conflictPaths)).size,
   };
+});
+
+/** 批量后参与清理的本地临时分支（含矩阵外已解决的） */
+const batchCleanupBranches = computed(() =>
+  allCells.value
+    .filter((c) => ["local", "resolved"].includes(stageOf(c)))
+    .map((c) => tempBranchFor(c)?.name)
+    .filter((b): b is string => !!b),
+);
+
+const batchInto = computed(
+  () => (resultIntos.value.length === 1 ? resultIntos.value[0] : "") ?? "",
+);
+
+/**
+ * 「一键处理合并并推送」启用条件：单 into；参与批量的格子（排除已提 MR / 开过
+ * 创建页的）全部就绪——冲突格已解决（本地或已推均可），干净格本来就是 ready。
+ */
+const canBatch = computed(() => {
+  if (props.busy || !props.survey) {
+    return false;
+  }
+  if (resultIntos.value.length !== 1) {
+    return false;
+  }
+  const cells = allCells.value;
+  if (cells.length === 0) {
+    return false;
+  }
+  const inBatch = cells.filter((c) => !["mr", "page"].includes(stageOf(c)));
+  if (inBatch.length === 0) {
+    return false;
+  }
+  return inBatch.every((c) => {
+    const stage = stageOf(c);
+    return stage === "ready" || stage === "local" || stage === "resolved";
+  });
+});
+
+const batchHint = computed(() => {
+  if (canBatch.value) {
+    return "干跑预演后确认执行：worktree 累积合并 + 单次推送，产出单个总 MR 的批量分支";
+  }
+  if (resultIntos.value.length !== 1) {
+    return "批量合并需要唯一的线上目标";
+  }
+  const open = allCells.value.filter((c) => stageOf(c) === "open").length;
+  if (open > 0) {
+    return `还有 ${open} 组冲突未解决，先逐条处理`;
+  }
+  return "没有可批量处理的格子";
 });
 
 /** 统计行的顺序 pill：建议顺序可连续干净合入 X / N（原顺序 Y） */
@@ -590,6 +669,43 @@ watch(
     </div>
 
     <div v-if="survey" class="matrix-body">
+      <!-- 批量结果横幅：实跑成功后常驻，直到清理或重跑矩阵 -->
+      <div v-if="batchResult" class="batch-banner" :class="{ 'batch-banner--warn': !batchResult.pushed }">
+        <div class="batch-banner-name mono">{{ batchResult.batchBranch }}</div>
+        <div class="batch-banner-msg">
+          已合并 {{ batchResult.steps.filter((s) => s.outcome === "merged").length }} 个分支，
+          提交 {{ batchResult.commitSha ? batchResult.commitSha.slice(0, 7) : "" }}。
+          <template v-if="batchResult.pushed">已推送，可申请总 MR。</template>
+          <template v-else>推送失败：{{ batchResult.pushError || "未知原因" }}，可重推。</template>
+        </div>
+        <button
+          v-if="batchResult.pushed"
+          class="btn"
+          type="button"
+          :disabled="busy"
+          @click="emit('batchMr', { into: batchResult.into, batchBranch: batchResult.batchBranch })"
+        >
+          一键申请 MR
+        </button>
+        <button
+          v-else
+          class="btn"
+          type="button"
+          :disabled="busy"
+          @click="emit('batchPush', { into: batchResult.into, batchBranch: batchResult.batchBranch })"
+        >
+          重推
+        </button>
+        <button
+          class="btn secondary"
+          type="button"
+          :disabled="busy"
+          title="删除批量分支与本地临时分支（MR 合入后再清理）"
+          @click="emit('batchCleanup', { into: batchInto, branches: [batchResult.batchBranch, ...batchCleanupBranches] })"
+        >
+          清理
+        </button>
+      </div>
       <div class="matrix-grid-wrap">
         <div class="matrix-stats">
           <span class="stat-pill" :class="summary.conflicts === 0 ? 'ok' : 'warn'">
@@ -629,6 +745,16 @@ watch(
             @click="runOrder"
           >
             算顺序
+          </button>
+          <!-- 一键处理合并并推送：干跑预演 → 确认清单 → worktree 累积合并 + 单次推送 -->
+          <button
+            class="btn"
+            type="button"
+            :disabled="!canBatch"
+            :title="batchHint"
+            @click="startBatch"
+          >
+            一键处理合并并推送
           </button>
           <template v-if="orderPill">
             <span
@@ -758,11 +884,11 @@ watch(
               {{ activeTemp.pushed ? "已推送。" : "只存在于本地。" }}
             </p>
 
-            <!-- 没推上去就没法提 MR，只能回预演页重跑一次推送 -->
+            <!-- 矩阵模式下解决不推送：这条本地分支是解决记录的载体，批量流程会自动带上 -->
             <template v-if="activeStage === 'local'">
               <p class="hint">
-                这条分支没推上远端，暂时提不了 MR。回预演页重跑一次「一键解决并推送」，
-                或自己 <code>git push</code> 它。
+                已解决，保留在本地。「一键处理合并并推送」会自动带上它；
+                或自己 <code>git push</code> 后再单独提 MR。
               </p>
             </template>
             <template v-else-if="activeStage === 'resolved'">

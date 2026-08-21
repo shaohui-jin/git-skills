@@ -499,6 +499,21 @@ export class GitInsightPanel {
               "\n可在面板点击「一键申请 MR」。",
           );
         }
+        if (msg.type === "batchMergeRunResult") {
+          const detail = msg.data.pushed
+            ? `已推送 ${msg.data.remote}/${msg.data.batchBranch}`
+            : `推送失败，本地批量分支已保留：${msg.data.pushError ?? ""}`;
+          void vscode.window.showInformationMessage(
+            `批量合并完成：${msg.data.batchBranch} @ ${msg.data.commitSha.slice(0, 7)}\n` +
+              `${detail}\n下一步：回矩阵「一键申请 MR」。`,
+          );
+        }
+        if (msg.type === "batchMrPrecheckResult" && !msg.data.clean) {
+          void vscode.window.showWarningMessage(
+            `MR 前终检发现冲突：目标 ${msg.data.into} 在批量期间被推进，` +
+              `与批量分支存在 ${msg.data.conflictPaths.length} 个冲突文件，请确认后谨慎继续。`,
+          );
+        }
         if (msg.type === "createMrResult" && msg.url) {
           const url = msg.url;
           void vscode.window

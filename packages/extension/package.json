@@ -2,7 +2,7 @@
   "name": "git-insight",
   "displayName": "Git Insight",
   "description": "Branch graph, merge conflict preview, merge matrix, one-click resolve & push, and create MR/PR. See docs/features.md for capability matrix.",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "publisher": "jinshaohui",
   "license": "MIT",
   "repository": {
@@ -45,27 +45,27 @@
     "commands": [
       {
         "command": "gitInsight.openWeb",
-        "title": "Git Insight: Open Web",
+        "title": "打开面板",
         "category": "Git Insight"
       },
       {
         "command": "gitInsight.previewMerge",
-        "title": "Git Insight: 合并预演",
+        "title": "合并预演",
         "category": "Git Insight"
       },
       {
         "command": "gitInsight.openPreview",
-        "title": "Git Insight: 打开预演（可带 into/from）",
+        "title": "打开预演（可带 into/from）",
         "category": "Git Insight"
       },
       {
         "command": "gitInsight.syncSkill",
-        "title": "Git Insight: 同步 Agent Skill 到全局",
+        "title": "同步 Agent Skill 到全局",
         "category": "Git Insight"
       },
       {
         "command": "gitInsight.checkConflicts",
-        "title": "Git Insight: 立即检查合并冲突",
+        "title": "立即检查合并冲突",
         "category": "Git Insight"
       }
     ],

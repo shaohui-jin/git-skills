@@ -1,4 +1,8 @@
 import type {
+  BatchMergePlanResult,
+  BatchMergeRunResult,
+  BatchMrPrecheckResult,
+  BatchRunItem,
   BranchGraph,
   ConflictBlameResult,
   FetchResult,
@@ -49,7 +53,50 @@ export type WebviewRequest =
       files: Array<{ path: string; resolvedContent: string }>;
       remote?: string;
       push?: boolean;
+      /** 矩阵模式：不推送也保留本地临时分支 */
+      keepLocal?: boolean;
       tempBranch?: string;
+    }
+  | {
+      /** 批量合并干跑预演（零副作用，确认对话框内自动跑） */
+      type: "batchMergePlan";
+      into: string;
+      entries: Array<{
+        from: string;
+        /** 冲突格子已解决过：必须有可用临时分支 */
+        resolved?: boolean;
+        /** 本会话解决记录的 commitSha */
+        commitSha?: string;
+      }>;
+      noFetch?: boolean;
+      remote?: string;
+    }
+  | {
+      /** 批量合并实跑：worktree 累积真合并 + 单次 push（sha 护栏内置） */
+      type: "batchMergeRun";
+      into: string;
+      batchBranch: string;
+      items: Array<BatchRunItem>;
+      noFetch?: boolean;
+      remote?: string;
+    }
+  | {
+      /** 推送已存在的本地分支（批量分支重推 / 单分支 MR 前补推送） */
+      type: "pushBranch";
+      branch: string;
+      remote?: string;
+    }
+  | {
+      /** MR 前终检：批量分支 vs 最新 origin/into */
+      type: "batchMrPrecheck";
+      into: string;
+      batchBranch: string;
+      remote?: string;
+    }
+  | {
+      /** 批量成功后清理：删除参与合并的本地 merge/* 临时分支 */
+      type: "deleteLocalBranches";
+      branches: string[];
     }
   | {
       type: "prepareCreateMr";
@@ -180,6 +227,15 @@ export type HostMessage =
     }
   | { type: "surveyResult"; data: MergeSurveyResult; report: string }
   | { type: "mergeOrderResult"; data: SuggestOrderResult; report: string }
+  | { type: "batchMergePlanResult"; data: BatchMergePlanResult }
+  | { type: "batchMergeRunResult"; data: BatchMergeRunResult }
+  | { type: "pushBranchResult"; branch: string; remote: string; sha: string }
+  | { type: "batchMrPrecheckResult"; data: BatchMrPrecheckResult }
+  | {
+      type: "deleteLocalBranchesResult";
+      deleted: string[];
+      failed: Array<{ branch: string; error: string }>;
+    }
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }

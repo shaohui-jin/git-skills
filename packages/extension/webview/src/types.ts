@@ -150,6 +150,88 @@ export interface SuggestOrderResult {
   tried: number;
 }
 
+/* ============================ 批量合并 ============================ */
+
+export type BatchSourceKind = "branch" | "temp-local" | "temp-remote";
+
+export interface BatchMergeEntry {
+  from: string;
+  resolved?: boolean;
+  commitSha?: string;
+}
+
+export interface BatchPlanItem {
+  from: string;
+  source: string;
+  sourceKind: BatchSourceKind;
+  sourceSha: string;
+  tempBranch?: string;
+}
+
+export type BatchStepOutcome = "clean" | "up-to-date" | "conflicts" | "error";
+
+export interface BatchPlanStep {
+  from: string;
+  source: string;
+  sourceKind: BatchSourceKind;
+  sourceSha: string;
+  outcome: BatchStepOutcome;
+  conflictPaths: string[];
+  error?: string;
+}
+
+export interface BatchMergePlanResult {
+  repoRoot: string;
+  into: string;
+  intoSha: string;
+  batchBranch: string;
+  items: BatchPlanItem[];
+  steps: BatchPlanStep[];
+  clean: boolean;
+  blockedAt: string | null;
+  blockedPaths: string[];
+  blockedReason?: string;
+  changedFiles?: number;
+  warnings: string[];
+}
+
+export interface BatchRunItem {
+  from: string;
+  source: string;
+  sourceKind: BatchSourceKind;
+  sourceSha: string;
+}
+
+export interface BatchRunStep {
+  from: string;
+  source: string;
+  outcome: "merged" | "up-to-date";
+}
+
+export interface BatchMergeRunResult {
+  repoRoot: string;
+  into: string;
+  intoSha: string;
+  batchBranch: string;
+  commitSha: string;
+  remote: string;
+  pushed: boolean;
+  pushError?: string;
+  steps: BatchRunStep[];
+  previousBranch: string | null;
+  messages: string[];
+}
+
+export interface BatchMrPrecheckResult {
+  into: string;
+  intoSha: string;
+  batchBranch: string;
+  batchSha: string;
+  upToDate: boolean;
+  clean: boolean;
+  conflictPaths: string[];
+}
+
 /**
  * 一对分支「已一键解决并推送」的记录。
  *
@@ -170,6 +252,11 @@ export interface PairProgress {
   fromSha: string;
   /** 一键解决产出的临时分支；干净直合没有这一步 */
   tempBranch?: string;
+  /**
+   * 矩阵模式下解决不推送（keepLocal）：临时分支只落在本地。
+   * 区别于单预演页的「解决即推送」——推送收敛到批量流程。
+   */
+  keptLocal?: boolean;
   /** MR 进展；没有表示还没申请过 */
   mr?: {
     url: string | null;
@@ -250,6 +337,15 @@ export type HostMessage =
   | { type: "previewResult"; data: ConflictBlameResult; report: string; mermaid: string }
   | { type: "surveyResult"; data: MergeSurveyResult; report: string }
   | { type: "mergeOrderResult"; data: SuggestOrderResult; report: string }
+  | { type: "batchMergePlanResult"; data: BatchMergePlanResult }
+  | { type: "batchMergeRunResult"; data: BatchMergeRunResult }
+  | { type: "pushBranchResult"; branch: string; remote: string; sha: string }
+  | { type: "batchMrPrecheckResult"; data: BatchMrPrecheckResult }
+  | {
+      type: "deleteLocalBranchesResult";
+      deleted: string[];
+      failed: Array<{ branch: string; error: string }>;
+    }
   | { type: "error"; message: string; code?: string }
   | { type: "busy"; busy: boolean; label?: string; percent?: number }
   | { type: "progress"; percent: number; label: string }
@@ -274,6 +370,8 @@ export type HostMessage =
       fromSha: string;
       previousBranch: string | null;
       usedWorktree: boolean;
+      /** 矩阵模式：本地临时分支已保留（未推送），MR 前需补推送 */
+      keptLocal?: boolean;
     }
   | {
       type: "prepareCreateMrResult";

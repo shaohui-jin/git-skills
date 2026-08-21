@@ -31,6 +31,12 @@ const props = defineProps<{
   from: string;
   /** 浏览器预览模式不可写仓库 */
   previewMode?: boolean;
+  /**
+   * 矩阵模式（从矩阵进来的批量预演）：解决不推送，提交到本地临时分支，
+   * 推送收敛到矩阵「一键处理合并并推送」。
+   * 直接预演不传，维持「解决即推送」旧语义。
+   */
+  matrixMode?: boolean;
   /** 是否允许点「一键申请 MR」 */
   canCreateMr?: boolean;
   /** 不可点时的原因 */
@@ -775,7 +781,13 @@ const resultLineStarts = computed(() => {
         </div>
         <p class="muted resolve-tip">
           <span class="tag-online">左栏=线上目标</span>，
-          <span class="tag-mine">右栏=我的分支</span>。选边后用「一键解决并推送」写入临时分支（不切换当前分支），再申请 MR。
+          <span class="tag-mine">右栏=我的分支</span>。
+          <template v-if="matrixMode">
+            选边后点「完成冲突处理」提交到本地临时分支（不推送）；全部处理完回矩阵「一键处理合并并推送」。
+          </template>
+          <template v-else>
+            选边后用「一键解决并推送」写入临时分支（不切换当前分支），再申请 MR。
+          </template>
         </p>
         <div class="resolve-actions">
           <button
@@ -791,10 +803,14 @@ const resultLineStarts = computed(() => {
             type="button"
             class="btn"
             :disabled="!canApplyResolve() || aiBusy"
-            title="在独立 worktree 中创建临时分支并应用选边后推送（不改当前分支）"
+            :title="
+              matrixMode
+                ? '校验所有冲突文件已选边后提交到本地临时分支（不推送）；批量合并时自动带上'
+                : '在独立 worktree 中创建临时分支并应用选边后推送（不改当前分支）'
+            "
             @click="applyResolveNow"
           >
-            一键解决并推送
+            {{ matrixMode ? "完成冲突处理" : "一键解决并推送" }}
           </button>
           <button
             type="button"
@@ -803,8 +819,10 @@ const resultLineStarts = computed(() => {
             :disabled="previewMode || !into || !from || aiBusy || !canCreateMr"
             :title="
               !canCreateMr
-                ? (createMrBlockReason ||
-                   '请先完成「一键解决并推送」，并在「Git 配置」中选择 MR 方式')
+                ? (matrixMode
+                    ? '矩阵模式走批量流程：回矩阵点「一键处理合并并推送」后统一申请总 MR'
+                    : (createMrBlockReason ||
+                       '请先完成「一键解决并推送」，并在「Git 配置」中选择 MR 方式'))
                 : '申请 MR'
             "
             @click="emit('requestCreateMr', { into, from })"

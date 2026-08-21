@@ -33,6 +33,14 @@ export interface ApplyResolveOptions {
   remote?: string;
   /** 是否 push，默认 true */
   push?: boolean;
+  /**
+   * 矩阵模式：push 为 false 时仍保留本地临时分支（已提交）。
+   *
+   * 矩阵批量流程里推送收敛到「一键处理合并并推送」那一步，逐格解决只产本地分支；
+   * 本地分支是解决记录的载体（共享对象库，面板重建不丢），删掉等于丢记录。
+   * 单预演页不传它，维持「失败即清理」的旧语义。
+   */
+  keepLocal?: boolean;
   /** 自定义临时分支名；默认 merge/<from>-into-<into> */
   tempBranch?: string;
   /**
@@ -227,6 +235,8 @@ export async function applyStashedResolve(
   const onProgress = options.onProgress;
   const remote = options.remote ?? "origin";
   const doPush = options.push !== false;
+  // keepLocal：即使没推上去也保留已提交的本地临时分支（矩阵模式）
+  const keepLocal = options.keepLocal === true;
   const repoRoot = await resolveRepoRoot(options.cwd);
   const remotes = (await listRemotes(repoRoot)).map((r) => r.name);
   const into = options.into.trim();
@@ -264,8 +274,10 @@ export async function applyStashedResolve(
   reportProgress(onProgress, 12, `创建独立 worktree（分支 ${tempBranch}）…`);
   const wtPath = await mkdtemp(join(tmpdir(), "git-insight-resolve-"));
 
-  // push 成功则保留临时分支供后续 MR；失败则清理干净
+  // push 成功则保留临时分支供后续 MR；失败则清理干净（keepLocal 时例外：本地分支就是解决记录）
   let pushSucceeded = false;
+  /** commit 是否已落在临时分支上：没提交过就谈不上「保留解决记录」 */
+  let committed = false;
   try {
     const addRun = await runGit(
       repoRoot,
@@ -404,6 +416,7 @@ export async function applyStashedResolve(
 
     const head = await runGit(wtPath, ["rev-parse", "HEAD"]);
     const commitSha = head.stdout.trim();
+    committed = true;
     messages.push(`已提交 ${commitSha.slice(0, 7)} @ ${tempBranch}`);
 
     let pushed = false;
@@ -451,7 +464,9 @@ export async function applyStashedResolve(
     };
   } finally {
     await removeWorktree(repoRoot, wtPath);
-    if (!pushSucceeded) {
+    // keepLocal && committed：矩阵模式下本地临时分支是解决记录，没推上去也得留;
+    // 其余情况（未提交 / 单预演页推送失败）维持「清干净，下次重试不用面对旧分支」
+    if (!pushSucceeded && !(keepLocal && committed)) {
       await removeTempBranch(repoRoot, tempBranch);
     }
   }
