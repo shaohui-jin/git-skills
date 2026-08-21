@@ -4041,60 +4041,42 @@ button.btn.tiny {
   overflow-wrap: anywhere;
 }
 
-.matrix-order {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.matrix-order-step {
-  display: flex;
+/*
+ * 建议顺序生效时的矩阵内呈现：行首序号徽标 + 「以下需要人工处理」分隔行。
+ * 代替原右侧 MERGE ORDER 面板，排序信息聚焦在矩阵本体。
+ */
+.matrix-row-ord {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border-left: 2px solid var(--border-strong);
-  border-radius: var(--radius-plot);
-  background: var(--surface-soft);
-  font-size: var(--fs-xs);
-}
-
-.matrix-order-step.is-clean {
-  border-left-color: var(--clean);
-}
-
-.matrix-order-step.is-conflicts {
-  border-left-color: var(--conflict);
-  background: var(--conflict-soft);
-}
-
-.matrix-order-step.is-pending {
-  opacity: 0.55;
-}
-
-.matrix-order-n {
+  justify-content: center;
   flex: 0 0 auto;
   width: 16px;
-  color: var(--dim);
+  height: 16px;
+  margin-right: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--mine) 45%, transparent);
+  border-radius: var(--radius-plot);
+  color: var(--mine);
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
+  vertical-align: middle;
 }
 
-.matrix-order-name {
-  flex: 1 1 auto;
+.matrix-divider-row .matrix-divider {
+  padding: var(--space-1) var(--space-3);
+  text-align: center;
+  color: var(--warn);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-mono);
+  border-bottom: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  cursor: default;
 }
 
-.matrix-order-n2 {
+.matrix-order-view {
   flex: 0 0 auto;
-  color: var(--conflict);
-  font-family: var(--mono);
-  font-size: var(--fs-micro);
-  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 1100px) {

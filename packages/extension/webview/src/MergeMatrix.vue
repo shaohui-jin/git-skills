@@ -55,16 +55,18 @@ const emit = defineEmits<{
 const intos = ref<string[]>([]);
 const froms = ref<string[]>([]);
 const picking = ref<"into" | "from">("into");
-const intoPickValue = ref<string[]>([]);
-const fromPickValue = ref<string[]>([]);
-/** 按当前模式读写对应的 v-model ref */
+/**
+ * 下拉直接读写 intos / froms：单一数据源。
+ * chips（tag）和 multi 面板勾选天然同源——删 tag、面板里取消勾选后确认，
+ * 两边都不会再出现「并集复活」的偏差。
+ */
 const pickValue = computed({
-  get: () => (picking.value === "into" ? intoPickValue.value : fromPickValue.value),
+  get: () => (picking.value === "into" ? intos.value : froms.value),
   set: (v: string[]) => {
     if (picking.value === "into") {
-      intoPickValue.value = v;
+      intos.value = v;
     } else {
-      fromPickValue.value = v;
+      froms.value = v;
     }
   },
 });
@@ -78,25 +80,21 @@ const OUTCOME_TEXT: Record<SurveyOutcome, string> = {
   error: "失败",
 };
 
-/** BranchTreeSelect multi 模式 confirm */
+/**
+ * BranchTreeSelect multi 模式 confirm。
+ * values 是面板勾选的完整状态（含取消勾选的减量），必须全量对齐，
+ * 不能做增量合并——否则面板里取消的分支会被旧值「复活」。
+ * 允许清空：确认什么都没勾，就是全删。
+ */
 function onPickedConfirm(values: string[]): void {
-  if (values.length === 0) {
-    return;
-  }
   const bucket = picking.value === "into" ? intos : froms;
-  const merged = new Set([...bucket.value, ...values]);
-  bucket.value = [...merged];
+  bucket.value = [...values];
 }
 
+/** 删 tag 即改数据源；下拉勾选读同一份，无需手动同步 */
 function drop(kind: "into" | "from", name: string): void {
   const bucket = kind === "into" ? intos : froms;
   bucket.value = bucket.value.filter((b) => b !== name);
-  // 同步清除下拉选项中的选中状态
-  if (kind === "into") {
-    intoPickValue.value = intoPickValue.value.filter((b) => b !== name);
-  } else {
-    fromPickValue.value = fromPickValue.value.filter((b) => b !== name);
-  }
 }
 
 const canRun = computed(
@@ -141,6 +139,89 @@ const rows = computed(() => {
       cell: index.get(pairKey(into, from)) ?? null,
     })),
   }));
+});
+
+/**
+ * 算顺序结果是否对得上当前矩阵：单 into 且分支集合一致。
+ * 对不上（换过选择没重跑矩阵）就忽略排序保持原序，别张冠李戴。
+ */
+const orderMatches = computed(() => {
+  const o = props.order;
+  if (!o || resultIntos.value.length !== 1) {
+    return false;
+  }
+  if (!sameRef(o.best.into, resultIntos.value[0])) {
+    return false;
+  }
+  const matrixFroms = rows.value.map((r) => r.from);
+  const orderFroms = new Set(o.best.order);
+  return (
+    matrixFroms.length === orderFroms.size &&
+    matrixFroms.every((f) => [...orderFroms].some((n) => sameRef(n, f)))
+  );
+});
+
+/** into/from 两侧可能带 refs// 或 origin/ 前缀差异，比较/对齐时归一化 */
+function stripRef(r: string): string {
+  return r.replace(/^refs\/(heads|remotes)\//, "").replace(/^origin\//, "");
+}
+
+function sameRef(a: string, b: string): boolean {
+  return stripRef(a) === stripRef(b);
+}
+
+type MatrixRow = {
+  from: string;
+  cells: Array<{ into: string; cell: MergeSurveyCell | null }>;
+};
+
+type DisplayRow =
+  | ({ kind: "row"; ord: number } & MatrixRow)
+  | { kind: "divider"; reason: string };
+
+/** 算完顺序后矩阵默认按建议顺序展示；切「原顺序」则去掉序号与分隔线 */
+const orderView = ref<"best" | "original">("best");
+watch(
+  () => props.order,
+  () => {
+    orderView.value = "best";
+  },
+);
+
+/**
+ * 渲染用的行序：建议顺序生效时按 order 重排、加序号，
+ * 并在连续干净前缀之后插入「以下需要人工处理」分隔行（对应 blockedAt）。
+ */
+const displayRows = computed<DisplayRow[]>(() => {
+  const base = rows.value;
+  const asPlain = (): DisplayRow[] =>
+    base.map((row) => ({ kind: "row", ord: 0, ...row }));
+  const o = props.order;
+  if (!o || orderView.value !== "best" || !orderMatches.value) {
+    return asPlain();
+  }
+  // order 里的名字是「算顺序」当时的选择，可能与矩阵行的 from 前缀形态不同
+  //（本地树 vs 远程树选出来的 ref 写法不一样），按归一化形态对齐，别精确匹配
+  const byFrom = new Map(base.map((row) => [stripRef(row.from), row]));
+  const out: DisplayRow[] = [];
+  o.best.order.forEach((name, idx) => {
+    const row = byFrom.get(stripRef(name));
+    if (!row) {
+      return;
+    }
+    out.push({ kind: "row", ord: idx + 1, ...row });
+    const prefix = o.best.cleanPrefix;
+    if (idx + 1 === prefix && prefix < o.best.order.length) {
+      out.push({
+        kind: "divider",
+        reason:
+          o.best.blockedReason ??
+          (o.best.blockedAt ? `从 ${o.best.blockedAt} 起需要人工处理` : ""),
+      });
+    }
+  });
+  // 防御：from 形态对不上导致行丢失时回退原序
+  return out.length === base.length ? out : asPlain();
 });
 
 const progressIndex = computed(
@@ -245,12 +326,12 @@ function stageMark(cell: MergeSurveyCell): string {
   return stage === "resolved" ? "✓" : "↗";
 }
 
-/** 表格里所有格子，按行列顺序排平 */
+/** 表格里所有格子，按展示顺序排平——建议顺序生效时，逐条处理/MR 队列自动跟随 */
 const allCells = computed(() =>
-  rows.value.flatMap((row) =>
-    row.cells
-      .map((c) => c.cell)
-      .filter((cell): cell is MergeSurveyCell => !!cell),
+  displayRows.value.flatMap((r) =>
+    r.kind === "divider"
+      ? []
+      : r.cells.map((c) => c.cell).filter((cell): cell is MergeSurveyCell => !!cell),
   ),
 );
 
@@ -410,11 +491,19 @@ const summary = computed(() => {
   };
 });
 
-const orderTotal = computed(() => props.order?.best.order.length ?? 0);
-const orderImproved = computed(
-  () =>
-    !!props.order && props.order.best.cleanPrefix > props.order.baseline.cleanPrefix,
-);
+/** 统计行的顺序 pill：建议顺序可连续干净合入 X / N（原顺序 Y） */
+const orderPill = computed(() => {
+  const o = props.order;
+  if (!o || !orderMatches.value) {
+    return null;
+  }
+  return {
+    cleanPrefix: o.best.cleanPrefix,
+    total: o.best.order.length,
+    baseline: o.baseline.cleanPrefix,
+    improved: o.best.cleanPrefix > o.baseline.cleanPrefix,
+  };
+});
 
 function shortRef(name: string): string {
   return name.length > 28 ? `…${name.slice(-27)}` : name;
@@ -464,17 +553,6 @@ watch(
         <div class="matrix-setup-actions">
           <button class="btn" type="button" :disabled="!canRun" @click="runSurvey">
             跑矩阵
-          </button>
-          <button
-            class="btn secondary"
-            type="button"
-            :disabled="!canOrder"
-            :title="
-              canOrder ? '推演最佳合入顺序' : '需要 1 个线上目标 + 2 个以上我的分支'
-            "
-            @click="runOrder"
-          >
-            算顺序
           </button>
         </div>
       </div>
@@ -540,6 +618,49 @@ watch(
           >
             {{ nextActionText }}
           </button>
+          <!-- 算顺序：常驻统计行，位于逐条处理按钮右侧；排序结果直接重排下方矩阵行 -->
+          <button
+            class="btn secondary"
+            type="button"
+            :disabled="!canOrder"
+            :title="
+              canOrder ? '推演最佳合入顺序，并按建议顺序重排下方矩阵' : '需要 1 个线上目标 + 2 个以上我的分支'
+            "
+            @click="runOrder"
+          >
+            算顺序
+          </button>
+          <template v-if="orderPill">
+            <span
+              class="stat-pill"
+              :class="orderPill.improved ? 'ok' : ''"
+              title="按建议顺序从头连续合入的干净步数"
+            >
+              建议顺序可干净合入
+              <strong>{{ orderPill.cleanPrefix }}</strong> / {{ orderPill.total }}
+              <template v-if="orderPill.improved">
+                （原顺序 {{ orderPill.baseline }}）
+              </template>
+            </span>
+            <div class="seg matrix-order-view" role="group" title="切换矩阵行序">
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: orderView === 'best' }"
+                @click="orderView = 'best'"
+              >
+                建议顺序
+              </button>
+              <button
+                class="seg-btn"
+                type="button"
+                :class="{ active: orderView === 'original' }"
+                @click="orderView = 'original'"
+              >
+                原顺序
+              </button>
+            </div>
+          </template>
         </div>
 
         <div class="matrix-scroll">
@@ -553,31 +674,52 @@ watch(
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in rows" :key="row.from">
-                <th class="matrix-row-head" :title="row.from">
-                  {{ shortRef(row.from) }}
-                </th>
-                <td v-for="c in row.cells" :key="c.into" class="matrix-td">
-                  <button
-                    v-if="c.cell"
-                    class="matrix-cell"
-                    :class="[`matrix-cell--${c.cell.outcome}`, stageClass(c.cell)]"
-                    type="button"
-                    :title="cellTitle(c.cell)"
-                    @click="activeCell = c.cell"
+              <template
+                v-for="row in displayRows"
+                :key="row.kind === 'row' ? row.from : 'divider'"
+              >
+                <tr v-if="row.kind === 'row'">
+                  <th class="matrix-row-head" :title="row.from">
+                    <span
+                      v-if="row.ord > 0"
+                      class="matrix-row-ord mono"
+                      title="建议合入次序"
+                    >
+                      {{ row.ord }}
+                    </span>
+                    {{ shortRef(row.from) }}
+                  </th>
+                  <td v-for="c in row.cells" :key="c.into" class="matrix-td">
+                    <button
+                      v-if="c.cell"
+                      class="matrix-cell"
+                      :class="[`matrix-cell--${c.cell.outcome}`, stageClass(c.cell)]"
+                      type="button"
+                      :title="cellTitle(c.cell)"
+                      @click="activeCell = c.cell"
+                    >
+                      <span class="matrix-cell-text">
+                        {{ STAGE_TEXT[stageOf(c.cell)] || OUTCOME_TEXT[c.cell.outcome] }}
+                      </span>
+                      <span v-if="stageMark(c.cell)" class="matrix-cell-n" aria-hidden="true">
+                        {{ stageMark(c.cell) }}
+                      </span>
+                      <span v-else-if="c.cell.conflictPaths.length > 0" class="matrix-cell-n">
+                        {{ c.cell.conflictPaths.length }}
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+                <tr v-else class="matrix-divider-row">
+                  <td
+                    class="matrix-divider"
+                    :colspan="resultIntos.length + 1"
+                    :title="row.reason"
                   >
-                    <span class="matrix-cell-text">
-                      {{ STAGE_TEXT[stageOf(c.cell)] || OUTCOME_TEXT[c.cell.outcome] }}
-                    </span>
-                    <span v-if="stageMark(c.cell)" class="matrix-cell-n" aria-hidden="true">
-                      {{ stageMark(c.cell) }}
-                    </span>
-                    <span v-else-if="c.cell.conflictPaths.length > 0" class="matrix-cell-n">
-                      {{ c.cell.conflictPaths.length }}
-                    </span>
-                  </button>
-                </td>
-              </tr>
+                    ── 以下需要人工处理 ──
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -673,51 +815,7 @@ watch(
           </button>
         </template>
 
-        <template v-else-if="order">
-          <h4 class="matrix-detail-title mono">MERGE ORDER</h4>
-          <p class="hint">
-            建议顺序可连续干净合入
-            <strong>{{ order.best.cleanPrefix }} / {{ orderTotal }}</strong>
-            <template v-if="orderImproved">
-              （原顺序 {{ order.baseline.cleanPrefix }}）
-            </template>
-          </p>
-          <ol class="matrix-order">
-            <li
-              v-for="(s, idx) in order.best.steps"
-              :key="`${s.from}-${idx}`"
-              class="matrix-order-step"
-              :class="`is-${s.outcome}`"
-            >
-              <span class="matrix-order-n mono">{{ idx + 1 }}</span>
-              <span class="matrix-order-name" :title="s.from">{{ shortRef(s.from) }}</span>
-              <span v-if="s.conflictPaths.length > 0" class="matrix-order-n2">
-                {{ s.conflictPaths.length }}
-              </span>
-            </li>
-            <li
-              v-for="(name, idx) in order.best.order.slice(order.best.steps.length)"
-              :key="`rest-${name}-${idx}`"
-              class="matrix-order-step is-pending"
-            >
-              <span class="matrix-order-n mono">
-                {{ order.best.steps.length + idx + 1 }}
-              </span>
-              <span class="matrix-order-name" :title="name">{{ shortRef(name) }}</span>
-            </li>
-          </ol>
-          <p v-if="order.best.blockedAt" class="hint">
-            从 <code>{{ order.best.blockedAt }}</code> 开始需要人工处理<template
-              v-if="order.best.blockedReason"
-              >：{{ order.best.blockedReason }}</template
-            >。
-          </p>
-          <ul v-if="order.best.blockedPaths.length > 0" class="matrix-paths">
-            <li v-for="p in order.best.blockedPaths" :key="p" :title="p">{{ p }}</li>
-          </ul>
-        </template>
-
-        <p v-else class="hint">点格子看冲突文件，或点「算顺序」推演合入次序。</p>
+        <p v-else class="hint">点格子看冲突文件与处理进度。</p>
       </aside>
     </div>
 
